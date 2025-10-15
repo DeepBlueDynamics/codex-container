@@ -96,12 +96,12 @@ COPY MCP/ /opt/mcp-source/
 
 # Copy MCP installation script and helper
 COPY scripts/install_mcp_servers.sh /opt/
-COPY scripts/update_mcp_config.py /opt/codex-home/.codex/
+COPY scripts/update_mcp_config.py /opt/
 RUN sed -i 's/\r$//' /opt/install_mcp_servers.sh \
   && chmod 555 /opt/install_mcp_servers.sh \
-  && chmod 644 /opt/codex-home/.codex/update_mcp_config.py
+  && chmod 644 /opt/update_mcp_config.py
 
-# Install MCP servers during build
+# Prepare MCP servers during build (copies to /opt/mcp-installed)
 RUN /opt/install_mcp_servers.sh
 
 # Default to running as root so bind mounts succeed on Windows drives with restrictive ACLs.

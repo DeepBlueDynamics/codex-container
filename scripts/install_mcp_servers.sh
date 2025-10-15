@@ -1,16 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-# This script runs inside the container during build to install MCP servers
-# It copies MCP Python files from /opt/mcp-source to /opt/codex-home/mcp
-# and updates the Codex config.toml accordingly.
+# This script runs inside the container during build to prepare MCP servers
+# It copies MCP Python files from /opt/mcp-source to /opt/mcp-installed
+# These files will be copied to /opt/codex-home/mcp at runtime by the entrypoint.
 
 MCP_SOURCE="/opt/mcp-source"
-MCP_DEST="/opt/codex-home/mcp"
+MCP_DEST="/opt/mcp-installed"
 MCP_PYTHON="/opt/mcp-venv/bin/python3"
-CONFIG_DIR="/opt/codex-home/.codex"
-CONFIG_PATH="${CONFIG_DIR}/config.toml"
-HELPER_SCRIPT="${CONFIG_DIR}/update_mcp_config.py"
 
 log() {
   echo "[install_mcp] $*" >&2
@@ -54,9 +51,8 @@ for src in "${SORTED[@]}"; do
   log "  - ${src}"
 done
 
-# Create all necessary directories
+# Create destination directory
 mkdir -p "$MCP_DEST"
-mkdir -p "$CONFIG_DIR"
 
 # Copy files and collect basenames
 BASENAMES=()
@@ -77,15 +73,8 @@ for src in "${SORTED[@]}"; do
   log "Successfully copied ${base}"
 done
 
-# Check if helper script exists
-if [[ ! -f "$HELPER_SCRIPT" ]]; then
-  log "Error: helper script missing at ${HELPER_SCRIPT}"
-  exit 1
-fi
+# Create a manifest file with the list of MCP servers
+echo "${BASENAMES[*]}" > "${MCP_DEST}/.manifest"
 
-log "Updating Codex config with ${COPIED} MCP server(s): ${BASENAMES[*]}"
-
-# Update config.toml with MCP servers
-"$MCP_PYTHON" "$HELPER_SCRIPT" "$CONFIG_PATH" "$MCP_PYTHON" "${BASENAMES[@]}"
-
-log "Successfully installed ${COPIED} MCP server(s) into ${MCP_DEST}"
+log "Successfully prepared ${COPIED} MCP server(s) in ${MCP_DEST}"
+log "These will be installed to /opt/codex-home/mcp at container startup"

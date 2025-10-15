@@ -1,6 +1,53 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+install_mcp_servers_runtime() {
+  local mcp_source="/opt/mcp-installed"
+  local mcp_dest="/opt/codex-home/mcp"
+  local mcp_python="/opt/mcp-venv/bin/python3"
+  local config_dir="/opt/codex-home/.codex"
+  local config_path="${config_dir}/config.toml"
+  local helper_script="/opt/update_mcp_config.py"
+
+  # Check if MCP servers are already installed
+  if [[ -f "${mcp_dest}/.installed" ]]; then
+    return 0
+  fi
+
+  # Check if we have MCP servers to install
+  if [[ ! -d "$mcp_source" || ! -f "${mcp_source}/.manifest" ]]; then
+    return 0
+  fi
+
+  echo "[codex_entry] Installing MCP servers..." >&2
+
+  # Create destination directory
+  mkdir -p "$mcp_dest"
+  mkdir -p "$config_dir"
+
+  # Copy MCP server files
+  cp -r "${mcp_source}"/*.py "$mcp_dest/" 2>/dev/null || true
+
+  # Read manifest to get list of server names
+  local manifest
+  manifest=$(cat "${mcp_source}/.manifest")
+
+  if [[ -z "$manifest" ]]; then
+    echo "[codex_entry] No MCP servers found in manifest" >&2
+    return 0
+  fi
+
+  # Update config with MCP servers
+  if [[ -f "$helper_script" ]]; then
+    # shellcheck disable=SC2086
+    "$mcp_python" "$helper_script" "$config_path" "$mcp_python" $manifest || true
+    echo "[codex_entry] Installed MCP servers: $manifest" >&2
+  fi
+
+  # Mark as installed
+  touch "${mcp_dest}/.installed"
+}
+
 start_oss_bridge() {
   local target="${OSS_SERVER_URL:-${OLLAMA_HOST:-}}"
   if [[ -z "$target" ]]; then
@@ -53,6 +100,9 @@ ensure_codex_api_key() {
     return
   fi
 }
+
+# Install MCP servers on first run
+install_mcp_servers_runtime
 
 if [[ "${ENABLE_OSS_BRIDGE:-}" == "1" ]]; then
   start_oss_bridge
