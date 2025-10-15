@@ -56,8 +56,9 @@ function parseCodexOutput(stdout) {
       continue;
     }
 
-    if (parsed.kind === 'codex_event' && parsed.payload && parsed.payload.msg) {
-      const msg = parsed.payload.msg;
+    // Handle --json format: {id, msg}
+    if (parsed.msg) {
+      const msg = parsed.msg;
       events.push(parsed);
       switch (msg.type) {
         case 'agent_message':

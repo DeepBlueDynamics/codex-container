@@ -624,8 +624,8 @@ invoke_codex_server() {
     exit 1
   fi
 
-  local -a prev_extra_args=("${DOCKER_RUN_EXTRA_ARGS[@]}")
-  local -a prev_extra_envs=("${DOCKER_RUN_EXTRA_ENVS[@]}")
+  local -a prev_extra_args=("${DOCKER_RUN_EXTRA_ARGS[@]+"${DOCKER_RUN_EXTRA_ARGS[@]}"}")
+  local -a prev_extra_envs=("${DOCKER_RUN_EXTRA_ENVS[@]+"${DOCKER_RUN_EXTRA_ENVS[@]}"}")
 
   DOCKER_RUN_EXTRA_ARGS=(-p "${host}:${port}:${port}")
   DOCKER_RUN_EXTRA_ENVS=("CODEX_GATEWAY_PORT=${port}" "CODEX_GATEWAY_BIND=0.0.0.0")
@@ -641,8 +641,8 @@ invoke_codex_server() {
 
   docker_run node /usr/local/bin/codex_gateway.js
 
-  DOCKER_RUN_EXTRA_ARGS=("${prev_extra_args[@]}")
-  DOCKER_RUN_EXTRA_ENVS=("${prev_extra_envs[@]}")
+  DOCKER_RUN_EXTRA_ARGS=("${prev_extra_args[@]+"${prev_extra_args[@]}"}")
+  DOCKER_RUN_EXTRA_ENVS=("${prev_extra_envs[@]+"${prev_extra_envs[@]}"}")
 }
 
 invoke_codex_shell() {
