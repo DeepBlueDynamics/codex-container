@@ -2,6 +2,76 @@
 
 These scripts launch the OpenAI Codex CLI inside a reproducible Docker container. Drop either script somewhere on your `PATH`, change into any project, and the helper mounts the current working directory alongside a persistent Codex home so credentials survive between runs.
 
+## Event-Driven Agent Pattern
+
+**The key feature**: Codex can automatically activate in response to file system changes. This creates an **agent that responds to events** rather than waiting for manual commands. You can replicate any agent behavior manually for testing, then switch to automated monitoring for production.
+
+### How It Works
+
+1. **Monitor Mode** (`--monitor`) - Watches a directory and activates Codex when files change
+2. **Template-Driven Prompts** - Uses `MONITOR.md` (or custom prompt file) with variable substitution
+3. **Manual Testing** - Run the exact same command with `--exec` to test behavior before enabling monitoring
+4. **Event Triggers** - Any file change triggers the agent with context about what changed
+
+**Example workflow:**
+```bash
+# Test manually first - see what the agent would do
+./scripts/codex_container.sh --exec \
+  --workspace vhf_monitor \
+  "Check for new recordings and transcribe them"
+
+# Same behavior, now automated on file changes
+./scripts/codex_container.sh --monitor \
+  --watch-path vhf_monitor \
+  --monitor-prompt MONITOR.md
+```
+
+The agent sees the same files, same tools, same context - whether triggered manually or automatically. This makes testing and debugging trivial: just run the manual version to see what would happen.
+
+### Monitor Mode in Detail
+
+Monitor mode watches a directory and runs Codex whenever files change, using a prompt template that gets variable substitution:
+
+```bash
+./scripts/codex_container.sh --monitor \
+  --watch-path vhf_monitor \
+  --monitor-prompt MONITOR.md \
+  --codex-arg "--model" --codex-arg "o4-mini"
+```
+
+PowerShell variant:
+```powershell
+./scripts/codex_container.ps1 -Monitor -WatchPath ..\vhf_monitor -CodexArgs "--model","o4-mini"
+```
+
+**Template variables available in your prompt:**
+- `{{file}}`, `{{directory}}` - File/directory name
+- `{{full_path}}`, `{{relative_path}}` - Paths on host
+- `{{container_path}}`, `{{container_dir}}` - Paths inside container
+- `{{extension}}`, `{{action}}`, `{{timestamp}}` - File metadata
+- `{{watch_root}}` - Base directory being monitored
+- `{{old_file}}`, `{{old_full_path}}`, etc. - For file moves/renames
+
+**Testing pattern:**
+1. Write your prompt in `MONITOR.md` with template variables
+2. Test manually: `./scripts/codex_container.sh --exec "$(cat MONITOR.md)"`
+3. Enable monitoring: `./scripts/codex_container.sh --monitor --watch-path .`
+4. Agent now responds automatically to file changes
+
+**Example `MONITOR.md`:**
+```markdown
+File changed: {{relative_path}}
+
+Check if this is a new VHF recording. If so:
+1. Call transcribe_pending_recordings MCP tool
+2. Review transcription for maritime callsigns
+3. Update status log
+
+Container path: {{container_path}}
+```
+
+Combine with MCP tools (e.g., `transcribe_pending_recordings` from `radio_control.py`) for end-to-end automation. The agent can call tools, read files, and take actions - all triggered by file system events.
+
 ## Codex Home Directory
 
 By default the container mounts a user-scoped directory as its `$HOME`:
@@ -16,7 +86,31 @@ This folder holds Codex authentication (`.codex/`), CLI configuration, and any s
 
 Relative paths are resolved the same way your shell would (e.g. `./state`, `~/state`).
 
-Both scripts expand `~`, accept absolute paths, and create the directory if it does not exist. If you previously used the repo-local `codex-home/` folder, move or copy its contents into the new location and delete the old directory when you’re done.
+Both scripts expand `~`, accept absolute paths, and create the directory if it does not exist. If you previously used the repo-local `codex-home/` folder, move or copy its contents into the new location and delete the old directory when you're done.
+
+## Session Management
+
+Both scripts now support resuming previous Codex sessions:
+
+**List recent sessions:**
+```bash
+# Bash - shows recent sessions automatically when running without arguments
+./scripts/codex_container.sh
+
+# PowerShell
+./scripts/codex_container.ps1
+```
+
+**Resume a session by short ID:**
+```bash
+# Bash - use last 5 characters of session UUID
+./scripts/codex_container.sh --session-id bffba
+
+# PowerShell
+./scripts/codex_container.ps1 -SessionId bffba
+```
+
+Sessions are stored in `~/.codex-service/.codex/sessions/` organized by date. The scripts support Docker-style partial matching - you only need to provide enough characters to uniquely identify the session (typically 5).
 
 ## Windows (PowerShell)
 
@@ -64,6 +158,8 @@ Both scripts expand `~`, accept absolute paths, and create the directory if it d
   - `-Oss` tells Codex to target a locally hosted provider via `--oss` (e.g., Ollama). The helper automatically bridges `127.0.0.1:11434` inside the container to your host service—just keep Ollama running as you normally would.
   - `-OssModel <name>` (maps to Codex `-m/--model` and implies `-Oss`) selects the model Codex should request when using the OSS provider.
   - `-CodexArgs <value>` and `-Exec` both accept multiple values (repeat the flag or pass positionals after `--`) to forward raw arguments to the CLI.
+  - `-SessionId <id>` resumes a previous session (accepts full UUID or last 5 characters)
+  - `-TranscriptionServiceUrl <url>` configures the transcription service endpoint (default: `http://host.docker.internal:8765`)
 
 ## macOS / Linux / WSL (Bash)
 
@@ -82,6 +178,8 @@ Both scripts expand `~`, accept absolute paths, and create the directory if it d
   - `--codex-arg <value>` and `--exec-arg <value>` forward additional parameters to Codex (repeat the flag as needed).
   - `--watch-*` controls the directory watcher (see *Directory Watcher* below).
   - `--monitor [--monitor-prompt <file>]` watches a directory and, for each change, feeds `MONITOR.md` (or your supplied prompt file) to Codex alongside the file path.
+  - `--session-id <id>` resumes a previous session (accepts full UUID or last 5 characters)
+  - `--transcription-service-url <url>` configures the transcription service endpoint (default: `http://host.docker.internal:8765`)
 
 Typical example:
 
@@ -138,6 +236,32 @@ codex-container/
 
 After running install, these servers will be available to Codex for tool execution.
 
+## Event-Driven Testing Pattern
+
+The monitor mode creates a powerful testing pattern:
+
+1. **Write your agent logic** in a template file (`MONITOR.md`)
+2. **Test manually** with `--exec` to verify behavior
+3. **Enable automation** with `--monitor` - same logic, now event-driven
+4. **Debug by going back to manual** - exact same execution path
+
+This makes it trivial to develop and test autonomous agent behaviors. You're never guessing what the automated agent will do - just run it manually first.
+
+**Example: VHF Monitor Agent**
+```bash
+# 1. Test: "What would the agent do with this new recording?"
+./scripts/codex_container.sh --exec \
+  --workspace vhf_monitor \
+  "New recording detected. Transcribe and check for callsigns."
+
+# 2. Automate: Agent now does this automatically on new recordings
+./scripts/codex_container.sh --monitor \
+  --watch-path vhf_monitor \
+  --monitor-prompt MONITOR.md
+```
+
+The agent has access to all MCP tools (file operations, transcription, etc.), so it can perform complex workflows autonomously while remaining fully testable.
+
 ## Examples
 
 The `examples/` directory contains sample code for working with Codex:
@@ -170,6 +294,7 @@ To wipe Codex state quickly:
 - **Codex keeps asking for login** – run `-Login`/`--login` to refresh credentials. The persisted files live under the configured Codex home (not the repo).
 - **`… does not support tools` from Ollama** – switch to a model that advertises tool support or disable tool usage when invoking Codex; the OSS bridge assumes the provider can execute tool calls.
 - **Reset everything** – delete the Codex home folder you configured (e.g. `%USERPROFILE%\.codex-service`) and reinstall/login.
+- **Agent not responding to file changes** – Check that `--watch-path` points to the correct directory and that `MONITOR.md` exists and is readable.
 
 Bundled servers also cover file diffing, crawling, Google/Gmail integrations, and the `radio_control.py` helper for the VHF monitor workspace (read-only status, recordings, logs, Whisper transcriptions).
 
@@ -189,25 +314,3 @@ Bundled servers also cover file diffing, crawling, Google/Gmail integrations, an
 - Templates accept `{path}`, `{name}`, `{stem}` placeholders; add `--watch-include-content` to inline UTF-8 text (bounded by `--watch-content-bytes`).
 - Repeat `--watch-pattern` for multiple globs, and provide `--watch-state-file` to persist seen timestamps across restarts.
 - Any `--codex-arg` / `--exec-arg` flags are forwarded to each triggered `--exec` run, so you can pre-load system prompts or pick models. For example, ask Codex to call the `radio_control.transcribe_pending_recordings` MCP tool to mirror the old `auto_transcribe.py` loop from inside the container.
-
-### Monitor Mode
-
-`--monitor` is a lightweight polling loop that reads a prompt from `MONITOR.md` (or `--monitor-prompt`) inside the watched directory and reruns Codex whenever files change:
-
-```bash
-./scripts/codex_container.sh --monitor \
-  --watch-path vhf_monitor \
-  --monitor-prompt MONITOR.md \
-  --codex-arg "--model" --codex-arg "o4-mini"
-```
-
-PowerShell variant:
-
-```powershell
-cd C:\Users\kord\Code\gnosis\codex-container
-./scripts/codex_container.ps1 -Monitor -WatchPath ..\vhf_monitor -CodexArgs "--model","o4-mini"
-```
-
-- Templating: within the prompt, use tokens such as `{{file}}`, `{{directory}}`, `{{full_path}}`, `{{relative_path}}`, `{{container_path}}`, `{{container_dir}}`, `{{extension}}`, `{{action}}`, `{{timestamp}}`, `{{watch_root}}`, `{{old_file}}`, `{{old_full_path}}`, `{{old_relative_path}}`, `{{old_container_path}}`; they expand per event before running Codex.
-- Every update in the directory triggers `codex exec …` using the templated prompt (no manual scripting required).
-- Combine with `radio_control` MCP tools (e.g., ask the prompt to call `transcribe_pending_recordings`) for end-to-end automation without writing new host scripts.
