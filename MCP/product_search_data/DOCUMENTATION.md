@@ -343,25 +343,48 @@ def calculate_similarity(text1, text2):
 
 ## Installation
 
-1. **File is already created at:**
-   ```
-   C:\Users\kord\Code\gnosis\codex-container\MCP\product-search.py
-   ```
+**The product-search MCP server is automatically installed with codex-container.**
 
-2. **Install using evolve_tool:**
-   ```python
-   evolve_tool(
-       tool_name="product-search",
-       use_existing="product-search.py"
-   )
-   ```
+No manual installation required - all tools are available immediately.
 
-3. **Load sample data:**
+### Quick Start
+
+1. **Load sample data:**
    ```python
    load_sample_furniture(replace_existing=False)
    ```
+   This loads 30 furniture products from the article examples.
 
-4. **Start searching and learning!**
+2. **Try example queries:**
+   ```python
+   # Find vampire-appropriate couches
+   search_products("couch fit for a vampire", top_k=10)
+   
+   # Find the ugliest chairs
+   search_products("ugliest chair in the catalog", top_k=10)
+   
+   # Gothic furniture
+   fuzzy_search_products("gothic", top_k=5)
+   ```
+
+3. **Save evaluations to build learning:**
+   ```python
+   save_query_evaluation(
+       user_query="couch fit for a vampire",
+       search_tool_query="velvet chesterfield dramatic",
+       quality="good",
+       reasoning="Found multiple dramatically tufted velvet options with vampiric vibe"
+   )
+   ```
+
+4. **Check past queries before searching:**
+   ```python
+   get_past_queries("vampire couch", similarity_threshold=0.7)
+   # Returns similar past queries with their evaluations
+   ```
+
+5. **Start searching and learning!**
+
 
 ## Philosophy
 
