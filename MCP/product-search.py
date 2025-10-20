@@ -4,20 +4,30 @@ MCP: product-search
 Simple, transparent keyword search for products with learning/memory capabilities.
 
 Implements the "dumb search with agent reasoning" pattern from the article:
+https://softwaredoug.com/blog/2025/10/19/agentic-code-generation-to-optimize-a-search-reranker
+
 - Direct BM25-style keyword search (no synonyms, no complex query understanding)
 - Agent learns what works through query evaluation and memory
 - Fuzzy matching for product searches
 - Query history with semantic similarity lookup
 
-Tools exposed:
-- search_products: Simple keyword search
+Tools exposed (10 total):
+- search_products: Simple keyword or fuzzy search
+- fuzzy_search_products: Dedicated fuzzy similarity search
 - get_past_queries: Retrieve similar past queries with evaluations
 - save_query_evaluation: Save how well a search worked
 - add_product: Add new product to catalog
 - update_product: Update existing product
 - delete_product: Remove product from catalog
 - list_products: Browse all products
+- get_product_stats: Get catalog and query statistics
+- load_sample_furniture: Load 30 sample furniture products from article
+
+Sample data available in: product_search_data/sample_furniture.json
+Documentation available in: product_search_data/DOCUMENTATION.md
 """
+
+
 
 from __future__ import annotations
 
@@ -650,6 +660,89 @@ async def get_product_stats() -> Dict[str, Any]:
         },
         "data_directory": get_data_dir()
     }
+
+@mcp.tool()
+async def load_sample_furniture(replace_existing: bool = False) -> Dict[str, Any]:
+    """
+    Load sample furniture products into the catalog.
+    
+    Loads 30 sample furniture items from the article examples including:
+    - Chesterfield sofas and velvet couches (for vampire queries)
+    - Chaise lounges with fainting-couch energy
+    - Bold statement pieces (zebra chair, cow print chair)
+    - The infamous "Gaudy" armchair
+    - Gothic and Victorian pieces
+    - Various styles: modern, industrial, bohemian, etc.
+    
+    Args:
+        replace_existing: If True, replace all existing products. If False, add to existing (default: False)
+    
+    Returns:
+        Dict with loading results
+    """
+    logger.info("load_sample_furniture called: replace_existing=%s", replace_existing)
+    
+    sample_file = os.path.join(get_data_dir(), "sample_furniture.json")
+    
+    if not os.path.exists(sample_file):
+        return {
+            "success": False,
+            "error": f"Sample furniture file not found at {sample_file}",
+            "tip": "The sample_furniture.json file should be in the product_search_data directory"
+        }
+    
+    try:
+        with open(sample_file, 'r', encoding='utf-8') as f:
+            sample_products = json.load(f)
+    except Exception as e:
+        logger.error("Error loading sample furniture: %s", e)
+        return {
+            "success": False,
+            "error": f"Failed to load sample furniture: {e}"
+        }
+    
+    if replace_existing:
+        products = sample_products
+        action = "replaced"
+    else:
+        existing_products = load_products()
+        # Check for ID conflicts
+        existing_ids = {str(p.get('id')) for p in existing_products}
+        sample_ids = {str(p.get('id')) for p in sample_products}
+        conflicts = existing_ids & sample_ids
+        
+        if conflicts:
+            return {
+                "success": False,
+                "error": "ID conflicts detected",
+                "conflicting_ids": list(conflicts),
+                "tip": "Use replace_existing=true to replace all products, or remove conflicting IDs first"
+            }
+        
+        products = existing_products + sample_products
+        action = "added"
+    
+    save_products(products)
+    
+    # Get category breakdown
+    categories = {}
+    for p in products:
+        cat = p.get('category', 'uncategorized')
+        categories[cat] = categories.get(cat, 0) + 1
+    
+    return {
+        "success": True,
+        "message": f"Sample furniture {action}",
+        "sample_products_loaded": len(sample_products),
+        "total_products": len(products),
+        "categories": categories,
+        "examples": [
+            "Try: 'couch fit for a vampire' -> finds velvet chesterfields",
+            "Try: 'ugliest chair in the catalog' -> finds zebra, cow print, gaudy chairs",
+            "Try: 'gothic furniture' -> finds Abbey chair, Avondale chaise"
+        ]
+    }
+
 
 # ----------------------------------
 # Entrypoint
