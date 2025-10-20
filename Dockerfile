@@ -118,6 +118,9 @@ RUN sed -i 's/\r$//' /usr/local/bin/codex_gateway.js \
 # Copy MCP source files into the image
 COPY MCP/ /opt/mcp-source/
 
+# Copy MCP data directories (e.g., product_search_data)
+COPY MCP/product_search_data/ /opt/mcp-data/product_search_data/
+
 # Copy MCP installation script and helper
 COPY scripts/install_mcp_servers.sh /opt/
 COPY scripts/update_mcp_config.py /opt/

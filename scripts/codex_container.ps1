@@ -14,6 +14,7 @@ param(
     [string]$Tag = 'gnosis/codex-service:dev',
 [string]$Workspace,
 [string]$CodexHome,
+    [Parameter(ValueFromRemainingArguments=$true)]
     [string[]]$CodexArgs,
     [switch]$SkipUpdate,
     [switch]$NoAutoLogin,
@@ -25,7 +26,9 @@ param(
     [string]$GatewayHost,
     [int]$GatewayTimeoutMs,
     [string]$GatewayDefaultModel,
-    [string[]]$GatewayExtraArgs
+    [string[]]$GatewayExtraArgs,
+    [string]$TranscriptionServiceUrl = 'http://host.docker.internal:8765',
+    [string]$SessionId
 )
 
 $ErrorActionPreference = 'Stop'
@@ -272,6 +275,9 @@ function New-DockerRunArgs {
             '-e', 'OSS_SERVER_URL=http://host.docker.internal:11434',
             '-e', 'ENABLE_OSS_BRIDGE=1'
         )
+    }
+    if ($TranscriptionServiceUrl) {
+        $args += @('-e', "TRANSCRIPTION_SERVICE_URL=$TranscriptionServiceUrl")
     }
     if ($AdditionalEnv) {
         foreach ($envPair in $AdditionalEnv) {
@@ -844,6 +850,89 @@ function Test-CodexAuthenticated {
     }
 }
 
+function Show-RecentSessions {
+    param(
+        $Context,
+        [int]$Limit = 5
+    )
+
+    $sessionsDir = Join-Path $Context.CodexHome ".codex/sessions"
+
+    if (-not (Test-Path $sessionsDir)) {
+        return
+    }
+
+    # Find all rollout-*.jsonl files (sessions are stored as: sessions/2025/10/20/rollout-*.jsonl)
+    $sessionFiles = Get-ChildItem -Path $sessionsDir -Recurse -Filter "rollout-*.jsonl" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First $Limit
+
+    if ($sessionFiles.Count -eq 0) {
+        return
+    }
+
+    Write-Host ""
+    Write-Host "Recent Codex sessions:" -ForegroundColor Cyan
+
+    # Platform-appropriate command hint
+    $resumeCmd = if ($IsWindows -or $env:OS -match "Windows") {
+        "codex-container -SessionId <id>"
+    } else {
+        "codex_container.ps1 -SessionId <id>"
+    }
+    Write-Host "  (Resume with: $resumeCmd)" -ForegroundColor DarkGray
+    Write-Host ""
+
+    foreach ($file in $sessionFiles) {
+        # Extract session ID from filename: rollout-2025-10-20T14-58-30-019a0221-064c-7cd3-aad2-dffde6bbffba.jsonl
+        if ($file.Name -match 'rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$') {
+            $sessionId = $matches[1]
+        } else {
+            continue
+        }
+
+        # Get short ID (last 5 chars)
+        $shortId = $sessionId.Substring($sessionId.Length - 5)
+
+        $lastModified = $file.LastWriteTime
+        $age = (Get-Date) - $lastModified
+
+        # Format age nicely
+        $ageStr = if ($age.TotalHours -lt 1) {
+            "{0} min ago" -f [math]::Floor($age.TotalMinutes)
+        } elseif ($age.TotalDays -lt 1) {
+            "{0}h ago" -f [math]::Floor($age.TotalHours)
+        } else {
+            "{0}d ago" -f [math]::Floor($age.TotalDays)
+        }
+
+        # Try to get first user message from the jsonl file
+        $preview = ""
+        try {
+            $firstLine = Get-Content $file.FullName -First 1 -ErrorAction SilentlyContinue
+            if ($firstLine) {
+                $json = $firstLine | ConvertFrom-Json -ErrorAction SilentlyContinue
+                if ($json.role -eq "user" -and $json.content) {
+                    $preview = $json.content
+                    if ($preview.Length -gt 70) {
+                        $preview = $preview.Substring(0, 67) + "..."
+                    }
+                }
+            }
+        } catch {
+            # Ignore parse errors
+        }
+
+        Write-Host "  [$ageStr]" -ForegroundColor DarkGray -NoNewline
+        Write-Host " ...$shortId" -ForegroundColor Yellow -NoNewline
+        Write-Host " ($sessionId)" -ForegroundColor DarkGray
+        if ($preview) {
+            Write-Host "    $preview" -ForegroundColor Gray
+        }
+    }
+    Write-Host ""
+}
+
 function Ensure-CodexAuthentication {
     param(
         $Context,
@@ -939,6 +1028,51 @@ switch ($action) {
     }
     default { # Run
         Ensure-CodexAuthentication -Context $context -Silent:($Json -or $JsonE)
-        Invoke-CodexRun -Context $context -Arguments $CodexArgs -Silent:($Json -or $JsonE)
+
+        # Handle SessionId parameter - resolve partial matches
+        $resolvedSessionId = $null
+        if ($SessionId) {
+            $sessionsDir = Join-Path $context.CodexHome ".codex/sessions"
+            if (Test-Path $sessionsDir) {
+                $allSessions = Get-ChildItem -Path $sessionsDir -Recurse -Filter "rollout-*.jsonl" -File -ErrorAction SilentlyContinue
+                $matches = @()
+                foreach ($file in $allSessions) {
+                    if ($file.Name -match 'rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$') {
+                        $fullId = $Matches[1]
+                        if ($fullId -like "*$SessionId") {
+                            $matches += $fullId
+                        }
+                    }
+                }
+
+                if ($matches.Count -eq 0) {
+                    Write-Host "Error: No session found matching '$SessionId'" -ForegroundColor Red
+                    return
+                } elseif ($matches.Count -gt 1) {
+                    Write-Host "Error: Multiple sessions match '$SessionId':" -ForegroundColor Red
+                    foreach ($m in $matches) {
+                        Write-Host "  $m" -ForegroundColor Yellow
+                    }
+                    return
+                } else {
+                    $resolvedSessionId = $matches[0]
+                    if (-not ($Json -or $JsonE)) {
+                        Write-Host "Resuming session: $resolvedSessionId" -ForegroundColor Cyan
+                    }
+                }
+            }
+        }
+
+        if (-not ($Json -or $JsonE) -and -not $SessionId) {
+            Show-RecentSessions -Context $context -Limit 5
+        }
+
+        # Build arguments - add session ID if provided
+        $runArgs = $CodexArgs
+        if ($resolvedSessionId) {
+            $runArgs = @('resume', $resolvedSessionId) + $CodexArgs
+        }
+
+        Invoke-CodexRun -Context $context -Arguments $runArgs -Silent:($Json -or $JsonE)
     }
 }

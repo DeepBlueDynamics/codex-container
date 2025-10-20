@@ -38,37 +38,52 @@ __version__ = "0.1.0"
 # ----------------------------------
 # Logging
 # ----------------------------------
-def _init_logger() -> logging.Logger:
+def _get_logger() -> logging.Logger:
     """
-    Initialize and configure the file-diff logger.
-    
+    Get or initialize the file-diff logger (lazy initialization).
+
     Creates log directory (prefers context_substrate/logs, falls back to logs/)
-    and sets up file handler with timestamped formatting.
-    
+    and sets up file handler with timestamped formatting on first use.
+
     Returns:
         logging.Logger: Configured logger instance
     """
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    # Prefer MCP/context_substrate/logs if available; else fallback to MCP/logs
-    substrate_logs = os.path.join(base_dir, "context_substrate", "logs")
-    logs_dir = substrate_logs if os.path.isdir(os.path.join(base_dir, "context_substrate")) else os.path.join(base_dir, "logs")
-    os.makedirs(logs_dir, exist_ok=True)
-    log_path = os.path.join(logs_dir, "file_diff.log")
-
     logger = logging.getLogger("file_diff")
-    if not logger.handlers:
+    if logger.handlers:
+        return logger
+
+    # Lazy initialization - only runs on first tool call
+    import sys
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        substrate_logs = os.path.join(base_dir, "context_substrate", "logs")
+        logs_dir = substrate_logs if os.path.isdir(os.path.join(base_dir, "context_substrate")) else os.path.join(base_dir, "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        log_path = os.path.join(logs_dir, "file_diff.log")
+
         logger.setLevel(logging.INFO)
         fh = logging.FileHandler(log_path)
         fmt = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         fh.setFormatter(fmt)
         logger.addHandler(fh)
-    logger.info("file-diff MCP starting; version=%s", __version__)
-    logger.info("Logging to %s", log_path)
+        logger.info("file-diff MCP starting; version=%s", __version__)
+        logger.info("Logging to %s", log_path)
+    except Exception as e:
+        # Fallback to stderr if file logging fails
+        print(f"[gnosis-files] Logger init failed, using stderr: {e}", file=sys.stderr, flush=True)
+        logger.setLevel(logging.INFO)
+        logger.addHandler(logging.StreamHandler(sys.stderr))
+
     return logger
 
 
+# Module-level logger accessor - initialized lazily on first use
+class _LoggerProxy:
+    """Proxy to defer logger initialization until first use."""
+    def __getattr__(self, name):
+        return getattr(_get_logger(), name)
 
-logger = _init_logger()
+logger = _LoggerProxy()
 
 
 # ----------------------------------
@@ -1469,11 +1484,13 @@ async def file_writer(
 # Entrypoint
 # ----------------------------------
 if __name__ == "__main__":
+    import sys
     try:
-        logger.info("Starting file-diff MCP server (stdio)")
+        # Don't use logger here - it triggers file I/O which can block MCP startup
+        print("[gnosis-files] Starting MCP server (stdio)", file=sys.stderr, flush=True)
         mcp.run(transport='stdio')
     except Exception as e:
-        logger.critical("Failed to start MCP server: %s", e, exc_info=True)
+        print(f"[gnosis-files] Failed to start MCP server: {e}", file=sys.stderr, flush=True)
         raise
 
 

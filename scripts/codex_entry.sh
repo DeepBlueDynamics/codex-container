@@ -52,6 +52,12 @@ install_mcp_servers_runtime() {
   cp -r "${mcp_source}"/*.py "$mcp_dest/" 2>/dev/null || true
   cp "$manifest_src" "$manifest_dest" 2>/dev/null || true
 
+  # Copy MCP data directories if they exist (e.g., product_search_data)
+  if [[ -d "/opt/mcp-data" ]]; then
+    echo "[codex_entry] Copying MCP data directories..." >&2
+    cp -r /opt/mcp-data/* "$mcp_dest/" 2>/dev/null || true
+  fi
+
   if [[ -f "$helper_script" ]]; then
     # Split manifest into array while respecting word boundaries
     # shellcheck disable=SC2206
@@ -138,17 +144,8 @@ fi
 ensure_codex_api_key
 ensure_baml_workspace
 
-# Start transcription daemon in background
-if [[ -f "/usr/local/bin/transcription_daemon.py" ]]; then
-  echo "[codex_entry] Starting transcription daemon..." >&2
-  /opt/mcp-venv/bin/python3 /usr/local/bin/transcription_daemon.py &
-  DAEMON_PID=$!
-  cleanup_daemon() {
-    if [[ -n "${DAEMON_PID:-}" ]]; then
-      kill "$DAEMON_PID" 2>/dev/null || true
-    fi
-  }
-  trap cleanup_daemon EXIT
-fi
+# Note: Transcription daemon is now a separate persistent service container
+# Started via scripts/start_transcription_service.ps1
+# This keeps Whisper model loaded and avoids reloading on every Codex run
 
 exec "$@"

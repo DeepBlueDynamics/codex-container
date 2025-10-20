@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""
+MCP: gnosis-files
+
+Simple file operations - read, write, stat, list.
+Lightweight replacement for the complex file-diff tool.
+"""
+
+from __future__ import annotations
+
+import sys
+import os
+from pathlib import Path
+from typing import Dict, List, Optional, Any
+
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("gnosis-files")
+
+
+@mcp.tool()
+async def file_read(file_path: str, encoding: str = "utf-8") -> Dict[str, Any]:
+    """Read contents of a file.
+
+    Args:
+        file_path: Path to file to read
+        encoding: Text encoding (default: utf-8)
+
+    Returns:
+        Dictionary with file contents and metadata.
+    """
+    try:
+        path = Path(file_path).expanduser().resolve()
+
+        if not path.exists():
+            return {
+                "success": False,
+                "error": f"File not found: {file_path}"
+            }
+
+        if not path.is_file():
+            return {
+                "success": False,
+                "error": f"Not a file: {file_path}"
+            }
+
+        content = path.read_text(encoding=encoding)
+
+        return {
+            "success": True,
+            "file_path": str(path),
+            "content": content,
+            "size": path.stat().st_size,
+            "lines": len(content.splitlines())
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to read file: {str(e)}"
+        }
+
+
+@mcp.tool()
+async def file_write(
+    file_path: str,
+    content: str,
+    encoding: str = "utf-8",
+    create_dirs: bool = True
+) -> Dict[str, Any]:
+    """Write content to a file.
+
+    Args:
+        file_path: Path to file to write
+        content: Content to write
+        encoding: Text encoding (default: utf-8)
+        create_dirs: Create parent directories if needed (default: True)
+
+    Returns:
+        Dictionary with write status.
+    """
+    try:
+        path = Path(file_path).expanduser().resolve()
+
+        if create_dirs:
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+        path.write_text(content, encoding=encoding)
+
+        return {
+            "success": True,
+            "file_path": str(path),
+            "size": path.stat().st_size,
+            "lines": len(content.splitlines())
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to write file: {str(e)}"
+        }
+
+
+@mcp.tool()
+async def file_stat(file_path: str) -> Dict[str, Any]:
+    """Get file or directory statistics.
+
+    Args:
+        file_path: Path to file or directory
+
+    Returns:
+        Dictionary with file metadata.
+    """
+    try:
+        path = Path(file_path).expanduser().resolve()
+
+        if not path.exists():
+            return {
+                "success": False,
+                "error": f"Path not found: {file_path}"
+            }
+
+        stat = path.stat()
+
+        return {
+            "success": True,
+            "path": str(path),
+            "type": "file" if path.is_file() else "directory" if path.is_dir() else "other",
+            "size": stat.st_size,
+            "modified": stat.st_mtime,
+            "created": stat.st_ctime,
+            "exists": True,
+            "readable": os.access(path, os.R_OK),
+            "writable": os.access(path, os.W_OK)
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to stat path: {str(e)}"
+        }
+
+
+@mcp.tool()
+async def file_list(
+    directory: str,
+    pattern: Optional[str] = None,
+    recursive: bool = False
+) -> Dict[str, Any]:
+    """List files in a directory.
+
+    Args:
+        directory: Directory path to list
+        pattern: Optional glob pattern (e.g., "*.txt")
+        recursive: Search recursively (default: False)
+
+    Returns:
+        Dictionary with list of files.
+    """
+    try:
+        path = Path(directory).expanduser().resolve()
+
+        if not path.exists():
+            return {
+                "success": False,
+                "error": f"Directory not found: {directory}"
+            }
+
+        if not path.is_dir():
+            return {
+                "success": False,
+                "error": f"Not a directory: {directory}"
+            }
+
+        if pattern:
+            if recursive:
+                files = list(path.rglob(pattern))
+            else:
+                files = list(path.glob(pattern))
+        else:
+            if recursive:
+                files = [f for f in path.rglob("*")]
+            else:
+                files = list(path.iterdir())
+
+        # Sort by name
+        files.sort(key=lambda x: x.name)
+
+        results = []
+        for f in files:
+            try:
+                stat = f.stat()
+                results.append({
+                    "path": str(f),
+                    "name": f.name,
+                    "type": "file" if f.is_file() else "directory" if f.is_dir() else "other",
+                    "size": stat.st_size if f.is_file() else 0,
+                    "modified": stat.st_mtime
+                })
+            except Exception:
+                # Skip files we can't stat
+                continue
+
+        return {
+            "success": True,
+            "directory": str(path),
+            "pattern": pattern,
+            "recursive": recursive,
+            "count": len(results),
+            "files": results
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to list directory: {str(e)}"
+        }
+
+
+@mcp.tool()
+async def file_exists(file_path: str) -> Dict[str, Any]:
+    """Check if a file or directory exists.
+
+    Args:
+        file_path: Path to check
+
+    Returns:
+        Dictionary with existence status.
+    """
+    try:
+        path = Path(file_path).expanduser().resolve()
+
+        exists = path.exists()
+        is_file = path.is_file() if exists else False
+        is_dir = path.is_dir() if exists else False
+
+        return {
+            "success": True,
+            "path": str(path),
+            "exists": exists,
+            "is_file": is_file,
+            "is_directory": is_dir
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to check path: {str(e)}"
+        }
+
+
+if __name__ == "__main__":
+    print("[gnosis-files] Starting simple file operations MCP server", file=sys.stderr, flush=True)
+    mcp.run()
