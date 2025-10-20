@@ -148,12 +148,14 @@ def bm25_score(query_tokens: List[str], doc_tokens: List[str]) -> float:
     # Simple score: number of matching terms / total query terms
     return matches / len(query_tokens) if query_tokens else 0.0
 
-def search_products_internal(query: str, products: List[Dict[str, Any]], top_k: int = 5) -> List[Dict[str, Any]]:
+def search_products_internal(query: str, products: List[Dict[str, Any]], top_k: int = 5, 
+                            use_fuzzy: bool = False, fuzzy_threshold: float = 0.6) -> List[Dict[str, Any]]:
     """
-    Internal search implementation - direct keyword matching only.
+    Internal search implementation - keyword matching with optional fuzzy search.
     
-    No synonyms, no query expansion, no reranking.
-    Just BM25-style scoring on name + description.
+    Supports two modes:
+    1. Keyword mode (default): BM25-style token matching
+    2. Fuzzy mode: Similarity matching on product name/description
     """
     query_tokens = tokenize(query)
     
@@ -164,44 +166,71 @@ def search_products_internal(query: str, products: List[Dict[str, Any]], top_k: 
     for product in products:
         # Combine name and description for searching
         searchable_text = f"{product.get('name', '')} {product.get('description', '')}"
-        doc_tokens = tokenize(searchable_text)
         
-        score = bm25_score(query_tokens, doc_tokens)
-        
-        if score > 0:
-            results.append({
-                **product,
-                'search_score': round(score, 4)
-            })
+        if use_fuzzy:
+            # Fuzzy similarity matching
+            name_sim = calculate_similarity(query, product.get('name', ''))
+            desc_sim = calculate_similarity(query, product.get('description', ''))
+            
+            # Use the higher of name or description similarity
+            score = max(name_sim, desc_sim)
+            match_type = 'fuzzy_name' if name_sim > desc_sim else 'fuzzy_description'
+            
+            if score >= fuzzy_threshold:
+                results.append({
+                    **product,
+                    'search_score': round(score, 4),
+                    'match_type': match_type,
+                    'name_similarity': round(name_sim, 4),
+                    'description_similarity': round(desc_sim, 4)
+                })
+        else:
+            # Keyword matching (original BM25-style)
+            doc_tokens = tokenize(searchable_text)
+            score = bm25_score(query_tokens, doc_tokens)
+            
+            if score > 0:
+                results.append({
+                    **product,
+                    'search_score': round(score, 4),
+                    'match_type': 'keyword'
+                })
     
     # Sort by score descending
     results.sort(key=lambda x: x['search_score'], reverse=True)
     
     return results[:top_k]
 
+
 # ----------------------------------
 # MCP Tools
 # ----------------------------------
 @mcp.tool()
-async def search_products(query: str, top_k: int = 5) -> Dict[str, Any]:
+async def search_products(query: str, top_k: int = 5, use_fuzzy: bool = False, 
+                         fuzzy_threshold: float = 0.6) -> Dict[str, Any]:
     """
-    Search for products using simple keyword matching.
+    Search for products using keyword or fuzzy matching.
     
-    This is direct keyword search with NO synonyms, NO query understanding,
-    and NO reranking. Only BM25-style scoring on product name and description
-    with basic tokenization.
+    Two search modes available:
+    1. Keyword mode (default): BM25-style token matching - intentionally "dumb" 
+       and predictable so agents can learn query patterns
+    2. Fuzzy mode: Similarity matching that finds products even when query 
+       doesn't exactly match - uses difflib similarity scoring
     
-    The search is intentionally "dumb" and predictable so agents can learn
-    how it works and apply their own intelligence to formulate better queries.
+    The keyword mode has NO synonyms, NO query understanding, and NO reranking.
+    The fuzzy mode uses text similarity to match against product names/descriptions.
     
     Args:
-        query: The search query string (will be tokenized)
+        query: The search query string
         top_k: Number of top results to return (default: 5)
+        use_fuzzy: Enable fuzzy similarity matching (default: False)
+        fuzzy_threshold: Minimum similarity score for fuzzy matches (0.0-1.0, default: 0.6)
     
     Returns:
         Dict with search results and metadata
     """
-    logger.info("search_products called: query='%s', top_k=%d", query, top_k)
+    logger.info("search_products called: query='%s', top_k=%d, fuzzy=%s", 
+                query, top_k, use_fuzzy)
     
     products = load_products()
     
@@ -215,7 +244,7 @@ async def search_products(query: str, top_k: int = 5) -> Dict[str, Any]:
             "message": "No products in catalog"
         }
     
-    results = search_products_internal(query, products, top_k)
+    results = search_products_internal(query, products, top_k, use_fuzzy, fuzzy_threshold)
     
     return {
         "success": True,
@@ -223,12 +252,48 @@ async def search_products(query: str, top_k: int = 5) -> Dict[str, Any]:
         "results": results,
         "result_count": len(results),
         "total_products": len(products),
-        "search_method": "bm25_keyword",
-        "note": "This is simple keyword search. No synonyms or query expansion. Agent should try different query terms if results aren't good."
+        "search_method": "fuzzy_similarity" if use_fuzzy else "bm25_keyword",
+        "fuzzy_enabled": use_fuzzy,
+        "fuzzy_threshold": fuzzy_threshold if use_fuzzy else None,
+        "note": (
+            "Fuzzy similarity search - matches based on text similarity between query and products."
+            if use_fuzzy else
+            "Simple keyword search. No synonyms or query expansion. Try use_fuzzy=true for similarity matching."
+        )
     }
+
+
+@mcp.tool()
+async def fuzzy_search_products(query: str, top_k: int = 5, 
+                                similarity_threshold: float = 0.6) -> Dict[str, Any]:
+    """
+    Search products using fuzzy text similarity matching.
+    
+    This uses the same fuzzy matching algorithm as gnosis-files.py's search_in_file_fuzzy.
+    Finds products even when the query doesn't exactly match the product name or description.
+    
+    Returns products with similarity scores showing how closely they match the query.
+    Useful for finding products when you're not sure of the exact name or description.
+    
+    Examples:
+    - "vampyre couch" finds "couch fit for a vampire" (handles spelling variations)
+    - "ugly seat" finds "gaudy chair" (semantic similarity)
+    - "black velvet" finds "velvet rolled arm sofa" (partial matches)
+    
+    Args:
+        query: Search query (doesn't need exact keywords)
+        top_k: Number of results to return (default: 5)
+        similarity_threshold: Minimum similarity (0.0-1.0, default: 0.6)
+    
+    Returns:
+        Dict with fuzzy-matched results and similarity scores
+    """
+    # Just call search_products with fuzzy enabled
+    return await search_products(query, top_k, use_fuzzy=True, fuzzy_threshold=similarity_threshold)
 
 @mcp.tool()
 async def get_past_queries(
+
     current_query: str,
     similarity_threshold: float = 0.7,
     max_results: int = 5
