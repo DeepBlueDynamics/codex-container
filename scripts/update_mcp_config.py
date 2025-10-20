@@ -37,6 +37,29 @@ def main(argv: list[str]) -> int:
 
     mcp_table = ensure_table(doc, "mcp_servers")
 
+    # Remove managed entries whose targets are no longer installed.
+    desired_names = {Path(filename).stem for filename in script_names}
+    managed_prefix = "/opt/codex-home/mcp/"
+
+    for name in list(mcp_table):
+        entry = mcp_table[name]
+        if not isinstance(entry, tomlkit.items.Table):
+            continue
+
+        command = entry.get("command")
+        args = entry.get("args")
+        if command != python_cmd or not isinstance(args, list) or len(args) < 2:
+            continue
+
+        managed_arg = None
+        for arg in args:
+            if isinstance(arg, str) and arg.startswith(managed_prefix):
+                managed_arg = arg
+                break
+
+        if managed_arg and name not in desired_names:
+            del mcp_table[name]
+
     for filename in script_names:
         name = Path(filename).stem
         table = tomlkit.table()

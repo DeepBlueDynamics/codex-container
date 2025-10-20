@@ -39,6 +39,15 @@ __version__ = "0.1.0"
 # Logging
 # ----------------------------------
 def _init_logger() -> logging.Logger:
+    """
+    Initialize and configure the file-diff logger.
+    
+    Creates log directory (prefers context_substrate/logs, falls back to logs/)
+    and sets up file handler with timestamped formatting.
+    
+    Returns:
+        logging.Logger: Configured logger instance
+    """
     base_dir = os.path.dirname(os.path.abspath(__file__))
     # Prefer MCP/context_substrate/logs if available; else fallback to MCP/logs
     substrate_logs = os.path.join(base_dir, "context_substrate", "logs")
@@ -56,6 +65,7 @@ def _init_logger() -> logging.Logger:
     logger.info("file-diff MCP starting; version=%s", __version__)
     logger.info("Logging to %s", log_path)
     return logger
+
 
 
 logger = _init_logger()
@@ -90,10 +100,28 @@ DIFF_PATTERNS: Dict[str, Dict[str, str]] = {
 # Common utilities
 # ----------------------------------
 def _norm_path(p: str) -> str:
+    """
+    Normalize a file path by expanding user home directory and resolving to absolute path.
+    
+    Args:
+        p: Path string (may contain ~ or be relative)
+    
+    Returns:
+        str: Absolute, expanded path
+    """
     return os.path.abspath(os.path.expanduser(p))
 
 
 def _human_size(n: int) -> str:
+    """
+    Convert byte count to human-readable size string.
+    
+    Args:
+        n: Number of bytes
+    
+    Returns:
+        str: Formatted size (e.g., "4.2KB", "1.5MB", "3.7GB")
+    """
     if n < 1024:
         return f"{n}B"
     if n < 1024 * 1024:
@@ -103,7 +131,21 @@ def _human_size(n: int) -> str:
     return f"{n/1073741824:.1f}GB"
 
 
+
 def read_file_content(file_path: str, encoding: str = "utf-8") -> str:
+    """
+    Read entire file contents as a string.
+    
+    Args:
+        file_path: Path to file to read
+        encoding: Text encoding (default: utf-8)
+    
+    Returns:
+        str: File contents
+    
+    Raises:
+        Exception: If file cannot be read
+    """
     try:
         return pathlib.Path(file_path).read_text(encoding=encoding)
     except Exception as e:
@@ -112,12 +154,24 @@ def read_file_content(file_path: str, encoding: str = "utf-8") -> str:
 
 
 def write_file_content(file_path: str, content: str, encoding: str = "utf-8") -> None:
+    """
+    Write string content to file, creating parent directories if needed.
+    
+    Args:
+        file_path: Destination file path
+        content: Text content to write
+        encoding: Text encoding (default: utf-8)
+    
+    Raises:
+        Exception: If file cannot be written
+    """
     try:
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         pathlib.Path(file_path).write_text(content, encoding=encoding)
     except Exception as e:
         logger.error("Error writing %s: %s", file_path, e)
         raise
+
 
 
 # ----------------------------------
@@ -502,9 +556,22 @@ def _line_count_fast(p: str, encoding: str = "utf-8") -> int:
 
 @mcp.tool()
 async def file_stat(file_path: str) -> Dict[str, Any]:
+    """
+    Get file statistics including size, line count, and whether it's large.
+    
+    Quick stat check without reading the entire file. Useful for checking
+    if a file exists and determining if special handling is needed for large files.
+    
+    Args:
+        file_path: Path to the file to check
+    
+    Returns:
+        Dict[str, Any]: File stats including size, line count, and large file indicators
+    """
     path = _norm_path(file_path)
     exists = os.path.exists(path)
     res: Dict[str, Any] = {"success": True, "file_path": path, "exists": exists}
+
     if not exists:
         return res
     st = os.stat(path)
@@ -525,7 +592,25 @@ async def file_read(file_path: str,
                     mode: str = "head",
                     allow_large: bool = False,
                     encoding: str = "utf-8") -> Dict[str, Any]:
+    """
+    Read file contents with built-in large file protection.
+    
+    Safely reads files with automatic truncation for large files. Supports
+    head, tail, or full modes. Prevents accidental loading of huge files
+    that could overwhelm context windows.
+    
+    Args:
+        file_path: Path to file to read
+        max_lines: Maximum lines to read (default: 300)
+        mode: Reading mode - "head" (first lines), "tail" (last lines), or "full"
+        allow_large: If True, allow reading files larger than max_lines
+        encoding: Text encoding (default: utf-8)
+    
+    Returns:
+        Dict[str, Any]: File content, truncation status, and line count
+    """
     path = _norm_path(file_path)
+
     if not os.path.exists(path):
         return {"success": False, "file_path": path, "error": "File not found"}
     lc = _line_count_fast(path, encoding)
@@ -570,7 +655,23 @@ async def file_read_window(file_path: str,
                            start_line: int,
                            line_count: int = 120,
                            encoding: str = "utf-8") -> Dict[str, Any]:
+    """
+    Read a specific window/range of lines from a file.
+    
+    Efficiently reads just a section of a file without loading the entire thing.
+    Perfect for navigating large files or examining specific regions of code.
+    
+    Args:
+        file_path: Path to file to read
+        start_line: Starting line number (1-indexed)
+        line_count: Number of lines to read from start (default: 120)
+        encoding: Text encoding (default: utf-8)
+    
+    Returns:
+        Dict[str, Any]: Window of file content with line range information
+    """
     path = _norm_path(file_path)
+
     if start_line < 1:
         start_line = 1
     if not os.path.exists(path):
@@ -598,7 +699,24 @@ async def file_read_version(file_path: str,
                             start_line: int = 1,
                             line_count: Optional[int] = 200,
                             encoding: str = "utf-8") -> Dict[str, Any]:
+    """
+    Read contents from a specific backup version of a file.
+    
+    Access historical versions created by the automatic backup system.
+    Supports windowed reading for large version files.
+    
+    Args:
+        file_path: Path to the file (not the backup - this finds the backup)
+        version_number: Which version number to read
+        start_line: Starting line in the version (default: 1)
+        line_count: Number of lines to read (None = all)
+        encoding: Text encoding (default: utf-8)
+    
+    Returns:
+        Dict[str, Any]: Version file content with metadata
+    """
     path = _norm_path(file_path)
+
     versions = get_file_versions(path)
     past = [v for v in versions if v["version"] != "current"]
     target = next((v for v in past if v["version"] == version_number), None)
@@ -630,7 +748,25 @@ async def file_read_around(file_path: str,
                            similarity_threshold: float = 0.8,
                            context_lines: int = 30,
                            encoding: str = "utf-8") -> Dict[str, Any]:
+    """
+    Find text in a file and return surrounding context.
+    
+    Searches for text (with fuzzy matching) and returns the matching region
+    plus surrounding lines. Great for locating code sections without reading
+    the entire file.
+    
+    Args:
+        file_path: Path to file to search
+        search_text: Text to search for (supports fuzzy matching)
+        similarity_threshold: Minimum similarity for fuzzy matches (0.0-1.0)
+        context_lines: Number of lines to include before/after match
+        encoding: Text encoding (default: utf-8)
+    
+    Returns:
+        Dict[str, Any]: Match location and surrounding content window
+    """
     path = _norm_path(file_path)
+
     if not os.path.exists(path):
         return {"success": False, "file_path": path, "error": "File not found"}
     content = read_file_content(path, encoding)
@@ -672,9 +808,19 @@ async def file_read_around(file_path: str,
 # ----------------------------------
 @mcp.tool()
 async def get_diff_formats() -> Dict[str, Any]:
+    """
+    List all supported diff/patch format patterns.
+    
+    Returns information about the various diff formats that file_diff_write
+    can parse, including custom safe fences, git-style diffs, and more.
+    
+    Returns:
+        Dict[str, Any]: Available diff formats with patterns and descriptions
+    """
     return {
         "success": True,
         "formats": [
+
             {
                 "name": k,
                 "pattern": v["pattern"],
@@ -695,7 +841,20 @@ async def get_diff_formats() -> Dict[str, Any]:
 
 @mcp.tool()
 async def file_diff_versions(file_path: str) -> Dict[str, Any]:
+    """
+    List all backup versions available for a file.
+    
+    Shows the version history with timestamps, sizes, and version numbers.
+    Includes the current file as version "current".
+    
+    Args:
+        file_path: Path to the file to check versions for
+    
+    Returns:
+        Dict[str, Any]: List of all versions with metadata
+    """
     path = _norm_path(file_path)
+
     if not os.path.exists(path):
         return {"success": False, "file_path": path, "error": "File not found"}
     versions = get_file_versions(path)
@@ -712,7 +871,22 @@ async def file_diff_versions(file_path: str) -> Dict[str, Any]:
 
 @mcp.tool()
 async def file_diff_restore(file_path: str, version_number: int, create_backup: bool = True) -> Dict[str, Any]:
+    """
+    Restore a file to a previous backup version.
+    
+    Replaces the current file with an older version from the backup history.
+    Optionally creates a backup of the current state before restoring.
+    
+    Args:
+        file_path: Path to the file to restore
+        version_number: Which version number to restore to
+        create_backup: If True, backup current file before restoring
+    
+    Returns:
+        Dict[str, Any]: Restore operation results
+    """
     path = _norm_path(file_path)
+
     if not os.path.exists(path):
         return {"success": False, "file_path": path, "error": "File not found"}
     backup_info = None
@@ -744,7 +918,25 @@ async def text_diff_edit(original_text: str,
                          similarity_threshold: float = 0.8,
                          allow_partial_matches: bool = True,
                          replace_all: bool = False) -> Dict[str, Any]:
+    """
+    Apply diff-style edits to text without touching the filesystem.
+    
+    Pure text manipulation using diff blocks. Great for testing diff patterns
+    or processing text that isn't in files yet. Returns both original and
+    modified text plus detailed diagnostics.
+    
+    Args:
+        original_text: The text to edit
+        diff_text: Diff blocks in any supported format
+        similarity_threshold: Minimum similarity for fuzzy matches (0.0-1.0)
+        allow_partial_matches: Enable fuzzy matching if exact match fails
+        replace_all: Replace all occurrences vs just first match
+    
+    Returns:
+        Dict[str, Any]: Original text, modified text, and detailed edit results
+    """
     logger.info("text_diff_edit called; threshold=%.2f", similarity_threshold)
+
     blocks = extract_diff_blocks(diff_text)
     if not blocks:
         return {
@@ -779,7 +971,21 @@ async def text_diff_edit(original_text: str,
 
 @mcp.tool()
 async def simple_text_diff(original_text: str, diff_text: str) -> str:
+    """
+    Apply diff edits and return just the modified text (simplified version).
+    
+    Streamlined version of text_diff_edit that returns only the modified text
+    string instead of full diagnostics. Falls back to original on failure.
+    
+    Args:
+        original_text: Text to edit
+        diff_text: Diff blocks to apply
+    
+    Returns:
+        str: Modified text (or original if editing fails)
+    """
     res = await text_diff_edit(original_text, diff_text)
+
     if res.get("success"):
         return str(res.get("modified_text", original_text))
     logger.warning("simple_text_diff failed: %s", res.get("error"))
@@ -798,6 +1004,33 @@ async def file_diff_write(file_path: str,
                           create_backup: bool = True,
                           change_tag: Optional[str] = None,
                           encoding: str = "utf-8") -> Dict[str, Any]:
+    """
+    Apply diff-style edits directly to a file with automatic backups.
+    
+    The main workhorse for file editing. Supports two modes:
+    1. Diff mode: Parses diff blocks in various formats and applies them
+    2. Direct mode: Simple search/replace operation for single edits
+    
+    Creates automatic backups before making changes. Supports fuzzy matching
+    to handle whitespace variations and minor differences. Can apply multiple
+    diff blocks in a single call.
+    
+    Args:
+        file_path: Path to file to edit
+        diff_text: Diff blocks in any supported format (use get_diff_formats to see options)
+        use_direct_mode: If True, use simple search/replace instead of parsing diff blocks
+        search_text: Text to search for (only used in direct mode)
+        replace_text: Replacement text (only used in direct mode)
+        similarity_threshold: Minimum similarity for fuzzy matches (0.0-1.0, default: 0.8)
+        allow_partial_matches: Enable fuzzy matching if exact match fails
+        replace_all: Replace all occurrences vs just first match
+        create_backup: Create backup before editing
+        change_tag: Optional tag to identify this change in backup filename
+        encoding: Text encoding (default: utf-8)
+    
+    Returns:
+        Dict[str, Any]: Edit results including changes applied, backup info, and diagnostics
+    """
     path = _norm_path(file_path)
     if not os.path.exists(path):
         return {"success": False, "file_path": path, "error": "File not found"}
@@ -916,6 +1149,33 @@ async def search_in_file_fuzzy(file_path: str,
                                max_results: int = 10,
                                context_lines: int = 2,
                                encoding: str = "utf-8") -> Dict[str, Any]:
+    """
+    Search for text in a file with advanced fuzzy matching capabilities.
+    
+    Performs intelligent search with multiple matching strategies:
+    - Exact matching (fastest, highest priority)
+    - Normalized whitespace matching
+    - Multi-line fuzzy matching for code blocks
+    - Single-line similarity matching
+    - Token-based matching for reordered content
+    
+    Returns matches with similarity scores, line numbers, and surrounding context.
+    Supports configurable thresholds to control match quality.
+    
+    Args:
+        file_path: Path to file to search
+        search_text: Text to search for (supports multi-line)
+        similarity_threshold: Minimum similarity for fuzzy matches (0.0-1.0, default: 0.8)
+        fuzzy_threshold: Separate threshold for reporting low-quality matches (default: 0.7)
+        return_content: Include matched content in exact matches (default: False)
+        return_fuzzy_below_threshold: Include content for low-quality fuzzy matches
+        max_results: Maximum number of matches to return (default: 10)
+        context_lines: Lines of context to include around each match (default: 2)
+        encoding: Text encoding (default: utf-8)
+    
+    Returns:
+        Dict[str, Any]: Search results with exact/fuzzy matches, similarity scores, and context
+    """
     path = _norm_path(file_path)
     if not os.path.exists(path):
         return {"success": False, "file_path": path, "error": "File not found"}
@@ -997,6 +1257,23 @@ async def search_in_file_regex(file_path: str,
                                search_pattern: str,
                                flags: Optional[str] = None,
                                encoding: str = "utf-8") -> Dict[str, Any]:
+    """
+    Search file using regular expressions with full regex power.
+    
+    Provides powerful pattern-based searching with support for capture groups,
+    lookaheads, character classes, and all standard regex features. Returns
+    match positions and captured groups.
+    
+    Args:
+        file_path: Path to file to search
+        search_pattern: Regular expression pattern (Python regex syntax)
+        flags: Regex flags as string - 'i' for case-insensitive, 'm' for multiline,
+               's' for dotall (can combine like 'im')
+        encoding: Text encoding (default: utf-8)
+    
+    Returns:
+        Dict[str, Any]: All regex matches with positions, line numbers, and capture groups
+    """
     path = _norm_path(file_path)
     if not os.path.exists(path):
         return {"success": False, "file_path": path, "error": "File not found"}
@@ -1032,6 +1309,163 @@ async def search_in_file_regex(file_path: str,
 
 
 # ----------------------------------
+# File Writer Tool (simple write/read/version tool)
+# ----------------------------------
+@mcp.tool()
+async def file_writer(
+    action: str,
+    file_path: str,
+    content: Union[str, Dict, List, Any] = None,
+    version: str = None,
+    create_backup: bool = True,
+    encoding: str = "utf-8"
+) -> Dict[str, Any]:
+    """
+    Simple file operations with automatic versioning support.
+    
+    A straightforward tool for writing, reading, and managing file versions.
+    Automatically creates backups before modifications. Supports JSON content
+    auto-conversion for structured data storage.
+    
+    Args:
+        action: Operation to perform ('write', 'read', 'list_versions', 'restore')
+        file_path: Path to the file to operate on
+        content: Content to write (for 'write' action) - auto-converts dicts/lists to JSON
+        version: Version number to read or restore (for 'read' and 'restore' actions)
+        create_backup: Whether to backup existing file before writing (default: True)
+        encoding: Text encoding for file operations (default: utf-8)
+    
+    Returns:
+        Dict[str, Any]: Operation results including success status, file info, and any errors
+    """
+    path = _norm_path(file_path)
+    logger.info("file_writer: action=%s path=%s", action, path)
+    
+    if action == "write":
+        try:
+            file_exists = os.path.exists(path)
+            backup_info = None
+            if file_exists and create_backup:
+                backup_info = create_file_backup(path)
+            
+            # Auto-convert non-string content to JSON
+            write_content = content
+            if not isinstance(content, str):
+                if content is not None:
+                    write_content = json.dumps(content, indent=2)
+                else:
+                    write_content = ""
+            
+            write_file_content(path, write_content, encoding)
+            st = os.stat(path)
+            
+            return {
+                "action": "write",
+                "success": True,
+                "file_path": path,
+                "size": st.st_size,
+                "size_human": _human_size(st.st_size),
+                "created": not file_exists,
+                "updated": file_exists,
+                "backup_created": backup_info is not None,
+                "backup_info": backup_info
+            }
+        except Exception as e:
+            logger.error("file_writer write error: %s", e)
+            return {"action": "write", "success": False, "file_path": path, "error": str(e)}
+    
+    elif action == "read":
+        try:
+            if version and version != "current":
+                versions = get_file_versions(path)
+                version_info = next((v for v in versions if str(v["version"]) == version), None)
+                if not version_info:
+                    return {"action": "read", "success": False, "file_path": path, "error": f"Version {version} not found"}
+                with open(version_info["path"], "r", encoding=encoding) as f:
+                    content = f.read()
+                return {
+                    "action": "read",
+                    "success": True,
+                    "file_path": path,
+                    "version": version,
+                    "content": content,
+                    "size": version_info["size"],
+                    "size_human": version_info["size_human"],
+                    "date": version_info["date"]
+                }
+            
+            if not os.path.exists(path):
+                return {"action": "read", "success": False, "file_path": path, "error": "File not found"}
+            
+            content = read_file_content(path, encoding)
+            st = os.stat(path)
+            return {
+                "action": "read",
+                "success": True,
+                "file_path": path,
+                "version": "current",
+                "content": content,
+                "size": st.st_size,
+                "size_human": _human_size(st.st_size),
+                "date": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            }
+        except Exception as e:
+            logger.error("file_writer read error: %s", e)
+            return {"action": "read", "success": False, "file_path": path, "error": str(e)}
+    
+    elif action == "list_versions":
+        try:
+            versions = get_file_versions(path)
+            return {
+                "action": "list_versions",
+                "success": True,
+                "file_path": path,
+                "versions": versions,
+                "versions_count": len(versions)
+            }
+        except Exception as e:
+            logger.error("file_writer list_versions error: %s", e)
+            return {"action": "list_versions", "success": False, "file_path": path, "error": str(e)}
+    
+    elif action == "restore":
+        try:
+            versions = get_file_versions(path)
+            version_info = next((v for v in versions if str(v["version"]) == version), None)
+            if not version_info:
+                return {"action": "restore", "success": False, "file_path": path, "error": f"Version {version} not found"}
+            
+            backup_info = None
+            if version != "current" and os.path.exists(path):
+                backup_info = create_file_backup(path)
+            
+            if version != "current":
+                shutil.copy2(version_info["path"], path)
+            
+            st = os.stat(path)
+            return {
+                "action": "restore",
+                "success": True,
+                "file_path": path,
+                "version": version,
+                "size": st.st_size,
+                "size_human": _human_size(st.st_size),
+                "backup_created": backup_info is not None,
+                "backup_info": backup_info
+            }
+        except Exception as e:
+            logger.error("file_writer restore error: %s", e)
+            return {"action": "restore", "success": False, "file_path": path, "error": str(e)}
+    
+    else:
+        return {
+            "action": action,
+            "success": False,
+            "file_path": path,
+            "error": f"Unknown action: {action}. Valid actions: 'write', 'read', 'list_versions', 'restore'"
+        }
+
+
+# ----------------------------------
 # Entrypoint
 # ----------------------------------
 if __name__ == "__main__":
@@ -1041,4 +1475,5 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical("Failed to start MCP server: %s", e, exc_info=True)
         raise
+
 

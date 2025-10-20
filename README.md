@@ -29,6 +29,10 @@ Both scripts expand `~`, accept absolute paths, and create the directory if it d
   Builds the `gnosis/codex-service:dev` image and refreshes the bundled Codex CLI.
   The script always mounts the workspace you specify with `-Workspace` (or, by default, the directory you were in when you invoked the command) so Codex sees the same files regardless of the action.
 
+  The install process also:
+  - Installs any MCP servers found in the `MCP/` directory (Python scripts are automatically registered in Codex config)
+  - Creates a runner script in your Codex home `bin/` directory and adds it to your PATH for easy invocation
+
 - **Authenticate Codex** *(normally triggered automatically)*
   ```powershell
   ./scripts/codex_container.ps1 -Login
@@ -65,7 +69,8 @@ Both scripts expand `~`, accept absolute paths, and create the directory if it d
 
 `scripts/codex_container.sh` provides matching functionality:
 
-- Primary actions: `--install`, `--login`, `--run` (default), `--exec`, `--shell`
+- Primary actions: `--install`, `--login`, `--run` (default), `--exec`, `--shell`, `--serve`, `--watch`, `--monitor`
+  - `--install` builds the image, updates the Codex CLI, installs MCP servers from `MCP/`, and sets up the runner on PATH
 - JSON output switches: `--json`, `--json-e` (alias `--json-experimental`)
 - Override Codex home: `--codex-home /path/to/state`
 - Other useful flags:
@@ -75,6 +80,8 @@ Both scripts expand `~`, accept absolute paths, and create the directory if it d
   - `--oss` forwards the `--oss` flag and the helper bridge takes care of sending container traffic to your host Ollama service automatically.
   - `--model <name>` (maps to Codex `-m/--model` and implies `--oss`) mirrors the PowerShell `-OssModel` flag.
   - `--codex-arg <value>` and `--exec-arg <value>` forward additional parameters to Codex (repeat the flag as needed).
+  - `--watch-*` controls the directory watcher (see *Directory Watcher* below).
+  - `--monitor [--monitor-prompt <file>]` watches a directory and, for each change, feeds `MONITOR.md` (or your supplied prompt file) to Codex alongside the file path.
 
 Typical example:
 
@@ -110,6 +117,37 @@ Set any of the following environment variables before invoking `--serve` to twea
 
 Stop the gateway with `Ctrl+C`; the container exits when the process ends.
 
+## MCP Servers
+
+The install process automatically discovers and registers MCP (Model Context Protocol) servers:
+
+- Place Python MCP server scripts (`.py` files) in the `MCP/` directory at the repository root
+- During `--install`/`-Install`, the scripts are copied to your Codex home and registered in `.codex/config.toml`
+- MCP servers run in a dedicated Python virtual environment (`/opt/mcp-venv`) with `aiohttp`, `fastmcp`, and `tomlkit` pre-installed
+- Servers are invoked via `/opt/mcp-venv/bin/python3` to avoid PEP-668 conflicts
+
+Example MCP directory structure:
+```
+codex-container/
+├── MCP/
+│   ├── my_tool_server.py
+│   └── data_processor.py
+├── scripts/
+└── Dockerfile
+```
+
+After running install, these servers will be available to Codex for tool execution.
+
+## Examples
+
+The `examples/` directory contains sample code for working with Codex:
+
+- **`run_codex_stream.py`** - Demonstrates streaming Codex CLI output using experimental JSON events
+  ```bash
+  python examples/run_codex_stream.py "list python files"
+  ```
+  This example shows how to parse Codex's `--experimental-json` output format for real-time message processing.
+
 ## Cleanup Helpers
 
 To wipe Codex state quickly:
@@ -119,10 +157,12 @@ To wipe Codex state quickly:
 
 ## Requirements
 
-- Docker Desktop / Docker Engine accessible from your shell. On Windows + WSL, enable Docker Desktop’s WSL integration **and** add your user to the `docker` group (`sudo usermod -aG docker $USER`).
+- Docker Desktop / Docker Engine accessible from your shell. On Windows + WSL, enable Docker Desktop's WSL integration **and** add your user to the `docker` group (`sudo usermod -aG docker $USER`).
 - No local Node.js install is required; the CLI lives inside the container.
 - Building the image (or running the update step) requires internet access to fetch `@openai/codex` from npm. You can pin a version at build time via `--build-arg CODEX_CLI_VERSION=0.42.0` if desired.
+- The container includes a Python 3 virtual environment at `/opt/mcp-venv` for MCP server execution with pre-installed dependencies (`aiohttp`, `fastmcp`, `tomlkit`).
 - When using `--oss/-Oss`, the helper bridge tunnels `127.0.0.1:11434` inside the container to your host; just keep your Ollama daemon running as usual.
+- When using `--serve/-Serve`, the gateway exposes port 4000 (configurable) for HTTP access to Codex.
 
 ## Troubleshooting
 
@@ -130,3 +170,44 @@ To wipe Codex state quickly:
 - **Codex keeps asking for login** – run `-Login`/`--login` to refresh credentials. The persisted files live under the configured Codex home (not the repo).
 - **`… does not support tools` from Ollama** – switch to a model that advertises tool support or disable tool usage when invoking Codex; the OSS bridge assumes the provider can execute tool calls.
 - **Reset everything** – delete the Codex home folder you configured (e.g. `%USERPROFILE%\.codex-service`) and reinstall/login.
+
+Bundled servers also cover file diffing, crawling, Google/Gmail integrations, and the `radio_control.py` helper for the VHF monitor workspace (read-only status, recordings, logs, Whisper transcriptions).
+
+### Directory Watcher
+
+`--watch` lets the helper monitor a host directory and automatically rerun Codex whenever new artifacts appear. Typical usage:
+
+```bash
+./scripts/codex_container.sh --watch \
+  --watch-path vhf_monitor \
+  --watch-pattern "transcriptions.log" \
+  --watch-template "New VHF transcript update in {name}." \
+  --codex-arg "--model" --codex-arg "o4-mini" \
+  --json-e
+```
+
+- Templates accept `{path}`, `{name}`, `{stem}` placeholders; add `--watch-include-content` to inline UTF-8 text (bounded by `--watch-content-bytes`).
+- Repeat `--watch-pattern` for multiple globs, and provide `--watch-state-file` to persist seen timestamps across restarts.
+- Any `--codex-arg` / `--exec-arg` flags are forwarded to each triggered `--exec` run, so you can pre-load system prompts or pick models. For example, ask Codex to call the `radio_control.transcribe_pending_recordings` MCP tool to mirror the old `auto_transcribe.py` loop from inside the container.
+
+### Monitor Mode
+
+`--monitor` is a lightweight polling loop that reads a prompt from `MONITOR.md` (or `--monitor-prompt`) inside the watched directory and reruns Codex whenever files change:
+
+```bash
+./scripts/codex_container.sh --monitor \
+  --watch-path vhf_monitor \
+  --monitor-prompt MONITOR.md \
+  --codex-arg "--model" --codex-arg "o4-mini"
+```
+
+PowerShell variant:
+
+```powershell
+cd C:\Users\kord\Code\gnosis\codex-container
+./scripts/codex_container.ps1 -Monitor -WatchPath ..\vhf_monitor -CodexArgs "--model","o4-mini"
+```
+
+- Templating: within the prompt, use tokens such as `{{file}}`, `{{directory}}`, `{{full_path}}`, `{{relative_path}}`, `{{container_path}}`, `{{container_dir}}`, `{{extension}}`, `{{action}}`, `{{timestamp}}`, `{{watch_root}}`, `{{old_file}}`, `{{old_full_path}}`, `{{old_relative_path}}`, `{{old_container_path}}`; they expand per event before running Codex.
+- Every update in the directory triggers `codex exec …` using the templated prompt (no manual scripting required).
+- Combine with `radio_control` MCP tools (e.g., ask the prompt to call `transcribe_pending_recordings`) for end-to-end automation without writing new host scripts.

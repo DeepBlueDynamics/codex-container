@@ -8,44 +8,61 @@ install_mcp_servers_runtime() {
   local config_dir="/opt/codex-home/.codex"
   local config_path="${config_dir}/config.toml"
   local helper_script="/opt/update_mcp_config.py"
+  local manifest_src="${mcp_source}/.manifest"
+  local installed_marker="${mcp_dest}/.installed"
+  local manifest_dest="${mcp_dest}/.manifest"
 
-  # Check if MCP servers are already installed
-  if [[ -f "${mcp_dest}/.installed" ]]; then
+  # Ensure we have MCP servers prepared during image build
+  if [[ ! -d "$mcp_source" || ! -f "$manifest_src" ]]; then
     return 0
   fi
 
-  # Check if we have MCP servers to install
-  if [[ ! -d "$mcp_source" || ! -f "${mcp_source}/.manifest" ]]; then
-    return 0
-  fi
-
-  echo "[codex_entry] Installing MCP servers..." >&2
-
-  # Create destination directory
-  mkdir -p "$mcp_dest"
-  mkdir -p "$config_dir"
-
-  # Copy MCP server files
-  cp -r "${mcp_source}"/*.py "$mcp_dest/" 2>/dev/null || true
-
-  # Read manifest to get list of server names
-  local manifest
-  manifest=$(cat "${mcp_source}/.manifest")
-
-  if [[ -z "$manifest" ]]; then
+  local new_manifest
+  new_manifest=$(cat "$manifest_src" 2>/dev/null)
+  if [[ -z "$new_manifest" ]]; then
     echo "[codex_entry] No MCP servers found in manifest" >&2
     return 0
   fi
 
-  # Update config with MCP servers
-  if [[ -f "$helper_script" ]]; then
-    # shellcheck disable=SC2086
-    "$mcp_python" "$helper_script" "$config_path" "$mcp_python" $manifest || true
-    echo "[codex_entry] Installed MCP servers: $manifest" >&2
+  local current_manifest=""
+  if [[ -f "$installed_marker" ]]; then
+    current_manifest=$(cat "$installed_marker" 2>/dev/null)
+  elif [[ -f "$manifest_dest" ]]; then
+    current_manifest=$(cat "$manifest_dest" 2>/dev/null)
   fi
 
-  # Mark as installed
-  touch "${mcp_dest}/.installed"
+  # Always update MCP servers to ensure latest code is deployed
+  # This ensures edits to existing MCP files are picked up
+  if [[ -n "$current_manifest" ]]; then
+    echo "[codex_entry] Updating MCP servers..." >&2
+  else
+    echo "[codex_entry] Installing MCP servers..." >&2
+  fi
+
+  mkdir -p "$mcp_dest"
+  mkdir -p "$config_dir"
+
+  # Remove previously installed servers that we manage
+  if [[ -n "$current_manifest" ]]; then
+    for server_file in $current_manifest; do
+      rm -f "${mcp_dest}/${server_file}" 2>/dev/null || true
+    done
+  fi
+
+  cp -r "${mcp_source}"/*.py "$mcp_dest/" 2>/dev/null || true
+  cp "$manifest_src" "$manifest_dest" 2>/dev/null || true
+
+  if [[ -f "$helper_script" ]]; then
+    # Split manifest into array while respecting word boundaries
+    # shellcheck disable=SC2206
+    local servers=( $new_manifest )
+    if [[ ${#servers[@]} -gt 0 ]]; then
+      "$mcp_python" "$helper_script" "$config_path" "$mcp_python" "${servers[@]}" || true
+      echo "[codex_entry] Installed MCP servers: $new_manifest" >&2
+    fi
+  fi
+
+  printf '%s\n' "$new_manifest" > "$installed_marker"
 }
 
 start_oss_bridge() {
@@ -101,6 +118,16 @@ ensure_codex_api_key() {
   fi
 }
 
+ensure_baml_workspace() {
+  local workspace="${BAML_WORKSPACE:-/opt/baml-workspace}"
+  if [[ -z "${workspace}" ]]; then
+    return
+  fi
+
+  # Ensure the workspace exists so BAML projects can be mounted or generated.
+  mkdir -p "${workspace}"
+}
+
 # Install MCP servers on first run
 install_mcp_servers_runtime
 
@@ -109,5 +136,19 @@ if [[ "${ENABLE_OSS_BRIDGE:-}" == "1" ]]; then
 fi
 
 ensure_codex_api_key
+ensure_baml_workspace
+
+# Start transcription daemon in background
+if [[ -f "/usr/local/bin/transcription_daemon.py" ]]; then
+  echo "[codex_entry] Starting transcription daemon..." >&2
+  /opt/mcp-venv/bin/python3 /usr/local/bin/transcription_daemon.py &
+  DAEMON_PID=$!
+  cleanup_daemon() {
+    if [[ -n "${DAEMON_PID:-}" ]]; then
+      kill "$DAEMON_PID" 2>/dev/null || true
+    fi
+  }
+  trap cleanup_daemon EXIT
+fi
 
 exec "$@"

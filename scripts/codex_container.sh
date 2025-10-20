@@ -19,6 +19,16 @@ GATEWAY_PORT_OVERRIDE=""
 GATEWAY_HOST_OVERRIDE=""
 declare -a DOCKER_RUN_EXTRA_ARGS=()
 declare -a DOCKER_RUN_EXTRA_ENVS=()
+WATCH_PATH=""
+declare -a WATCH_PATTERNS=()
+WATCH_INTERVAL=""
+WATCH_TEMPLATE=""
+WATCH_INCLUDE_CONTENT=false
+WATCH_CONTENT_BYTES=""
+WATCH_STATE_FILE=""
+WATCH_ONCE=false
+WATCH_DEBOUNCE=""
+MONITOR_PROMPT_FILE="MONITOR.md"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -68,6 +78,22 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ACTION="serve"
+      shift
+      ;;
+    --watch)
+      if [[ -n "$ACTION" && "$ACTION" != "watch" ]]; then
+        echo "Error: multiple actions specified" >&2
+        exit 1
+      fi
+      ACTION="watch"
+      shift
+      ;;
+    --monitor)
+      if [[ -n "$ACTION" && "$ACTION" != "monitor" ]]; then
+        echo "Error: multiple actions specified" >&2
+        exit 1
+      fi
+      ACTION="monitor"
       shift
       ;;
     --push)
@@ -167,6 +193,86 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       GATEWAY_HOST_OVERRIDE="$1"
+      shift
+      ;;
+    --watch-path)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-path requires a value" >&2
+        exit 1
+      fi
+      WATCH_PATH="$1"
+      shift
+      ;;
+    --watch-pattern)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-pattern requires a value" >&2
+        exit 1
+      fi
+      WATCH_PATTERNS+=("$1")
+      shift
+      ;;
+    --watch-interval)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-interval requires a value" >&2
+        exit 1
+      fi
+      WATCH_INTERVAL="$1"
+      shift
+      ;;
+    --watch-template)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-template requires a value" >&2
+        exit 1
+      fi
+      WATCH_TEMPLATE="$1"
+      shift
+      ;;
+    --watch-include-content)
+      WATCH_INCLUDE_CONTENT=true
+      shift
+      ;;
+    --watch-content-bytes)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-content-bytes requires a value" >&2
+        exit 1
+      fi
+      WATCH_CONTENT_BYTES="$1"
+      shift
+      ;;
+    --watch-state-file)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-state-file requires a value" >&2
+        exit 1
+      fi
+      WATCH_STATE_FILE="$1"
+      shift
+      ;;
+    --watch-once)
+      WATCH_ONCE=true
+      shift
+      ;;
+    --watch-debounce)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-debounce requires a value" >&2
+        exit 1
+      fi
+      WATCH_DEBOUNCE="$1"
+      shift
+      ;;
+    --monitor-prompt)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --monitor-prompt requires a value" >&2
+        exit 1
+      fi
+      MONITOR_PROMPT_FILE="$1"
       shift
       ;;
     --model)
@@ -271,6 +377,13 @@ resolve_workspace() {
 }
 
 WORKSPACE_PATH="$(resolve_workspace "$WORKSPACE_OVERRIDE")"
+
+if [[ "$ACTION" == "watch" && -z "$WATCH_PATH" ]]; then
+  WATCH_PATH="$WORKSPACE_PATH"
+fi
+if [[ "$ACTION" == "monitor" && -z "$WATCH_PATH" ]]; then
+  WATCH_PATH="$WORKSPACE_PATH"
+fi
 
 if [[ -z "$CODEX_HOME_OVERRIDE" && -n "${CODEX_CONTAINER_HOME:-}" ]]; then
   CODEX_HOME_OVERRIDE="$CODEX_CONTAINER_HOME"
@@ -650,6 +763,130 @@ invoke_codex_shell() {
   docker_run /bin/bash
 }
 
+invoke_codex_watch() {
+  ensure_codex_cli 0 0
+  local watcher="${CODEX_ROOT}/scripts/watch_directory.py"
+  local python_bin=""
+  if command -v python3 >/dev/null 2>&1; then
+    python_bin=$(command -v python3)
+  elif command -v python >/dev/null 2>&1; then
+    python_bin=$(command -v python)
+  else
+    echo "Error: python3 or python is required for --watch." >&2
+    exit 1
+  }
+  if [[ ! -f "$watcher" ]]; then
+    echo "Error: watcher script not found at $watcher" >&2
+    exit 1
+  }
+  if [[ -z "$WATCH_PATH" ]]; then
+    echo "Error: --watch requires --watch-path or a workspace" >&2
+    exit 1
+  fi
+  local -a cmd=("$python_bin" "$watcher" --path "$WATCH_PATH" --codex-script "${SCRIPT_DIR}/codex_container.sh" --workspace "$WORKSPACE_PATH" --json-mode "$JSON_MODE")
+  if [[ ${#WATCH_PATTERNS[@]} -gt 0 ]]; then
+    for pattern in "${WATCH_PATTERNS[@]}"; do
+      cmd+=(--pattern "$pattern")
+    done
+  fi
+  if [[ -n "$WATCH_INTERVAL" ]]; then
+    cmd+=(--interval "$WATCH_INTERVAL")
+  fi
+  if [[ -n "$WATCH_TEMPLATE" ]]; then
+    cmd+=(--template "$WATCH_TEMPLATE")
+  fi
+  if [[ "$WATCH_INCLUDE_CONTENT" == true ]]; then
+    cmd+=(--include-content)
+  fi
+  if [[ -n "$WATCH_CONTENT_BYTES" ]]; then
+    cmd+=(--content-bytes "$WATCH_CONTENT_BYTES")
+  fi
+  if [[ -n "$WATCH_STATE_FILE" ]]; then
+    cmd+=(--state-file "$WATCH_STATE_FILE")
+  fi
+  if [[ "$WATCH_ONCE" == true ]]; then
+    cmd+=(--once)
+  fi
+  if [[ -n "$WATCH_DEBOUNCE" ]]; then
+    cmd+=(--debounce "$WATCH_DEBOUNCE")
+  fi
+  if [[ ${#CODEX_ARGS[@]} -gt 0 ]]; then
+    for arg in "${CODEX_ARGS[@]}"; do
+      cmd+=(--codex-arg "$arg")
+    done
+  fi
+  if [[ ${#EXEC_ARGS[@]} -gt 0 ]]; then
+    for arg in "${EXEC_ARGS[@]}"; do
+      cmd+=(--exec-arg "$arg")
+    done
+  fi
+  exec "${cmd[@]}"
+}
+
+invoke_codex_monitor() {
+  ensure_codex_cli 0 0
+  local monitor_dir="${WATCH_PATH}"
+  if [[ -z "$monitor_dir" ]]; then
+    echo "Error: --monitor requires --watch-path or a workspace." >&2
+    exit 1
+  fi
+  local prompt_path="${monitor_dir}/${MONITOR_PROMPT_FILE}"
+  if [[ ! -f "$prompt_path" ]]; then
+    echo "Error: Monitor prompt file '$prompt_path' not found." >&2
+    exit 1
+  fi
+  echo "Monitoring ${monitor_dir} using prompt ${prompt_path}" >&2
+
+  declare -A seen_map=()
+
+  while true; do
+    if [[ ! -f "$prompt_path" ]]; then
+      echo "Prompt file $prompt_path missing; waiting..." >&2
+      sleep 5
+      continue
+    fi
+    local prompt
+    prompt=$(cat "$prompt_path" 2>/dev/null)
+    if [[ -z "$prompt" ]]; then
+      sleep 5
+      continue
+    fi
+
+    while IFS= read -r -d '' file; do
+      local key="$file"
+      local stamp
+      stamp=$(stat -c %Y "$file" 2>/dev/null)
+      local prev="${seen_map[$key]:-}"
+      if [[ -n "$prev" && "$prev" -eq "$stamp" ]]; then
+        continue
+      fi
+      echo "[monitor] Change detected: $file" >&2
+      seen_map[$key]=$stamp
+      local -a cmd=("${SCRIPT_DIR}/codex_container.sh" --exec --workspace "$WORKSPACE_PATH")
+      if [[ "$JSON_MODE" == "legacy" ]]; then
+        cmd+=(--json)
+      elif [[ "$JSON_MODE" == "experimental" ]]; then
+        cmd+=(--json-e)
+      fi
+      if [[ ${#CODEX_ARGS[@]} -gt 0 ]]; then
+        for arg in "${CODEX_ARGS[@]}"; do
+          cmd+=(--codex-arg "$arg")
+        done
+      fi
+      if [[ ${#EXEC_ARGS[@]} -gt 0 ]]; then
+        for arg in "${EXEC_ARGS[@]}"; do
+          cmd+=(--exec-arg "$arg")
+        done
+      fi
+      cmd+=(--)
+      cmd+=("$prompt" "File: $file")
+      "${cmd[@]}"
+    done < <(find "$monitor_dir" -maxdepth 1 -type f -print0)
+
+    sleep 5
+  done
+}
+
 docker_build_image() {
   echo "Checking Docker daemon..." >&2
   if ! docker info --format '{{.ID}}' >/dev/null 2>&1; then
@@ -712,6 +949,14 @@ case "$ACTION" in
   serve)
     ensure_codex_auth 0
     invoke_codex_server
+    ;;
+  watch)
+    ensure_codex_auth "$JSON_OUTPUT"
+    invoke_codex_watch
+    ;;
+  monitor)
+    ensure_codex_auth "$JSON_OUTPUT"
+    invoke_codex_monitor
     ;;
   run|*)
     ensure_codex_auth "$JSON_OUTPUT"

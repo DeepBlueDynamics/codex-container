@@ -20,6 +20,7 @@ RUN apt-get update \
     ca-certificates \
     curl \
     dnsutils \
+    ffmpeg \
     fzf \
     gh \
     git \
@@ -48,20 +49,38 @@ RUN mkdir -p /usr/local/share/npm-global \
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH="${PATH}:/usr/local/share/npm-global/bin"
 
-ARG CODEX_CLI_VERSION=0.42.0
+ARG CODEX_CLI_VERSION=0.47.0
+ARG BAML_CLI_VERSION=0.211.2
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} \
   && npm cache clean --force \
   && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/node_modules/.cache \
   && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/tests \
   && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/docs
 
+RUN npm install -g @boundaryml/baml@${BAML_CLI_VERSION} \
+  && npm cache clean --force
+
 # Install MCP server dependencies inside a virtual environment to avoid PEP-668 issues
 ENV MCP_VENV=/opt/mcp-venv
 RUN python3 -m venv "$MCP_VENV" \
   && "$MCP_VENV/bin/pip" install --no-cache-dir --upgrade pip \
-  && "$MCP_VENV/bin/pip" install --no-cache-dir aiohttp fastmcp tomlkit
+  && "$MCP_VENV/bin/pip" install --no-cache-dir \
+    aiohttp \
+    fastmcp \
+    tomlkit \
+    google-auth \
+    google-auth-oauthlib \
+    google-auth-httplib2 \
+    google-api-python-client \
+    baml-py \
+    pydantic \
+    faster-whisper
 ENV PATH="$MCP_VENV/bin:$PATH"
 ENV VIRTUAL_ENV="$MCP_VENV"
+
+# Prepare default workspace for BAML projects
+RUN mkdir -p /opt/baml-workspace
+ENV BAML_WORKSPACE=/opt/baml-workspace
 
 # Keep npm on the latest patch level for node 24
 RUN npm install -g npm@11.6.1
@@ -80,6 +99,11 @@ RUN sed -i 's/\r$//' /usr/local/bin/init_firewall.sh \
 COPY scripts/codex_entry.sh /usr/local/bin/
 RUN sed -i 's/\r$//' /usr/local/bin/codex_entry.sh \
   && chmod 555 /usr/local/bin/codex_entry.sh
+
+# Install transcription daemon
+COPY scripts/transcription_daemon.py /usr/local/bin/
+RUN sed -i 's/\r$//' /usr/local/bin/transcription_daemon.py \
+  && chmod 555 /usr/local/bin/transcription_daemon.py
 
 # Copy login script and convert line endings
 COPY scripts/codex_login.sh /usr/local/bin/
