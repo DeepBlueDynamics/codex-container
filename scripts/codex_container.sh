@@ -29,6 +29,8 @@ WATCH_STATE_FILE=""
 WATCH_ONCE=false
 WATCH_DEBOUNCE=""
 MONITOR_PROMPT_FILE="MONITOR.md"
+SESSION_ID=""
+TRANSCRIPTION_SERVICE_URL="http://host.docker.internal:8765"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -275,6 +277,24 @@ while [[ $# -gt 0 ]]; do
       MONITOR_PROMPT_FILE="$1"
       shift
       ;;
+    --session-id)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --session-id requires a value" >&2
+        exit 1
+      fi
+      SESSION_ID="$1"
+      shift
+      ;;
+    --transcription-service-url)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --transcription-service-url requires a value" >&2
+        exit 1
+      fi
+      TRANSCRIPTION_SERVICE_URL="$1"
+      shift
+      ;;
     --model)
       shift
       if [[ $# -eq 0 ]]; then
@@ -442,6 +462,96 @@ if [[ "$ACTION" != "install" ]]; then
   fi
 fi
 
+show_recent_sessions() {
+  local sessions_base="${CODEX_HOME}/.codex/sessions"
+  if [[ ! -d "$sessions_base" ]]; then
+    echo "No sessions found." >&2
+    return
+  fi
+
+  echo "" >&2
+  echo "Recent Sessions:" >&2
+  echo "───────────────────────────────────────────────────────────────────" >&2
+  echo "" >&2
+
+  # Find all rollout-*.jsonl files sorted by modification time (newest first)
+  local -a session_files=()
+  while IFS= read -r -d '' file; do
+    session_files+=("$file")
+  done < <(find "$sessions_base" -type f -name 'rollout-*.jsonl' -print0 | xargs -0 ls -t 2>/dev/null)
+
+  local count=0
+  local max_sessions=5
+
+  for session_file in "${session_files[@]}"; do
+    if [[ $count -ge $max_sessions ]]; then
+      break
+    fi
+
+    local basename
+    basename=$(basename "$session_file")
+
+    # Extract UUID from filename: rollout-<timestamp>-<uuid>.jsonl
+    local uuid=""
+    if [[ "$basename" =~ ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) ]]; then
+      uuid="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ -z "$uuid" ]]; then
+      continue
+    fi
+
+    # Get short ID (last 5 chars)
+    local short_id="${uuid: -5}"
+
+    # Calculate age
+    local mtime
+    mtime=$(stat -c %Y "$session_file" 2>/dev/null || stat -f %m "$session_file" 2>/dev/null)
+    local now
+    now=$(date +%s)
+    local age_seconds=$((now - mtime))
+    local age_str=""
+
+    if [[ $age_seconds -lt 60 ]]; then
+      age_str="${age_seconds}s ago"
+    elif [[ $age_seconds -lt 3600 ]]; then
+      age_str="$((age_seconds / 60))m ago"
+    elif [[ $age_seconds -lt 86400 ]]; then
+      age_str="$((age_seconds / 3600))h ago"
+    else
+      age_str="$((age_seconds / 86400))d ago"
+    fi
+
+    # Extract first user message preview
+    local preview=""
+    if [[ -f "$session_file" ]]; then
+      # Find first line with "role":"user" and extract text
+      preview=$(grep -m 1 '"role":"user"' "$session_file" 2>/dev/null | \
+                sed 's/.*"text":"\([^"]*\)".*/\1/' | \
+                head -c 60)
+      if [[ ${#preview} -eq 60 ]]; then
+        preview="${preview}..."
+      fi
+    fi
+
+    echo "  ${short_id}  (${age_str})" >&2
+    if [[ -n "$preview" ]]; then
+      echo "    → ${preview}" >&2
+    fi
+    echo "" >&2
+
+    count=$((count + 1))
+  done
+
+  if [[ $count -eq 0 ]]; then
+    echo "No sessions found." >&2
+  else
+    echo "To resume a session, run:" >&2
+    echo "  ./codex_container.sh --session-id <short-id>" >&2
+  fi
+  echo "" >&2
+}
+
 docker_run() {
   local quiet=0
   local expose_login_port=0
@@ -481,6 +591,9 @@ docker_run() {
   args+=(-v "${CODEX_ROOT}/scripts:/opt/codex-support:ro")
   if [[ "$USE_OSS" == true ]]; then
     args+=(-e OLLAMA_HOST=http://host.docker.internal:11434 -e OSS_SERVER_URL=http://host.docker.internal:11434 -e ENABLE_OSS_BRIDGE=1)
+  fi
+  if [[ -n "$TRANSCRIPTION_SERVICE_URL" ]]; then
+    args+=(-e TRANSCRIPTION_SERVICE_URL="$TRANSCRIPTION_SERVICE_URL")
   fi
   if [[ ${#DOCKER_RUN_EXTRA_ENVS[@]} -gt 0 ]]; then
     for env_kv in "${DOCKER_RUN_EXTRA_ENVS[@]}"; do
@@ -620,6 +733,59 @@ invoke_codex_run() {
   ensure_codex_cli 0 "$silent"
   local -a cmd=(codex)
   local -a args=()
+
+  # Handle session ID resolution
+  if [[ -n "$SESSION_ID" ]]; then
+    local sessions_base="${CODEX_HOME}/.codex/sessions"
+    if [[ ! -d "$sessions_base" ]]; then
+      echo "Error: No sessions directory found at ${sessions_base}" >&2
+      exit 1
+    fi
+
+    # Find all rollout-*.jsonl files
+    local -a matching_sessions=()
+    local -a all_uuids=()
+
+    while IFS= read -r -d '' file; do
+      local basename
+      basename=$(basename "$file")
+
+      # Extract UUID from filename
+      if [[ "$basename" =~ ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) ]]; then
+        local uuid="${BASH_REMATCH[1]}"
+        all_uuids+=("$uuid")
+
+        # Check if this UUID matches the session ID (full or partial)
+        if [[ "$uuid" == "$SESSION_ID" ]] || [[ "$uuid" == *"$SESSION_ID" ]]; then
+          matching_sessions+=("$uuid")
+        fi
+      fi
+    done < <(find "$sessions_base" -type f -name 'rollout-*.jsonl' -print0)
+
+    if [[ ${#matching_sessions[@]} -eq 0 ]]; then
+      echo "Error: No session found matching '${SESSION_ID}'" >&2
+      echo "" >&2
+      echo "Available sessions:" >&2
+      for uuid in "${all_uuids[@]:0:5}"; do
+        local short="${uuid: -5}"
+        echo "  ${short} (${uuid})" >&2
+      done
+      exit 1
+    elif [[ ${#matching_sessions[@]} -gt 1 ]]; then
+      echo "Error: Session ID '${SESSION_ID}' is ambiguous. Matches:" >&2
+      for uuid in "${matching_sessions[@]}"; do
+        local short="${uuid: -5}"
+        echo "  ${short} (${uuid})" >&2
+      done
+      echo "" >&2
+      echo "Please provide more characters to uniquely identify the session." >&2
+      exit 1
+    fi
+
+    # Exactly one match - use it
+    local resolved_uuid="${matching_sessions[0]}"
+    args+=("resume" "$resolved_uuid")
+  fi
   if [[ "$USE_OSS" == true ]]; then
     local has_oss=0
     local has_model=0
@@ -959,6 +1125,10 @@ case "$ACTION" in
     invoke_codex_monitor
     ;;
   run|*)
+    # Show recent sessions if no arguments and no session ID
+    if [[ ${#CODEX_ARGS[@]} -eq 0 && -z "$SESSION_ID" ]]; then
+      show_recent_sessions
+    fi
     ensure_codex_auth "$JSON_OUTPUT"
     invoke_codex_run "$JSON_OUTPUT"
     ;;
