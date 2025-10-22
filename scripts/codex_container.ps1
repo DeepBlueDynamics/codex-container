@@ -924,15 +924,6 @@ function Invoke-CodexMonitor {
 
             $payload = Format-MonitorPrompt -Template $promptText.TrimEnd() -Values $values
 
-            $cmdArgs = @()
-            # Add session resume if we have a persisted session
-            if ($monitorSessionId) {
-                $cmdArgs += @('resume', $monitorSessionId)
-            }
-            if ($CodexArgs) {
-                $cmdArgs += $CodexArgs
-            }
-
             # If monitoring a subdirectory, fix paths for correct container mapping
             if ($resolvedWatch -ne $Context.WorkspacePath) {
                 # Calculate the relative path from workspace to watch directory
@@ -945,7 +936,19 @@ function Invoke-CodexMonitor {
                 $payload = $payload -replace [regex]::Escape($resolvedWatch), "/workspace/$watchRelativeForContainer"
             }
 
-            $cmdArgs += $payload
+            # Build command arguments array
+            # IMPORTANT: Ensure payload is added as a single string element, not word-split
+            $cmdArgs = @()
+            # Add session resume if we have a persisted session
+            if ($monitorSessionId) {
+                $cmdArgs += 'resume'
+                $cmdArgs += $monitorSessionId
+            }
+            if ($CodexArgs) {
+                $cmdArgs += $CodexArgs
+            }
+            # Add the prompt payload as a single element (cast to ensure it's treated as one string)
+            $cmdArgs += [string]$payload
 
             $logMessage = "Dispatching Codex run for ${fullPath}"
             Write-Host $logMessage -ForegroundColor DarkGray
