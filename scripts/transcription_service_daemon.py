@@ -40,9 +40,11 @@ def utc_now():
 async def load_model():
     """Load Whisper model on startup."""
     global MODEL
-    print(f"🔄 Loading Whisper model: {WHISPER_MODEL}", file=sys.stderr, flush=True)
-    MODEL = whisper.load_model(WHISPER_MODEL)
-    print(f"✅ Model {WHISPER_MODEL} loaded and ready", file=sys.stderr, flush=True)
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"🔄 Loading Whisper model: {WHISPER_MODEL} on {device.upper()}", file=sys.stderr, flush=True)
+    MODEL = whisper.load_model(WHISPER_MODEL, device=device)
+    print(f"✅ Model {WHISPER_MODEL} loaded on {device.upper()} and ready", file=sys.stderr, flush=True)
 
 
 async def handle_transcribe(request):
