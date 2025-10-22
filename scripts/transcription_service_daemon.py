@@ -203,9 +203,9 @@ async def process_queue():
 
                 # Run Whisper transcription
                 job["progress"] = "Transcribing audio..."
-                start_time = utc_now()
+                start_time = datetime.now(timezone.utc)
                 result = MODEL.transcribe(job["wav_file"], beam_size=5, verbose=False)
-                end_time = utc_now()
+                end_time = datetime.now(timezone.utc)
 
                 # Extract transcript and metadata
                 transcript_text = result["text"].strip()
