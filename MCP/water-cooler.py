@@ -41,8 +41,8 @@ def _format_timestamp(dt: datetime) -> str:
 
 @mcp.tool()
 async def wait_at_water_cooler(
-    duration_seconds: int = 45,
-    update_interval: int = 5,
+    duration_seconds: int = 10,
+    update_interval: int = 2,
     location_name: str = "Miami",
 ) -> Dict[str, object]:
     """Wait at the maritime break room while background processes complete.
@@ -52,8 +52,8 @@ async def wait_at_water_cooler(
     conditions for maritime operations.
 
     Args:
-        duration_seconds: Total time to wait in seconds (default: 45)
-        update_interval: How often to report progress in seconds (default: 5)
+        duration_seconds: Total time to wait in seconds (default: 10)
+        update_interval: How often to report progress in seconds (default: 2)
         location_name: Location for weather display (default: "Miami")
 
     Returns:
