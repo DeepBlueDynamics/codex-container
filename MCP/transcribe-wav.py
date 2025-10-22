@@ -21,7 +21,8 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("transcribe-wav")
 
 # Service URL - can be overridden via environment variable
-DEFAULT_SERVICE_URL = "http://host.docker.internal:8765"
+# Use Docker container name for inter-container communication
+DEFAULT_SERVICE_URL = "http://gnosis-transcription-service:8765"
 SERVICE_URL = os.getenv("TRANSCRIPTION_SERVICE_URL", DEFAULT_SERVICE_URL)
 
 
