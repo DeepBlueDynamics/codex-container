@@ -350,7 +350,7 @@ function Install-RunnerOnPath {
     $shimPath = Join-Path $binDir 'codex-container.cmd'
     $shimContent = @"
 @echo off
-PowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "& '$escapedRepoScript' %*"
+PowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "& '$escapedRepoScript' @args"
 "@
     Set-Content -Path $shimPath -Value $shimContent -Encoding ASCII
 
