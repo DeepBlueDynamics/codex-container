@@ -676,12 +676,32 @@ function Invoke-CodexMonitor {
     $promptPath = Join-Path $resolvedWatch $PromptFile
 
     $logPath = Join-Path $resolvedWatch 'codex-monitor.log'
+    $sessionStatePath = Join-Path $resolvedWatch '.codex-monitor-session'
 
     function Write-MonitorLog {
         param([string]$Message)
         $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
         $line = "[$timestamp] $Message"
         Add-Content -LiteralPath $logPath -Value $line
+    }
+
+    function Get-MonitorSession {
+        if (Test-Path $sessionStatePath) {
+            try {
+                $sessionId = Get-Content $sessionStatePath -Raw -ErrorAction SilentlyContinue
+                return $sessionId.Trim()
+            } catch {
+                return $null
+            }
+        }
+        return $null
+    }
+
+    function Set-MonitorSession {
+        param([string]$SessionId)
+        if ($SessionId) {
+            Set-Content -Path $sessionStatePath -Value $SessionId -NoNewline
+        }
     }
 
     function Get-MonitorRelativePath {
@@ -715,10 +735,38 @@ function Invoke-CodexMonitor {
         return $result
     }
 
+    function Get-LatestSession {
+        param($Context)
+        $sessionsDir = Join-Path $Context.CodexHome ".codex/sessions"
+        if (-not (Test-Path $sessionsDir)) {
+            return $null
+        }
+
+        $allSessions = Get-ChildItem -Path $sessionsDir -Recurse -Filter "rollout-*.jsonl" -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+        if ($allSessions -and $allSessions.Name -match 'rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$') {
+            return $Matches[1]
+        }
+
+        return $null
+    }
+
     Write-Host "Monitoring $resolvedWatch" -ForegroundColor Cyan
     Write-Host "Prompt file: $promptPath" -ForegroundColor DarkGray
     Write-Host "Log file:    $logPath" -ForegroundColor DarkGray
     Write-Host 'Press Ctrl+C to stop.' -ForegroundColor DarkGray
+
+    # Check for existing monitor session
+    $monitorSessionId = Get-MonitorSession
+    if ($monitorSessionId) {
+        Write-Host "Monitor resuming session: $monitorSessionId" -ForegroundColor Cyan
+        Write-MonitorLog "Resuming session: $monitorSessionId"
+    } else {
+        Write-Host "Monitor starting new session" -ForegroundColor Cyan
+        Write-MonitorLog "Starting new session"
+    }
 
     Write-MonitorLog "Started monitoring $resolvedWatch"
 
@@ -877,6 +925,10 @@ function Invoke-CodexMonitor {
             $payload = Format-MonitorPrompt -Template $promptText.TrimEnd() -Values $values
 
             $cmdArgs = @()
+            # Add session resume if we have a persisted session
+            if ($monitorSessionId) {
+                $cmdArgs += @('resume', $monitorSessionId)
+            }
             if ($CodexArgs) {
                 $cmdArgs += $CodexArgs
             }
@@ -913,6 +965,17 @@ function Invoke-CodexMonitor {
 
             try {
                 Invoke-CodexExec -Context $Context -Arguments $cmdArgs
+
+                # Capture and persist session ID for continuity
+                if (-not $monitorSessionId) {
+                    $latestSession = Get-LatestSession -Context $Context
+                    if ($latestSession) {
+                        $monitorSessionId = $latestSession
+                        Set-MonitorSession -SessionId $monitorSessionId
+                        Write-Host "Monitor persisted session: $monitorSessionId" -ForegroundColor Cyan
+                        Write-MonitorLog "Persisted session: $monitorSessionId"
+                    }
+                }
 
                 # Only mark as processed after successful completion
                 $lastProcessed[$fullPath] = $now
