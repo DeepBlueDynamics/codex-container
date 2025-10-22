@@ -216,6 +216,28 @@ async def process_queue():
                 # Format transcript with transmission header
                 processing_duration = (end_time - start_time).total_seconds()
 
+                # Create ASCII visualization of speech activity from segments
+                visualization = ""
+                if segments:
+                    # Build timeline visualization (60 chars wide)
+                    viz_width = 60
+                    viz_chars = [" "] * viz_width
+
+                    for seg in segments:
+                        # Calculate position in timeline
+                        start_pct = seg["start"] / audio_duration
+                        end_pct = seg["end"] / audio_duration
+                        start_pos = int(start_pct * viz_width)
+                        end_pos = int(end_pct * viz_width)
+
+                        # Mark speech activity with █
+                        for i in range(start_pos, min(end_pos + 1, viz_width)):
+                            viz_chars[i] = "█"
+
+                    visualization = "".join(viz_chars)
+                else:
+                    visualization = " " * 60  # Empty if no segments
+
                 formatted_transcript = f"""========== TRANSMISSION STATUS REPORT ==========
 STATUS: TRANSCRIPTION COMPLETE
 FILE: /workspace/recordings/{wav_filename}
@@ -226,6 +248,10 @@ STARTED: {start_time.strftime('%Y-%m-%d %H:%M:%S %Z')}
 FINISHED: {end_time.strftime('%Y-%m-%d %H:%M:%S %Z')}
 DURATION (AUDIO): {audio_duration:.2f}s
 LANGUAGE: {language}
+------------------------------------------------------------
+SPEECH ACTIVITY VISUALIZATION:
+[{visualization}]
+0s{' ' * 54}{audio_duration:.1f}s
 ------------------------------------------------------------
 TELEGRAPH COPY FOLLOWS
 0001 [0000.00s - {audio_duration:.2f}s] {transcript_text}
