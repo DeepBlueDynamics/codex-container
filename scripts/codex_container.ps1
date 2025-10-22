@@ -661,6 +661,10 @@ function Invoke-CodexMonitor {
         [string[]]$CodexArgs
     )
 
+    Write-Host "DEBUG: Invoke-CodexMonitor called" -ForegroundColor Yellow
+    Write-Host "DEBUG: WatchPath = '$WatchPath'" -ForegroundColor Yellow
+    Write-Host "DEBUG: PromptFile = '$PromptFile'" -ForegroundColor Yellow
+
     if (-not $WatchPath) {
         $WatchPath = $Context.WorkspacePath
     }
