@@ -198,12 +198,45 @@ async def process_queue():
 
                 # Run Whisper transcription
                 job["progress"] = "Transcribing audio..."
-                result = MODEL.transcribe(job["wav_file"])
-                transcript_text = result["text"]
+                start_time = utc_now()
+                result = MODEL.transcribe(job["wav_file"], beam_size=5, verbose=False)
+                end_time = utc_now()
 
-                # Save transcript
-                transcript_file = TRANSCRIPTS_DIR / f"{job_id}.txt"
-                transcript_file.write_text(transcript_text)
+                # Extract transcript and metadata
+                transcript_text = result["text"].strip()
+                language = result.get("language", "unknown")
+
+                # Get audio duration from segments if available
+                segments = result.get("segments", [])
+                audio_duration = segments[-1]["end"] if segments else 0.0
+
+                # Get original WAV filename from path
+                wav_filename = Path(job["wav_file"]).name
+
+                # Format transcript with transmission header
+                processing_duration = (end_time - start_time).total_seconds()
+
+                formatted_transcript = f"""========== TRANSMISSION STATUS REPORT ==========
+STATUS: TRANSCRIPTION COMPLETE
+FILE: /workspace/recordings/{wav_filename}
+MODEL: {WHISPER_MODEL}
+BEAM WIDTH: 5
+STARTED: {start_time.strftime('%Y-%m-%d %H:%M:%S %Z')}
+------------------------------------------------------------
+FINISHED: {end_time.strftime('%Y-%m-%d %H:%M:%S %Z')}
+DURATION (AUDIO): {audio_duration:.2f}s
+LANGUAGE: {language}
+------------------------------------------------------------
+TELEGRAPH COPY FOLLOWS
+0001 [0000.00s - {audio_duration:.2f}s] {transcript_text}
+END OF TRANSMISSION STOP
+"""
+
+                # Save transcript with formatted header using original filename
+                # Replace .wav extension with .txt
+                transcript_filename = Path(wav_filename).stem + ".txt"
+                transcript_file = TRANSCRIPTS_DIR / transcript_filename
+                transcript_file.write_text(formatted_transcript)
 
                 # Update job
                 job["status"] = "completed"
