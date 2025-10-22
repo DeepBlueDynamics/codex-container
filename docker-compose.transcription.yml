@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  transcription-service:
+    image: gnosis/transcription-service:latest
+    container_name: gnosis-transcription-service
+    build:
+      context: .
+      dockerfile: Dockerfile.transcription
+    ports:
+      - "8765:8765"
+    volumes:
+      # Mount job storage for persistence across restarts
+      - transcription-jobs:/app/jobs
+      # Optional: mount custom model cache directory
+      # - ./whisper-models:/opt/whisper-models
+    environment:
+      - HF_HOME=/opt/whisper-models
+      - FLASK_ENV=production
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  transcription-jobs:
+    driver: local
