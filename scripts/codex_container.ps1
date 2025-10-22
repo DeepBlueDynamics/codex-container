@@ -1,3 +1,90 @@
+<#
+.SYNOPSIS
+    Codex container helper - run OpenAI Codex CLI in Docker
+
+.DESCRIPTION
+    Launches Codex inside a reproducible Docker container with persistent home,
+    workspace mounting, session management, and MCP server support.
+
+.PARAMETER Install
+    Build Docker image and install runner on PATH
+
+.PARAMETER Login
+    Authenticate with Codex (auto-triggered when needed)
+
+.PARAMETER Run
+    Start interactive Codex session (default action)
+
+.PARAMETER Exec
+    Non-interactive execution. Pass prompt as string or array.
+    Example: -Exec "list python files"
+
+.PARAMETER Shell
+    Open bash shell inside container
+
+.PARAMETER Serve
+    Start HTTP gateway on port 4000 (or -GatewayPort)
+
+.PARAMETER Monitor
+    Watch directory for file changes and trigger Codex with MONITOR.md template
+
+.PARAMETER ListSessions
+    Show recent sessions with copyable resume commands, then exit
+
+.PARAMETER SessionId
+    Resume previous session using full UUID or last 5 characters
+    Example: -SessionId b0b57
+
+.PARAMETER Workspace
+    Mount different directory (default: current directory)
+
+.PARAMETER CodexHome
+    Use different Codex home directory (default: ~/.codex-service)
+
+.PARAMETER Tag
+    Docker image tag (default: gnosis/codex-service:dev)
+
+.PARAMETER Json
+    Enable legacy JSON output mode
+
+.PARAMETER JsonE
+    Enable experimental JSON output mode
+
+.PARAMETER Oss
+    Use local Ollama instead of OpenAI
+
+.PARAMETER OssModel
+    Specify Ollama model (implies -Oss)
+
+.PARAMETER SkipUpdate
+    Don't update Codex CLI from npm
+
+.PARAMETER NoAutoLogin
+    Don't automatically trigger login if not authenticated
+
+.EXAMPLE
+    codex-container -Install
+    Build image and install runner
+
+.EXAMPLE
+    codex-container -ListSessions
+    Show recent sessions
+
+.EXAMPLE
+    codex-container -SessionId b0b57
+    Resume session b0b57
+
+.EXAMPLE
+    codex-container -Exec "list python files"
+    Run non-interactive command
+
+.EXAMPLE
+    codex-container -Monitor -WatchPath vhf_monitor
+    Monitor directory for changes
+
+.LINK
+    https://github.com/DeepBlueDynamics/codex-container
+#>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
     [switch]$Install,
