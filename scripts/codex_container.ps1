@@ -333,23 +333,14 @@ function Install-RunnerOnPath {
     $binDir = Join-Path $Context.CodexHome 'bin'
     New-Item -ItemType Directory -Path $binDir -Force | Out-Null
 
-    $runnerDest = Join-Path $binDir 'codex_container.ps1'
+    # Direct invocation - no wrapper needed when using -Command
     $repoScript = Join-Path $Context.CodexRoot 'scripts/codex_container.ps1'
     $escapedRepoScript = $repoScript.Replace("'", "''")
-    $runnerContent = @"
-param(
-    [Parameter(ValueFromRemainingArguments = `$true)]
-    [object[]]`$RemainingArgs
-)
-
-& '$escapedRepoScript' @RemainingArgs
-"@
-    Set-Content -Path $runnerDest -Value $runnerContent -Encoding ASCII
 
     $shimPath = Join-Path $binDir 'codex-container.cmd'
     $shimContent = @"
 @echo off
-PowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ""$runnerDest"" %*
+PowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "& '$escapedRepoScript' %*"
 "@
     Set-Content -Path $shimPath -Value $shimContent -Encoding ASCII
 
@@ -374,8 +365,8 @@ PowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ""$runnerDest"" %*
         $env:PATH = if ($env:PATH) { "$env:PATH;$binDir" } else { $binDir }
     }
 
-    Write-Host "Runner installed to $runnerDest" -ForegroundColor DarkGray
-    Write-Host "Launcher shim available at $shimPath" -ForegroundColor DarkGray
+    Write-Host "Launcher installed to $shimPath" -ForegroundColor DarkGray
+    Write-Host "Invokes: $repoScript" -ForegroundColor DarkGray
 }
 
 $script:CodexUpdateCompleted = $false
