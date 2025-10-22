@@ -17,9 +17,8 @@ ENV PATH="$VENV_PATH/bin:$PATH"
 # Upgrade pip and install Python packages
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
-    faster-whisper==1.0.3 \
-    flask==3.0.3 \
-    waitress==3.0.0
+    openai-whisper \
+    aiohttp
 
 # Create directory for Whisper model cache
 ENV HF_HOME=/opt/whisper-models
@@ -28,16 +27,10 @@ RUN mkdir -p $HF_HOME
 # Pre-download Whisper large-v3 model
 # This runs a Python script that forces model download at build time
 RUN python3 << 'EOF'
-import os
-from faster_whisper import WhisperModel
+import whisper
 
 print("Downloading Whisper large-v3 model...")
-model = WhisperModel(
-    "large-v3",
-    device="cpu",  # Use CPU during build
-    compute_type="int8",
-    download_root=os.getenv("HF_HOME")
-)
+model = whisper.load_model("large-v3")
 print("Model download complete!")
 EOF
 
