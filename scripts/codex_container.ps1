@@ -850,20 +850,26 @@ function Invoke-CodexMonitor {
 
             $lastProcessed[$fullPath] = $now
 
-            if (-not (Test-Path $promptPath)) {
-                $msg = "Prompt file missing; skipping event for ${fullPath}"
-                Write-Host $msg -ForegroundColor Yellow
-                Write-MonitorLog $msg
-                continue
-            }
+            # Only read full prompt template for first event (new session)
+            # For subsequent events, just send file details
+            $promptText = ""
+            if (-not $monitorSessionId) {
+                # First event - need full prompt template
+                if (-not (Test-Path $promptPath)) {
+                    $msg = "Prompt file missing; skipping event for ${fullPath}"
+                    Write-Host $msg -ForegroundColor Yellow
+                    Write-MonitorLog $msg
+                    continue
+                }
 
-            try {
-                $promptText = Get-Content -LiteralPath $promptPath -Raw -ErrorAction Stop
-            } catch {
-                $msg = "Failed reading prompt file ${promptPath}: $($_.Exception.Message)"
-                Write-Host $msg -ForegroundColor Red
-                Write-MonitorLog $msg
-                continue
+                try {
+                    $promptText = Get-Content -LiteralPath $promptPath -Raw -ErrorAction Stop
+                } catch {
+                    $msg = "Failed reading prompt file ${promptPath}: $($_.Exception.Message)"
+                    Write-Host $msg -ForegroundColor Red
+                    Write-MonitorLog $msg
+                    continue
+                }
             }
 
             $changeType = $event.SourceEventArgs.ChangeType.ToString()
@@ -927,7 +933,25 @@ function Invoke-CodexMonitor {
                 'old_dir' = $oldDirectoryRelative
             }
 
-            $payload = Format-MonitorPrompt -Template $promptText.TrimEnd() -Values $values
+            # Build payload based on whether this is first event or resuming
+            if ($monitorSessionId) {
+                # Resuming session - send only event details
+                $payload = @"
+FILE EVENT DETECTED
+
+Timestamp: $($values['timestamp'])
+Action: $($values['action'])
+File: $($values['relative_path'])
+Full Path: $($values['full_path'])
+Container Path: $($values['container_path'])
+"@
+                if ($oldFullPath) {
+                    $payload += "`nPrevious Path: $($values['old_relative_path'])"
+                }
+            } else {
+                # First event - send full prompt with template
+                $payload = Format-MonitorPrompt -Template $promptText.TrimEnd() -Values $values
+            }
 
             # If monitoring a subdirectory, fix paths for correct container mapping
             if ($resolvedWatch -ne $Context.WorkspacePath) {
