@@ -306,6 +306,15 @@ function Invoke-CodexContainer {
         $runArgs += $CommandArgs
     }
 
+    Write-Host "DEBUG Invoke-CodexContainer: runArgs count = $($runArgs.Count)" -ForegroundColor Magenta
+    $codexStartIdx = $runArgs.IndexOf('codex')
+    if ($codexStartIdx -ge 0) {
+        Write-Host "DEBUG: codex command starts at index $codexStartIdx" -ForegroundColor Magenta
+        for ($i = $codexStartIdx; $i -lt [Math]::Min($codexStartIdx + 5, $runArgs.Count); $i++) {
+            Write-Host "DEBUG: runArgs[$i] = '$($runArgs[$i])'" -ForegroundColor Magenta
+        }
+    }
+
     if ($env:CODEX_CONTAINER_TRACE) {
         Write-Host "docker $($runArgs -join ' ')" -ForegroundColor DarkGray
     }
@@ -451,6 +460,11 @@ function Invoke-CodexExec {
         $Context,
         [string[]]$Arguments
     )
+
+    Write-Host "DEBUG Invoke-CodexExec: Received $($Arguments.Count) arguments" -ForegroundColor Cyan
+    for ($i = 0; $i -lt [Math]::Min($Arguments.Count, 3); $i++) {
+        Write-Host "DEBUG Invoke-CodexExec: Arguments[$i] = '$($Arguments[$i].Substring(0, [Math]::Min(50, $Arguments[$i].Length)))...'" -ForegroundColor Cyan
+    }
 
     if (-not $Arguments) {
         throw 'Exec requires at least one argument to forward to codex.'
@@ -796,6 +810,18 @@ function Invoke-CodexMonitor {
             $logMessage = "Dispatching Codex run for ${fullPath}"
             Write-Host $logMessage -ForegroundColor DarkGray
             Write-MonitorLog $logMessage
+
+            # Debug logging
+            Write-Host "DEBUG: cmdArgs count = $($cmdArgs.Count)" -ForegroundColor Yellow
+            Write-Host "DEBUG: cmdArgs[0] length = $($cmdArgs[0].Length)" -ForegroundColor Yellow
+            if ($cmdArgs.Count -gt 1) {
+                Write-Host "DEBUG: cmdArgs has multiple elements!" -ForegroundColor Red
+                for ($i = 0; $i -lt [Math]::Min($cmdArgs.Count, 5); $i++) {
+                    Write-Host "DEBUG: cmdArgs[$i] = '$($cmdArgs[$i])'" -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "DEBUG: cmdArgs[0] first 100 chars = $($cmdArgs[0].Substring(0, [Math]::Min(100, $cmdArgs[0].Length)))" -ForegroundColor Yellow
+            }
 
             try {
                 Invoke-CodexExec -Context $Context -Arguments $cmdArgs

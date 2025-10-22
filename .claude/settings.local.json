@@ -5,7 +5,12 @@
       "Bash(chmod +x /Users/kord/Code/deepbluedynamics/codex-container/scripts/install_mcp_servers.sh)",
       "Read(//Users/kord/.codex-service/logs/**)",
       "Bash(pwsh -NoProfile -Command \"./fix_line_endings.ps1\")",
-      "Bash(pwsh -NoProfile -Command \"./scripts/fix_line_endings.ps1 -Path scripts/codex_container.sh\")"
+      "Bash(pwsh -NoProfile -Command \"./scripts/fix_line_endings.ps1 -Path scripts/codex_container.sh\")",
+      "Bash(ls -la \"$HOME/.codex-service/bin/\")",
+      "Read(//c/Users/kord/.codex-service/bin/**)",
+      "Bash(pwsh -NoProfile -Command \"\n$output = & ''C:\\Users\\kord\\.codex-service\\bin\\codex-container.cmd'' -Monitor 2>&1\nWrite-Host \"\"Exit code: $LASTEXITCODE\"\"\nWrite-Host \"\"Output: $output\"\"\n\")",
+      "Bash(pwsh:*)",
+      "Bash(git push)"
     ],
     "deny": [],
     "ask": []

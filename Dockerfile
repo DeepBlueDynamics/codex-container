@@ -17,7 +17,9 @@ RUN apt-get update \
   && apt-get update \
   && apt-get install -y --no-install-recommends \
     aggregate \
+    build-essential \
     ca-certificates \
+    cargo \
     curl \
     dnsutils \
     ffmpeg \
@@ -30,11 +32,14 @@ RUN apt-get update \
     iptables \
     jq \
     less \
+    libssl-dev \
     man-db \
+    pkg-config \
     procps \
     python3 \
     python3-pip \
     python3-venv \
+    rustc \
     socat \
     unzip \
     ripgrep \
