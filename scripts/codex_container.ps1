@@ -226,6 +226,7 @@ function New-CodexContext {
         '--rm',
         '-it',
         '--user', '0:0',
+        '--network', 'codex-container_default',
         '--add-host', 'host.docker.internal:host-gateway',
         '-v', ("${codexHome}:/opt/codex-home"),
         '-v', ("${whisperCache}:/opt/whisper-cache"),
