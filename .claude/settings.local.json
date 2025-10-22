@@ -10,7 +10,9 @@
       "Read(//c/Users/kord/.codex-service/bin/**)",
       "Bash(pwsh -NoProfile -Command \"\n$output = & ''C:\\Users\\kord\\.codex-service\\bin\\codex-container.cmd'' -Monitor 2>&1\nWrite-Host \"\"Exit code: $LASTEXITCODE\"\"\nWrite-Host \"\"Output: $output\"\"\n\")",
       "Bash(pwsh:*)",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

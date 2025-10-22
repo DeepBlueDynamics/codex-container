@@ -12,8 +12,8 @@ param(
     [switch]$Shell,
     [switch]$Push,
     [string]$Tag = 'gnosis/codex-service:dev',
-[string]$Workspace,
-[string]$CodexHome,
+    [string]$Workspace,
+    [string]$CodexHome,
     [Parameter(ValueFromRemainingArguments=$true)]
     [string[]]$CodexArgs,
     [switch]$SkipUpdate,
@@ -28,7 +28,8 @@ param(
     [string]$GatewayDefaultModel,
     [string[]]$GatewayExtraArgs,
     [string]$TranscriptionServiceUrl = 'http://host.docker.internal:8765',
-    [string]$SessionId
+    [string]$SessionId,
+    [switch]$ListSessions
 )
 
 $ErrorActionPreference = 'Stop'
@@ -890,15 +891,14 @@ function Show-RecentSessions {
 
     Write-Host ""
     Write-Host "Recent Codex sessions:" -ForegroundColor Cyan
-
-    # Platform-appropriate command hint
-    $resumeCmd = if ($IsWindows -or $env:OS -match "Windows") {
-        "codex-container -SessionId <id>"
-    } else {
-        "codex_container.ps1 -SessionId <id>"
-    }
-    Write-Host "  (Resume with: $resumeCmd)" -ForegroundColor DarkGray
     Write-Host ""
+
+    # Platform-appropriate command base
+    $cmdBase = if ($IsWindows -or $env:OS -match "Windows") {
+        "codex-container"
+    } else {
+        "./codex_container.sh"
+    }
 
     foreach ($file in $sessionFiles) {
         # Extract session ID from filename: rollout-2025-10-20T14-58-30-019a0221-064c-7cd3-aad2-dffde6bbffba.jsonl
@@ -941,11 +941,12 @@ function Show-RecentSessions {
         }
 
         Write-Host "  [$ageStr]" -ForegroundColor DarkGray -NoNewline
-        Write-Host " ...$shortId" -ForegroundColor Yellow -NoNewline
-        Write-Host " ($sessionId)" -ForegroundColor DarkGray
+        Write-Host " ...$shortId" -ForegroundColor Yellow
         if ($preview) {
             Write-Host "    $preview" -ForegroundColor Gray
         }
+        Write-Host "    $cmdBase -SessionId $shortId" -ForegroundColor Cyan
+        Write-Host ""
     }
     Write-Host ""
 }
@@ -984,13 +985,14 @@ if ($Exec) { $actions += 'Exec' }
 if ($Run) { $actions += 'Run' }
 if ($Serve) { $actions += 'Serve' }
 if ($Monitor) { $actions += 'Monitor' }
+if ($ListSessions) { $actions += 'ListSessions' }
 
 if (-not $actions) {
     $actions = @('Run')
 }
 
 if ($actions.Count -gt 1) {
-    throw "Specify only one primary action (choose one of -Install, -Login, -Run, -Exec, -Shell, -Serve, -Monitor)."
+    throw "Specify only one primary action (choose one of -Install, -Login, -Run, -Exec, -Shell, -Serve, -Monitor, -ListSessions)."
 }
 
 $action = $actions[0]
@@ -1043,6 +1045,9 @@ switch ($action) {
         Ensure-CodexAuthentication -Context $context -Silent:($Json -or $JsonE)
         Invoke-CodexMonitor -Context $context -WatchPath $WatchPath -PromptFile $MonitorPrompt -JsonOutput:($Json -or $JsonE) -CodexArgs $CodexArgs
     }
+    'ListSessions' {
+        Show-RecentSessions -Context $context -Limit 10
+    }
     default { # Run
         Ensure-CodexAuthentication -Context $context -Silent:($Json -or $JsonE)
 
@@ -1052,27 +1057,27 @@ switch ($action) {
             $sessionsDir = Join-Path $context.CodexHome ".codex/sessions"
             if (Test-Path $sessionsDir) {
                 $allSessions = Get-ChildItem -Path $sessionsDir -Recurse -Filter "rollout-*.jsonl" -File -ErrorAction SilentlyContinue
-                $matches = @()
+                $matchedSessions = @()
                 foreach ($file in $allSessions) {
                     if ($file.Name -match 'rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$') {
                         $fullId = $Matches[1]
                         if ($fullId -like "*$SessionId") {
-                            $matches += $fullId
+                            $matchedSessions += $fullId
                         }
                     }
                 }
 
-                if ($matches.Count -eq 0) {
+                if ($matchedSessions.Count -eq 0) {
                     Write-Host "Error: No session found matching '$SessionId'" -ForegroundColor Red
                     return
-                } elseif ($matches.Count -gt 1) {
+                } elseif ($matchedSessions.Count -gt 1) {
                     Write-Host "Error: Multiple sessions match '$SessionId':" -ForegroundColor Red
-                    foreach ($m in $matches) {
+                    foreach ($m in $matchedSessions) {
                         Write-Host "  $m" -ForegroundColor Yellow
                     }
                     return
                 } else {
-                    $resolvedSessionId = $matches[0]
+                    $resolvedSessionId = $matchedSessions[0]
                     if (-not ($Json -or $JsonE)) {
                         Write-Host "Resuming session: $resolvedSessionId" -ForegroundColor Cyan
                     }
@@ -1085,9 +1090,12 @@ switch ($action) {
         }
 
         # Build arguments - add session ID if provided
-        $runArgs = $CodexArgs
+        $runArgs = @()
         if ($resolvedSessionId) {
-            $runArgs = @('resume', $resolvedSessionId) + $CodexArgs
+            $runArgs = @('resume', $resolvedSessionId)
+        }
+        if ($CodexArgs) {
+            $runArgs += $CodexArgs
         }
 
         Invoke-CodexRun -Context $context -Arguments $runArgs -Silent:($Json -or $JsonE)

@@ -98,6 +98,14 @@ while [[ $# -gt 0 ]]; do
       ACTION="monitor"
       shift
       ;;
+    --list-sessions)
+      if [[ -n "$ACTION" && "$ACTION" != "list-sessions" ]]; then
+        echo "Error: multiple actions specified" >&2
+        exit 1
+      fi
+      ACTION="list-sessions"
+      shift
+      ;;
     --push)
       PUSH_IMAGE=true
       shift
@@ -538,6 +546,7 @@ show_recent_sessions() {
     if [[ -n "$preview" ]]; then
       echo "    → ${preview}" >&2
     fi
+    echo "    ./codex_container.sh --session-id ${short_id}" >&2
     echo "" >&2
 
     count=$((count + 1))
@@ -545,9 +554,6 @@ show_recent_sessions() {
 
   if [[ $count -eq 0 ]]; then
     echo "No sessions found." >&2
-  else
-    echo "To resume a session, run:" >&2
-    echo "  ./codex_container.sh --session-id <short-id>" >&2
   fi
   echo "" >&2
 }
@@ -1123,6 +1129,9 @@ case "$ACTION" in
   monitor)
     ensure_codex_auth "$JSON_OUTPUT"
     invoke_codex_monitor
+    ;;
+  list-sessions)
+    show_recent_sessions
     ;;
   run|*)
     # Show recent sessions if no arguments and no session ID
