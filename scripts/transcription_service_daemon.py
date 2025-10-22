@@ -216,8 +216,56 @@ async def process_queue():
                 # Format transcript with transmission header
                 processing_duration = (end_time - start_time).total_seconds()
 
-                # Create ASCII visualization of speech activity from segments
-                visualization = ""
+                # Create ASCII waveform visualization from audio data
+                waveform_viz = ""
+                speech_viz = ""
+                try:
+                    import wave
+                    import numpy as np
+
+                    # Read WAV file for waveform
+                    with wave.open(job["wav_file"], 'rb') as wav:
+                        frames = wav.readframes(wav.getnframes())
+                        sample_width = wav.getsampwidth()
+
+                        # Convert to numpy array based on sample width
+                        if sample_width == 1:
+                            audio_data = np.frombuffer(frames, dtype=np.uint8)
+                            audio_data = audio_data.astype(np.float32) - 128
+                        elif sample_width == 2:
+                            audio_data = np.frombuffer(frames, dtype=np.int16).astype(np.float32)
+                        else:
+                            audio_data = np.frombuffer(frames, dtype=np.int32).astype(np.float32)
+
+                        # Downsample to 60 points for visualization
+                        viz_width = 60
+                        chunk_size = len(audio_data) // viz_width
+
+                        if chunk_size > 0:
+                            # Calculate RMS amplitude for each chunk
+                            amplitudes = []
+                            for i in range(viz_width):
+                                start_idx = i * chunk_size
+                                end_idx = min(start_idx + chunk_size, len(audio_data))
+                                chunk = audio_data[start_idx:end_idx]
+                                rms = np.sqrt(np.mean(chunk**2))
+                                amplitudes.append(rms)
+
+                            # Normalize to 0-8 range for vertical bars
+                            max_amp = max(amplitudes) if amplitudes else 1
+                            normalized = [int((amp / max_amp) * 8) if max_amp > 0 else 0 for amp in amplitudes]
+
+                            # Create vertical bar chart using block characters
+                            bars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█', '█']
+                            waveform_viz = "".join([bars[n] for n in normalized])
+                        else:
+                            waveform_viz = "▁" * viz_width
+
+                except Exception as e:
+                    print(f"⚠️  Waveform visualization error: {e}", file=sys.stderr, flush=True)
+                    waveform_viz = "▁" * 60
+
+                # Create speech activity visualization from segments
                 if segments:
                     # Build timeline visualization (60 chars wide)
                     viz_width = 60
@@ -234,9 +282,9 @@ async def process_queue():
                         for i in range(start_pos, min(end_pos + 1, viz_width)):
                             viz_chars[i] = "█"
 
-                    visualization = "".join(viz_chars)
+                    speech_viz = "".join(viz_chars)
                 else:
-                    visualization = " " * 60  # Empty if no segments
+                    speech_viz = " " * 60  # Empty if no segments
 
                 formatted_transcript = f"""========== TRANSMISSION STATUS REPORT ==========
 STATUS: TRANSCRIPTION COMPLETE
@@ -249,8 +297,12 @@ FINISHED: {end_time.strftime('%Y-%m-%d %H:%M:%S %Z')}
 DURATION (AUDIO): {audio_duration:.2f}s
 LANGUAGE: {language}
 ------------------------------------------------------------
-SPEECH ACTIVITY VISUALIZATION:
-[{visualization}]
+WAVEFORM (RMS AMPLITUDE):
+[{waveform_viz}]
+0s{' ' * 54}{audio_duration:.1f}s
+
+SPEECH ACTIVITY:
+[{speech_viz}]
 0s{' ' * 54}{audio_duration:.1f}s
 ------------------------------------------------------------
 TELEGRAPH COPY FOLLOWS
