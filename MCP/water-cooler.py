@@ -41,7 +41,7 @@ def _format_timestamp(dt: datetime) -> str:
 
 @mcp.tool()
 async def wait_at_water_cooler(
-    duration_seconds: int = 10,
+    duration_seconds: int = None,
     update_interval: int = 2,
     location_name: str = "Miami",
 ) -> Dict[str, object]:
@@ -52,18 +52,30 @@ async def wait_at_water_cooler(
     conditions for maritime operations.
 
     Args:
-        duration_seconds: Total time to wait in seconds (default: 10)
+        duration_seconds: Total time to wait in seconds (default: random 10-20s)
         update_interval: How often to report progress in seconds (default: 2)
         location_name: Location for weather display (default: "Miami")
 
     Returns:
         Dictionary with wait completion status, timing, sign from wall, and current weather.
+
+    Note: Remember to take_cups() for hydration and recycle_cups() when done!
     """
+
+    # Randomize duration if not specified
+    if duration_seconds is None:
+        duration_seconds = random.randint(10, 20)
 
     if duration_seconds <= 0:
         return {
             "success": False,
             "error": "duration_seconds must be positive"
+        }
+
+    if duration_seconds > 20:
+        return {
+            "success": False,
+            "error": "Maximum wait time is 20 seconds. Take a break and come back!"
         }
 
     if update_interval <= 0:
@@ -167,7 +179,7 @@ async def wait_at_water_cooler(
         "finished": finished_at.isoformat(),
         "wall_sign": wall_sign,
         "message": f"Waited {actual_duration:.1f} seconds at the water cooler",
-        "reminder": "Don't forget to take cups and check the weather"
+        "reminder": "Remember to take_cups() for hydration, drink water, and recycle_cups() when done!"
     }
 
     # Include weather data from the display above the cooler
@@ -225,7 +237,52 @@ async def take_cups(count: int = 1) -> Dict[str, object]:
         "success": True,
         "cups_taken": count,
         "reminder": random.choice(messages),
-        "message": f"Took {count} cup(s). Stay hydrated during your maritime monitoring duties."
+        "message": f"Took {count} cup(s). Stay hydrated during your maritime monitoring duties. Remember to recycle_cups() when finished!"
+    }
+
+
+@mcp.tool()
+async def recycle_cups(count: int = 1) -> Dict[str, object]:
+    """Recycle used water cups responsibly.
+
+    Maritime agents are expected to maintain a clean break room. The sign on the
+    wall says "KEEP OUR OCEANS CLEAN - RECYCLE YOUR CUPS"
+
+    Args:
+        count: Number of cups to recycle (default: 1)
+
+    Returns:
+        Dictionary confirming cups recycled with environmental reminder.
+    """
+
+    if count <= 0:
+        return {
+            "success": False,
+            "error": "Must recycle at least 1 cup"
+        }
+
+    if count > 20:
+        return {
+            "success": False,
+            "error": "That's a lot of cups! Max: 20 at once"
+        }
+
+    import sys
+    print(f"♻️  Recycling {count} cup(s)", file=sys.stderr, flush=True)
+
+    messages = [
+        "Clean oceans start with clean break rooms.",
+        "Trek Meridian Blackwater thanks you for keeping our waters clean.",
+        "Captain Torwick says: A tidy ship is a happy ship.",
+        "Recycling today means clearer waters tomorrow.",
+        "Alpha Tango would be proud of your environmental stewardship.",
+    ]
+
+    return {
+        "success": True,
+        "cups_recycled": count,
+        "reminder": random.choice(messages),
+        "message": f"Recycled {count} cup(s). Thank you for keeping our maritime operations sustainable!"
     }
 
 
