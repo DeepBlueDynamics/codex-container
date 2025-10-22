@@ -54,12 +54,16 @@ async def handle_transcribe(request):
 
         job_id = None
         wav_data = None
+        original_filename = None
         model_name = WHISPER_MODEL
         callback_url = None
 
         async for field in reader:
             if field.name == "file":
                 wav_data = await field.read()
+                # Extract original filename from Content-Disposition header
+                if hasattr(field, 'filename') and field.filename:
+                    original_filename = field.filename
             elif field.name == "job_id":
                 job_id = (await field.read()).decode()
             elif field.name == "model":
@@ -73,17 +77,18 @@ async def handle_transcribe(request):
         if not job_id:
             job_id = str(uuid.uuid4())
 
-        # Save WAV to pending
+        # Save WAV to pending (use job_id to avoid conflicts)
         wav_file = PENDING_DIR / f"{job_id}.wav"
         wav_file.write_bytes(wav_data)
 
-        print(f"📥 Job {job_id} received: {len(wav_data)} bytes", file=sys.stderr, flush=True)
+        print(f"📥 Job {job_id} received: {len(wav_data)} bytes (original: {original_filename})", file=sys.stderr, flush=True)
 
         # Queue job
         JOBS[job_id] = {
             "status": "queued",
             "model": model_name,
             "wav_file": str(wav_file),
+            "original_filename": original_filename or f"{job_id}.wav",
             "callback_url": callback_url,
             "created": utc_now(),
             "file_size": len(wav_data)
@@ -210,8 +215,8 @@ async def process_queue():
                 segments = result.get("segments", [])
                 audio_duration = segments[-1]["end"] if segments else 0.0
 
-                # Get original WAV filename from path
-                wav_filename = Path(job["wav_file"]).name
+                # Get original WAV filename from job metadata
+                wav_filename = job.get("original_filename", Path(job["wav_file"]).name)
 
                 # Format transcript with transmission header
                 processing_duration = (end_time - start_time).total_seconds()
