@@ -141,29 +141,42 @@ async def handle_status(request):
 
 async def handle_download(request):
     """GET /download/{job_id} - Download completed transcript."""
-    job_id = request.match_info["job_id"]
+    try:
+        job_id = request.match_info["job_id"]
 
-    if job_id not in JOBS:
-        return web.json_response({"error": "Job not found"}, status=404)
+        if job_id not in JOBS:
+            return web.json_response({"error": "Job not found"}, status=404)
 
-    job = JOBS[job_id]
+        job = JOBS[job_id]
 
-    if job["status"] != "completed":
-        return web.json_response({
-            "error": "Transcription not ready",
-            "status": job["status"]
-        }, status=404)
+        if job["status"] != "completed":
+            return web.json_response({
+                "error": "Transcription not ready",
+                "status": job["status"]
+            }, status=404)
 
-    transcript_file = TRANSCRIPTS_DIR / f"{job_id}.txt"
-    if not transcript_file.exists():
-        return web.json_response({"error": "Transcript file missing"}, status=500)
+        # Use the transcript_file path stored in the job
+        if "transcript_file" not in job:
+            # Fallback to old behavior for backwards compatibility
+            transcript_file = TRANSCRIPTS_DIR / f"{job_id}.txt"
+        else:
+            transcript_file = Path(job["transcript_file"])
 
-    print(f"📤 Job {job_id} downloaded", file=sys.stderr, flush=True)
+        if not transcript_file.exists():
+            print(f"❌ Transcript file missing: {transcript_file}", file=sys.stderr, flush=True)
+            return web.json_response({"error": f"Transcript file missing: {transcript_file.name}"}, status=500)
 
-    return web.Response(
-        text=transcript_file.read_text(),
-        content_type="text/plain"
-    )
+        print(f"📤 Job {job_id} downloaded: {transcript_file.name}", file=sys.stderr, flush=True)
+
+        return web.Response(
+            text=transcript_file.read_text(),
+            content_type="text/plain"
+        )
+    except Exception as e:
+        print(f"❌ Error in handle_download: {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return web.json_response({"error": f"Internal server error: {str(e)}"}, status=500)
 
 
 async def handle_health(request):
@@ -325,7 +338,10 @@ END OF TRANSMISSION STOP
                 # Replace .wav extension with .txt
                 transcript_filename = Path(wav_filename).stem + ".txt"
                 transcript_file = TRANSCRIPTS_DIR / transcript_filename
+
+                print(f"📝 Saving transcript to: {transcript_file.name}", file=sys.stderr, flush=True)
                 transcript_file.write_text(formatted_transcript)
+                print(f"💾 Transcript saved: {transcript_file} ({len(formatted_transcript)} bytes)", file=sys.stderr, flush=True)
 
                 # Update job
                 job["status"] = "completed"
@@ -334,6 +350,9 @@ END OF TRANSMISSION STOP
                 job["completed"] = utc_now()
 
                 print(f"✅ Job {job_id} completed: {len(transcript_text)} chars", file=sys.stderr, flush=True)
+                print(f"   Original WAV: {wav_filename}", file=sys.stderr, flush=True)
+                print(f"   Transcript file: {transcript_filename}", file=sys.stderr, flush=True)
+                print(f"   Available for download at: /download/{job_id}", file=sys.stderr, flush=True)
 
                 # Clean up WAV file
                 wav_path = Path(job["wav_file"])
