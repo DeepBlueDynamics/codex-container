@@ -41,6 +41,10 @@ DEFAULT_API_URL = "http://localhost:8765"
 _API_URL_CACHE: Optional[str] = None
 
 
+LOG_PATH_ENV = "SLACK_MESSAGE_LOG"
+DEFAULT_LOG_PATH = Path("gnosis-slackbot/logs/slack_messages.log")
+
+
 def _probe_health(base_url: str) -> bool:
     """Return True if the Slackbot /health endpoint responds."""
     health_endpoint = urljoin(base_url.rstrip("/") + "/", "health")
@@ -254,6 +258,46 @@ def slack_get_channel(channel_id: str) -> Dict:
     with _urlrequest.urlopen(req, timeout=30) as response:
         result = json.loads(response.read().decode('utf-8'))
         return result
+
+
+@mcp.tool()
+def slack_tail_logs(tail: int = 50) -> Dict:
+    """Tail the Slack message log maintained by the bot."""
+    log_path = Path(os.getenv(LOG_PATH_ENV, DEFAULT_LOG_PATH))
+
+    if not log_path.exists():
+        return {
+            "success": False,
+            "error": f"Log file not found: {log_path}"
+        }
+
+    try:
+        with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "success": False,
+            "error": f"Failed to read log: {exc}"
+        }
+
+    tail = max(1, int(tail))
+    recent_lines = lines[-tail:]
+    entries = []
+    for line in recent_lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            entries.append({"raw": line})
+
+    return {
+        "success": True,
+        "log_path": str(log_path),
+        "count": len(entries),
+        "entries": entries
+    }
 
 
 if __name__ == "__main__":

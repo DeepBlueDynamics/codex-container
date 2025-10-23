@@ -164,8 +164,13 @@ Container Path: {container_path}"""
             if not file_path.is_file():
                 continue
 
-            # Skip hidden files except our config files
-            if file_path.name.startswith(".") and file_path.name not in [".codex-monitor", ".codex-monitor-session"]:
+            # Skip hidden files except the primary monitor prompt
+            if file_path.name.startswith("."):
+                if file_path.name != ".codex-monitor":
+                    continue
+
+            # Skip monitor template and other housekeeping files
+            if file_path.name.lower() == "monitor.md" or file_path.name == ".codex-monitor-session":
                 continue
 
             try:
