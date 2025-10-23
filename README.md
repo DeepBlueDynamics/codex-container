@@ -58,15 +58,17 @@ The container supports three distinct ways to interact with Codex, each suited f
 └──────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
-│ INTERACTIVE MODE - Event-driven agent                            │
+│ INTERACTIVE MODE - Chat session or event-driven agent           │
 ├──────────────────────────────────────────────────────────────────┤
-│ --monitor --watch-path ./recordings  # Watch for file changes    │
+│ (no arguments)                    # Interactive chat session     │
+│ --monitor --watch-path ./recordings  # Event-driven agent        │
 │                                                                  │
-│ File changes → Template substitution → Codex activation          │
+│ Event-driven: File changes → Template substitution → Codex       │
 │                                                                  │
 │ Template Variables: {{file}}, {{path}}, {{timestamp}}, etc.      │
 │                                                                  │
 │ Use Cases:                                                       │
+│ • Interactive chat for exploration and development               │
 │ • Autonomous agents responding to events                         │
 │ • VHF monitor (new recordings → transcribe → analyze)            │
 │ • Code watchers (new commits → review → report)                  │
@@ -87,7 +89,7 @@ The container supports three distinct ways to interact with Codex, each suited f
 
 **Remote API (Serve)**: HTTP gateway exposing Codex as a service for programmatic access.
 
-**Interactive (Monitor)**: Event-driven agent that activates automatically based on file system changes.
+**Interactive**: Traditional chat session (no arguments) or event-driven agent (--monitor) that activates automatically based on file system changes.
 
 All three modes share the same workspace, MCP tools, and configuration - they're just different interfaces to the same underlying Codex engine.
 
