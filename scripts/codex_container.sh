@@ -587,6 +587,12 @@ docker_run() {
     esac
   done
 
+  # Ensure codex-network exists
+  if ! docker network inspect codex-network >/dev/null 2>&1; then
+    echo "Creating codex-network for inter-container communication..." >&2
+    docker network create codex-network >/dev/null 2>&1 || true
+  fi
+
   local -a args=(run --rm)
   if [[ $quiet -eq 1 ]]; then
     args+=(-i)
