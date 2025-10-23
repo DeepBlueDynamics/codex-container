@@ -491,7 +491,12 @@ show_recent_sessions() {
   local -a session_files=()
   while IFS= read -r -d '' file; do
     session_files+=("$file")
-  done < <(find "$sessions_base" -type f -name 'rollout-*.jsonl' -print0 | xargs -0 ls -t 2>/dev/null)
+  done < <(find "$sessions_base" -type f -name 'rollout-*.jsonl' -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null)
+
+  if [[ ${#session_files[@]} -eq 0 ]]; then
+    echo "No recent sessions found." >&2
+    return
+  fi
 
   local count=0
   local max_sessions=5
