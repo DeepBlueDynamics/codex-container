@@ -17,7 +17,8 @@
       "Bash(docker network:*)",
       "Bash(docker network inspect:*)",
       "Read(//c/Users/kord/Code/gnosis/vhf_monitor/recordings//**)",
-      "Bash(git mv:*)"
+      "Bash(git mv:*)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

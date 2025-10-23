@@ -951,11 +951,11 @@ invoke_codex_watch() {
   else
     echo "Error: python3 or python is required for --watch." >&2
     exit 1
-  }
+  fi
   if [[ ! -f "$watcher" ]]; then
     echo "Error: watcher script not found at $watcher" >&2
     exit 1
-  }
+  fi
   if [[ -z "$WATCH_PATH" ]]; then
     echo "Error: --watch requires --watch-path or a workspace" >&2
     exit 1

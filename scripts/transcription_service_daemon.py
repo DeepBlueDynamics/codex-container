@@ -108,29 +108,35 @@ async def handle_transcribe(request):
 
 async def handle_status(request):
     """GET /status/{job_id} - Check transcription status."""
-    job_id = request.match_info["job_id"]
+    try:
+        job_id = request.match_info["job_id"]
 
-    if job_id not in JOBS:
-        return web.json_response({"error": "Job not found"}, status=404)
+        if job_id not in JOBS:
+            return web.json_response({"error": "Job not found"}, status=404)
 
-    job = JOBS[job_id]
-    response = {
-        "success": True,
-        "job_id": job_id,
-        "status": job["status"],
-        "created": job["created"]
-    }
+        job = JOBS[job_id]
+        response = {
+            "success": True,
+            "job_id": job_id,
+            "status": job["status"],
+            "created": job["created"]
+        }
 
-    if "progress" in job:
-        response["progress"] = job["progress"]
-    if "completed" in job:
-        response["completed"] = job["completed"]
-    if "error" in job:
-        response["error"] = job["error"]
-    if job["status"] == "completed" and "transcript" in job:
-        response["transcript_preview"] = job["transcript"][:200] + "..." if len(job["transcript"]) > 200 else job["transcript"]
+        if "progress" in job:
+            response["progress"] = job["progress"]
+        if "completed" in job:
+            response["completed"] = job["completed"]
+        if "error" in job:
+            response["error"] = job["error"]
+        if job["status"] == "completed" and "transcript" in job:
+            response["transcript_preview"] = job["transcript"][:200] + "..." if len(job["transcript"]) > 200 else job["transcript"]
 
-    return web.json_response(response)
+        return web.json_response(response)
+    except Exception as e:
+        print(f"❌ Error in handle_status: {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return web.json_response({"error": f"Internal server error: {str(e)}"}, status=500)
 
 
 async def handle_download(request):
