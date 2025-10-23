@@ -10,6 +10,87 @@
 
 These scripts launch the OpenAI Codex CLI inside a reproducible Docker container. Drop either script somewhere on your `PATH`, change into any project, and the helper mounts the current working directory alongside a persistent Codex home so credentials survive between runs.
 
+## Three Interaction Modes (TRI)
+
+The container supports three distinct ways to interact with Codex, each suited for different workflows:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     CODEX CONTAINER TRI                         │
+│                  (Three Interaction Modes)                      │
+└─────────────────────────────────────────────────────────────────┘
+
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│  1. TERMINAL     │  │  2. REMOTE API   │  │  3. INTERACTIVE  │
+│     (Exec)       │  │    (Serve)       │  │    (Monitor)     │
+└──────────────────┘  └──────────────────┘  └──────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│ TERMINAL MODE - One-shot execution                               │
+├──────────────────────────────────────────────────────────────────┤
+│ --exec "hello world"          # Single command                   │
+│ --exec "status" --session-id abc12  # Resume conversation        │
+│                                                                   │
+│ Use Cases:                                                        │
+│ • Quick queries and commands                                     │
+│ • Long-running conversations via session ID                      │
+│ • Scripted automation                                            │
+│ • CI/CD integration                                              │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│ REMOTE API MODE - HTTP gateway                                   │
+├──────────────────────────────────────────────────────────────────┤
+│ --serve --gateway-port 4000   # Start HTTP server                │
+│                                                                   │
+│ POST /completion                                                  │
+│ {                                                                 │
+│   "prompt": "Analyze this code",                                 │
+│   "model": "opus-4",                                             │
+│   "workspace": "/workspace"                                      │
+│ }                                                                 │
+│                                                                   │
+│ Use Cases:                                                        │
+│ • Webwright integration                                          │
+│ • External tool access to Codex                                  │
+│ • Multi-user scenarios                                           │
+│ • Language-agnostic clients                                      │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│ INTERACTIVE MODE - Event-driven agent                            │
+├──────────────────────────────────────────────────────────────────┤
+│ --monitor --watch-path ./recordings  # Watch for file changes    │
+│                                                                   │
+│ File changes → Template substitution → Codex activation          │
+│                                                                   │
+│ Template Variables: {{file}}, {{path}}, {{timestamp}}, etc.     │
+│                                                                   │
+│ Use Cases:                                                        │
+│ • Autonomous agents responding to events                         │
+│ • VHF monitor (new recordings → transcribe → analyze)           │
+│ • Code watchers (new commits → review → report)                 │
+│ • Log monitoring (errors → investigate → alert)                 │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│ MIXING MODES                                                      │
+├──────────────────────────────────────────────────────────────────┤
+│ • Run API server in background: --serve                          │
+│ • Test monitor behavior manually: --exec "$(cat MONITOR.md)"     │
+│ • Debug event-driven logic before enabling --monitor             │
+│ • Use session IDs to maintain context across exec calls          │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Terminal (Exec)**: Direct command execution with optional session persistence for multi-turn conversations.
+
+**Remote API (Serve)**: HTTP gateway exposing Codex as a service for programmatic access.
+
+**Interactive (Monitor)**: Event-driven agent that activates automatically based on file system changes.
+
+All three modes share the same workspace, MCP tools, and configuration - they're just different interfaces to the same underlying Codex engine.
+
 ## Event-Driven Agent Pattern
 
 **The key feature**: Codex can automatically activate in response to file system changes. This creates an **agent that responds to events** rather than waiting for manual commands. You can replicate any agent behavior manually for testing, then switch to automated monitoring for production.
