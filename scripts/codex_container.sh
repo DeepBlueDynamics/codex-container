@@ -29,6 +29,7 @@ WATCH_STATE_FILE=""
 WATCH_ONCE=false
 WATCH_DEBOUNCE=""
 MONITOR_PROMPT_FILE="MONITOR.md"
+NEW_SESSION=false
 SESSION_ID=""
 TRANSCRIPTION_SERVICE_URL="http://host.docker.internal:8765"
 
@@ -96,6 +97,10 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ACTION="monitor"
+      shift
+      ;;
+    --new-session)
+      NEW_SESSION=true
       shift
       ;;
     --list-sessions)
@@ -1024,13 +1029,23 @@ invoke_codex_monitor() {
   fi
 
   local session_state_path="${monitor_dir}/.codex-monitor-session"
-  local monitor_session_id
-  monitor_session_id=$(get_monitor_session "$session_state_path")
+  local monitor_session_id=""
+
+  # Check for existing monitor session (unless --new-session specified)
+  if [[ "$NEW_SESSION" != "true" ]]; then
+    monitor_session_id=$(get_monitor_session "$session_state_path")
+  fi
 
   if [[ -n "$monitor_session_id" ]]; then
     echo "Monitor resuming session: $monitor_session_id" >&2
   else
-    echo "Monitor starting new session" >&2
+    if [[ "$NEW_SESSION" == "true" ]]; then
+      echo "Monitor starting fresh session (forced by --new-session)" >&2
+      # Clear any existing session file
+      rm -f "$session_state_path"
+    else
+      echo "Monitor starting new session" >&2
+    fi
   fi
 
   echo "Monitoring ${monitor_dir} using prompt ${prompt_path}" >&2

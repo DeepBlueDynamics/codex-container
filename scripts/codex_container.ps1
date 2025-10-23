@@ -95,6 +95,7 @@ param(
     [string]$WatchPath,
     [switch]$Monitor,
     [string]$MonitorPrompt = 'MONITOR.md',
+    [switch]$NewSession,
     [string[]]$Exec,
     [switch]$Shell,
     [switch]$Push,
@@ -252,6 +253,7 @@ function New-CodexContext {
         WorkspacePath = $workspacePath
         CurrentLocation = $currentLocation.ProviderPath
         RunArgs = $runArgs
+        NewSession = $false  # Will be set by caller if needed
     }
 }
 
@@ -763,14 +765,27 @@ function Invoke-CodexMonitor {
     Write-Host "Log file:    $logPath" -ForegroundColor DarkGray
     Write-Host 'Press Ctrl+C to stop.' -ForegroundColor DarkGray
 
-    # Check for existing monitor session
-    $monitorSessionId = Get-MonitorSession
+    # Check for existing monitor session (unless -NewSession specified)
+    $monitorSessionId = $null
+    if (-not $Context.NewSession) {
+        $monitorSessionId = Get-MonitorSession
+    }
+
     if ($monitorSessionId) {
         Write-Host "Monitor resuming session: $monitorSessionId" -ForegroundColor Cyan
         Write-MonitorLog "Resuming session: $monitorSessionId"
     } else {
-        Write-Host "Monitor starting new session" -ForegroundColor Cyan
-        Write-MonitorLog "Starting new session"
+        if ($Context.NewSession) {
+            Write-Host "Monitor starting fresh session (forced by -NewSession)" -ForegroundColor Cyan
+            Write-MonitorLog "Starting fresh session (forced by -NewSession)"
+            # Clear any existing session file
+            if (Test-Path $sessionStatePath) {
+                Remove-Item $sessionStatePath -Force
+            }
+        } else {
+            Write-Host "Monitor starting new session" -ForegroundColor Cyan
+            Write-MonitorLog "Starting new session"
+        }
     }
 
     Write-MonitorLog "Started monitoring $resolvedWatch"
@@ -1224,6 +1239,7 @@ switch ($action) {
         Invoke-CodexServe -Context $context -Port $GatewayPort -BindHost $GatewayHost -TimeoutMs $GatewayTimeoutMs -DefaultModel $GatewayDefaultModel -ExtraArgs $GatewayExtraArgs
     }
     'Monitor' {
+        $context.NewSession = $NewSession
         Ensure-CodexAuthentication -Context $context -Silent:($Json -or $JsonE)
         Invoke-CodexMonitor -Context $context -WatchPath $WatchPath -PromptFile $MonitorPrompt -JsonOutput:($Json -or $JsonE) -CodexArgs $CodexArgs
     }
