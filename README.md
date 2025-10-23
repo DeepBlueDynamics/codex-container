@@ -243,6 +243,45 @@ codex-container/
 
 After running install, these servers will be available to Codex for tool execution.
 
+### Available MCP Tools (112 total)
+
+The container includes comprehensive tool coverage across multiple domains:
+
+**File Operations** (gnosis-files-*.py)
+- Basic: `file_read`, `file_write`, `file_stat`, `file_exists`, `file_delete`, `file_copy`, `file_move`
+- Advanced: `file_diff`, `file_backup`, `file_list_versions`, `file_restore`, `file_patch`
+- Search: `file_search`, `file_search_content`, `file_search_regex`
+
+**Web Scraping & Search**
+- `crawl_url`, `crawl_batch`, `raw_html` - Web crawling with markdown conversion
+- `serpapi_search` - Google search results via SerpAPI
+- `product_search` - E-commerce product search
+
+**Google Workspace Integration**
+- **Calendar**: `gcal_list_events`, `gcal_create_event`, `gcal_update_event`, `gcal_delete_event`, etc.
+- **Gmail**: `gmail_list_messages`, `gmail_send`, `gmail_search`, `gmail_get_thread`, `gmail_create_draft`, etc.
+- **Drive**: `gdrive_list_files`, `gdrive_upload`, `gdrive_download`, `gdrive_search`, `gdrive_share`, etc.
+
+**Communication & Collaboration**
+- **Slack**: `slack_send_message`, `slack_send_image`, `slack_upload_file`, `slack_get_user`, `slack_get_channel`
+- **Human Interaction**: `talk_to_human`, `report_to_supervisor`
+- **Notes**: `create_sticky_note`, `read_sticky_notes`, `update_sticky_note`, `delete_sticky_note`
+
+**Maritime & Radio Operations**
+- VHF radio control and monitoring
+- Radio network management
+- Audio transcription with Whisper AI
+
+**Weather & Environment**
+- `get_current_weather`, `get_forecast`, `get_marine_weather` - Open-Meteo integration with marine conditions
+
+**Utilities**
+- Time operations and scheduling
+- Log file reading and monitoring
+- Background process coordination (`wait_at_water_cooler`, `take_cups`, `recycle_cups`)
+
+All MCP servers use the FastMCP framework for reliable, async tool execution.
+
 ## Event-Driven Testing Pattern
 
 The monitor mode creates a powerful testing pattern:
