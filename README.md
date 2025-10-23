@@ -30,8 +30,8 @@ The container supports three distinct ways to interact with Codex, each suited f
 ├──────────────────────────────────────────────────────────────────┤
 │ --exec "hello world"          # Single command                   │
 │ --exec "status" --session-id abc12  # Resume conversation        │
-│                                                                   │
-│ Use Cases:                                                        │
+│                                                                  │
+│ Use Cases:                                                       │
 │ • Quick queries and commands                                     │
 │ • Long-running conversations via session ID                      │
 │ • Scripted automation                                            │
@@ -42,15 +42,15 @@ The container supports three distinct ways to interact with Codex, each suited f
 │ REMOTE API MODE - HTTP gateway                                   │
 ├──────────────────────────────────────────────────────────────────┤
 │ --serve --gateway-port 4000   # Start HTTP server                │
-│                                                                   │
-│ POST /completion                                                  │
-│ {                                                                 │
+│                                                                  │
+│ POST /completion                                                 │
+│ {                                                                │
 │   "prompt": "Analyze this code",                                 │
 │   "model": "opus-4",                                             │
 │   "workspace": "/workspace"                                      │
-│ }                                                                 │
-│                                                                   │
-│ Use Cases:                                                        │
+│ }                                                                │
+│                                                                  │
+│ Use Cases:                                                       │
 │ • Webwright integration                                          │
 │ • External tool access to Codex                                  │
 │ • Multi-user scenarios                                           │
@@ -61,20 +61,20 @@ The container supports three distinct ways to interact with Codex, each suited f
 │ INTERACTIVE MODE - Event-driven agent                            │
 ├──────────────────────────────────────────────────────────────────┤
 │ --monitor --watch-path ./recordings  # Watch for file changes    │
-│                                                                   │
+│                                                                  │
 │ File changes → Template substitution → Codex activation          │
-│                                                                   │
-│ Template Variables: {{file}}, {{path}}, {{timestamp}}, etc.     │
-│                                                                   │
-│ Use Cases:                                                        │
+│                                                                  │
+│ Template Variables: {{file}}, {{path}}, {{timestamp}}, etc.      │
+│                                                                  │
+│ Use Cases:                                                       │
 │ • Autonomous agents responding to events                         │
-│ • VHF monitor (new recordings → transcribe → analyze)           │
-│ • Code watchers (new commits → review → report)                 │
-│ • Log monitoring (errors → investigate → alert)                 │
+│ • VHF monitor (new recordings → transcribe → analyze)            │
+│ • Code watchers (new commits → review → report)                  │
+│ • Log monitoring (errors → investigate → alert)                  │
 └──────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
-│ MIXING MODES                                                      │
+│ MIXING MODES                                                     │
 ├──────────────────────────────────────────────────────────────────┤
 │ • Run API server in background: --serve                          │
 │ • Test monitor behavior manually: --exec "$(cat MONITOR.md)"     │
