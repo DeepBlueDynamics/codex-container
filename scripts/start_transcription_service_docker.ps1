@@ -85,6 +85,16 @@ try {
         Start-Sleep -Seconds 3
     }
 
+    # Ensure codex-network exists
+    $networkExists = docker network ls --format "{{.Name}}" | Select-String -Pattern "^codex-network$" -Quiet
+    if (-not $networkExists) {
+        Write-Host "Creating codex-network for inter-container communication..." -ForegroundColor Cyan
+        docker network create codex-network
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Warning: Failed to create network, it may already exist" -ForegroundColor Yellow
+        }
+    }
+
     if ($Build) {
         Write-Host "Building transcription service image..." -ForegroundColor Cyan
         docker-compose -f $composeFile build --no-cache

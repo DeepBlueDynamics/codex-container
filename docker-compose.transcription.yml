@@ -17,6 +17,8 @@ services:
     environment:
       - HF_HOME=/opt/whisper-models
     restart: unless-stopped
+    networks:
+      - codex-network
     deploy:
       resources:
         reservations:
@@ -34,3 +36,8 @@ services:
 volumes:
   transcription-jobs:
     driver: local
+
+networks:
+  codex-network:
+    external: true
+    name: codex-network
