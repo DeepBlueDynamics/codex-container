@@ -591,7 +591,7 @@ docker_run() {
   if [[ $expose_login_port -eq 1 ]]; then
     args+=(-p 1455:1455)
   fi
-  args+=(--user 0:0 --network codex-container_default --add-host host.docker.internal:host-gateway -v "${CODEX_HOME}:/opt/codex-home" -e HOME=/opt/codex-home -e XDG_CONFIG_HOME=/opt/codex-home)
+  args+=(--user 0:0 --network codex-network --add-host host.docker.internal:host-gateway -v "${CODEX_HOME}:/opt/codex-home" -e HOME=/opt/codex-home -e XDG_CONFIG_HOME=/opt/codex-home)
   if [[ -n "$WORKSPACE_PATH" ]]; then
     local mount_source="${WORKSPACE_PATH//\\//}"
     if [[ "$mount_source" =~ ^[A-Za-z]:$ ]]; then
