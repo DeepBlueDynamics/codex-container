@@ -136,5 +136,10 @@ RUN sed -i 's/\r$//' /opt/install_mcp_servers.sh \
 # Prepare MCP servers during build (copies to /opt/mcp-installed)
 RUN /opt/install_mcp_servers.sh
 
+# Ensure curl is present in runtime image for connectivity checks
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl \
+  && rm -rf /var/lib/apt/lists/*
+
 # Default to running as root so bind mounts succeed on Windows drives with restrictive ACLs.
 USER root

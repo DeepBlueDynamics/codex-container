@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Optional
 from urllib import request as _urlrequest
+from urllib.error import URLError
 from urllib.parse import urljoin
 
 from mcp.server.fastmcp import FastMCP
@@ -37,7 +38,57 @@ mcp = FastMCP("slackbot")
 
 # Service URL - can be overridden via environment variable
 DEFAULT_API_URL = "http://localhost:8765"
-API_URL = os.getenv("SLACKBOT_API_URL", DEFAULT_API_URL)
+_API_URL_CACHE: Optional[str] = None
+
+
+def _probe_health(base_url: str) -> bool:
+    """Return True if the Slackbot /health endpoint responds."""
+    health_endpoint = urljoin(base_url.rstrip("/") + "/", "health")
+    with _urlrequest.urlopen(health_endpoint, timeout=2):
+        return True
+
+
+def _resolve_api_url() -> str:
+    """Determine the API endpoint that should be used."""
+    env_url = os.getenv("SLACKBOT_API_URL")
+    candidates = []
+    if env_url:
+        candidates.append(env_url)
+    candidates.extend([
+        "http://gnosis-slackbot:8765",
+        "http://host.docker.internal:8765",
+        DEFAULT_API_URL,
+    ])
+
+    for url in candidates:
+        try:
+            if _probe_health(url):
+                logger.info(f"Slackbot MCP using API endpoint: {url}")
+                return url
+        except URLError as exc:
+            logger.debug(f"Slackbot MCP probe failed for {url}: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Slackbot MCP probe error for {url}: {exc}", exc_info=True)
+
+    fallback = candidates[-1]
+    logger.warning(f"Slackbot MCP falling back to default endpoint: {fallback}")
+    return fallback
+
+
+def _get_api_url() -> str:
+    """Return a reachable API URL, re-resolving if connectivity drops."""
+    global _API_URL_CACHE  # noqa: PLW0603
+
+    if _API_URL_CACHE:
+        try:
+            if _probe_health(_API_URL_CACHE):
+                return _API_URL_CACHE
+        except Exception:  # noqa: BLE001
+            logger.info("Slackbot MCP cached endpoint is unavailable; re-resolving.")
+            _API_URL_CACHE = None
+
+    _API_URL_CACHE = _resolve_api_url()
+    return _API_URL_CACHE
 
 
 @mcp.tool()
@@ -46,16 +97,7 @@ def slack_send_message(
     text: str,
     thread_ts: Optional[str] = None
 ) -> Dict:
-    """Send a text message to a Slack channel.
-
-    Args:
-        channel: Channel ID or name (e.g., C1234567890 or #general)
-        text: Message text to send
-        thread_ts: Optional thread timestamp to reply in thread
-
-    Returns:
-        Dictionary with success status and response from Slack API
-    """
+    """Send a text message to a Slack channel."""
     logger.info(f"Sending message to {channel}")
 
     payload = {
@@ -65,7 +107,8 @@ def slack_send_message(
     if thread_ts:
         payload["thread_ts"] = thread_ts
 
-    url = urljoin(API_URL, "/send")
+    api_url = _get_api_url()
+    url = urljoin(api_url, "/send")
     req = _urlrequest.Request(
         url,
         data=json.dumps(payload).encode('utf-8'),
@@ -85,16 +128,7 @@ def slack_send_image(
     image_path: str,
     text: Optional[str] = None
 ) -> Dict:
-    """Send an image to a Slack channel.
-
-    Args:
-        channel: Channel ID or name
-        image_path: Path to the image file (container path)
-        text: Optional caption for the image
-
-    Returns:
-        Dictionary with success status and response from Slack API
-    """
+    """Send an image to a Slack channel."""
     image_file = Path(image_path)
     if not image_file.exists():
         error_msg = f"Image file not found: {image_path}"
@@ -134,7 +168,8 @@ def slack_send_image(
     # Add closing boundary
     body += f'\r\n--{boundary}--\r\n'.encode('utf-8')
 
-    url = urljoin(API_URL, "/send-with-image")
+    api_url = _get_api_url()
+    url = urljoin(api_url, "/send-with-image")
     req = _urlrequest.Request(
         url,
         data=body,
@@ -155,17 +190,7 @@ def slack_upload_file(
     title: Optional[str] = None,
     comment: Optional[str] = None
 ) -> Dict:
-    """Upload a file to Slack.
-
-    Args:
-        channel: Channel ID
-        file_path: Path to the file to upload
-        title: Optional file title
-        comment: Optional comment to include with file
-
-    Returns:
-        Dictionary with success status and response from Slack API
-    """
+    """Upload a file to Slack."""
     file = Path(file_path)
     if not file.exists():
         error_msg = f"File not found: {file_path}"
@@ -188,7 +213,8 @@ def slack_upload_file(
     if comment:
         payload["initial_comment"] = comment
 
-    url = urljoin(API_URL, "/upload")
+    api_url = _get_api_url()
+    url = urljoin(api_url, "/upload")
     req = _urlrequest.Request(
         url,
         data=json.dumps(payload).encode('utf-8'),
@@ -204,17 +230,11 @@ def slack_upload_file(
 
 @mcp.tool()
 def slack_get_user(user_id: str) -> Dict:
-    """Get information about a Slack user.
-
-    Args:
-        user_id: User ID (e.g., U1234567890)
-
-    Returns:
-        Dictionary with user information
-    """
+    """Get information about a Slack user."""
     logger.info(f"Getting user info for {user_id}")
 
-    url = urljoin(API_URL, f"/user/{user_id}")
+    api_url = _get_api_url()
+    url = urljoin(api_url, f"/user/{user_id}")
     req = _urlrequest.Request(url, method='GET')
 
     with _urlrequest.urlopen(req, timeout=30) as response:
@@ -224,17 +244,11 @@ def slack_get_user(user_id: str) -> Dict:
 
 @mcp.tool()
 def slack_get_channel(channel_id: str) -> Dict:
-    """Get information about a Slack channel.
-
-    Args:
-        channel_id: Channel ID (e.g., C1234567890)
-
-    Returns:
-        Dictionary with channel information
-    """
+    """Get information about a Slack channel."""
     logger.info(f"Getting channel info for {channel_id}")
 
-    url = urljoin(API_URL, f"/channel/{channel_id}")
+    api_url = _get_api_url()
+    url = urljoin(api_url, f"/channel/{channel_id}")
     req = _urlrequest.Request(url, method='GET')
 
     with _urlrequest.urlopen(req, timeout=30) as response:

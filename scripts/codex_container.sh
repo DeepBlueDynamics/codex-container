@@ -32,6 +32,7 @@ MONITOR_PROMPT_FILE="MONITOR.md"
 NEW_SESSION=false
 SESSION_ID=""
 TRANSCRIPTION_SERVICE_URL="http://host.docker.internal:8765"
+SLACKBOT_API_URL="http://gnosis-slackbot:8765"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -308,6 +309,15 @@ while [[ $# -gt 0 ]]; do
       TRANSCRIPTION_SERVICE_URL="$1"
       shift
       ;;
+    --slackbot-api-url)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --slackbot-api-url requires a value" >&2
+        exit 1
+      fi
+      SLACKBOT_API_URL="$1"
+      shift
+      ;;
     --model)
       shift
       if [[ $# -eq 0 ]]; then
@@ -491,7 +501,29 @@ show_recent_sessions() {
   local -a session_files=()
   while IFS= read -r -d '' file; do
     session_files+=("$file")
-  done < <(find "$sessions_base" -type f -name 'rollout-*.jsonl' -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null)
+  done < <(python3 - "$sessions_base" <<'PY'
+import os
+import sys
+
+base = sys.argv[1]
+paths = []
+for root, _, files in os.walk(base):
+    for name in files:
+        if not name.startswith("rollout-") or not name.endswith(".jsonl"):
+            continue
+        path = os.path.join(root, name)
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        paths.append((mtime, path))
+
+paths.sort(key=lambda item: item[0], reverse=True)
+for _, path in paths:
+    sys.stdout.write(path)
+    sys.stdout.write("\0")
+PY
+)
 
   if [[ ${#session_files[@]} -eq 0 ]]; then
     echo "No recent sessions found." >&2
@@ -593,6 +625,22 @@ docker_run() {
     docker network create codex-network >/dev/null 2>&1 || true
   fi
 
+  # Attach Slackbot container so MCP tools can reach the API
+  if docker ps --format '{{.Names}}' | grep -wq 'gnosis-slackbot'; then
+    if docker network inspect codex-network -f '{{json .Containers}}' 2>/dev/null | grep -q '"Name":"gnosis-slackbot"'; then
+      echo "Slackbot container already attached to codex-network." >&2
+    else
+      if docker network connect codex-network gnosis-slackbot >/dev/null 2>&1; then
+        echo "Slackbot container attached to codex-network." >&2
+      else
+        echo "Warning: failed to attach Slackbot container to codex-network." >&2
+      fi
+    fi
+  else
+    echo "Slackbot container not running; skipping network attach." >&2
+  fi
+
+
   local -a args=(run --rm)
   if [[ $quiet -eq 1 ]]; then
     args+=(-i)
@@ -616,6 +664,9 @@ docker_run() {
   fi
   if [[ -n "$TRANSCRIPTION_SERVICE_URL" ]]; then
     args+=(-e TRANSCRIPTION_SERVICE_URL="$TRANSCRIPTION_SERVICE_URL")
+  fi
+  if [[ -n "$SLACKBOT_API_URL" ]]; then
+    args+=(-e SLACKBOT_API_URL="$SLACKBOT_API_URL")
   fi
   if [[ ${#DOCKER_RUN_EXTRA_ENVS[@]} -gt 0 ]]; then
     for env_kv in "${DOCKER_RUN_EXTRA_ENVS[@]}"; do
