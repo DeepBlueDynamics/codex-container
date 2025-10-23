@@ -3,6 +3,7 @@
 [![License](https://img.shields.io/badge/license-Gnosis%20AI--Sovereign%20v1.2-blue.svg)](LICENSE.md)
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
+[![GPU](https://img.shields.io/badge/GPU-CUDA%20enabled-brightgreen.svg)](vibe/TRANSCRIPTION_SERVICE.md)
 [![MCP Tools](https://img.shields.io/badge/MCP%20tools-112-green.svg)](MCP/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Shell](https://img.shields.io/badge/shell-PowerShell%20%7C%20Bash-orange.svg)]()
@@ -281,6 +282,48 @@ The container includes comprehensive tool coverage across multiple domains:
 - Background process coordination (`wait_at_water_cooler`, `take_cups`, `recycle_cups`)
 
 All MCP servers use the FastMCP framework for reliable, async tool execution.
+
+## GPU-Accelerated Transcription Service
+
+The project includes a persistent GPU-accelerated transcription service using OpenAI Whisper large-v3:
+
+**Features:**
+- **CUDA-Accelerated**: 10x faster transcription with NVIDIA GPU support
+- **Persistent Model**: Whisper large-v3 stays loaded in memory (no reload between jobs)
+- **HTTP API**: Simple REST interface for uploading WAV files and retrieving transcripts
+- **Async Queue**: Background job processing with status polling
+- **Pre-cached Model**: ~3GB Whisper model baked into Docker image for instant startup
+- **Formatted Output**: Transmission-style reports with waveform visualization and metadata
+
+**Quick Start:**
+```powershell
+# Build and start the service (PowerShell)
+./scripts/start_transcription_service_docker.ps1 -Build
+
+# Stop the service
+./scripts/start_transcription_service_docker.ps1 -Stop
+
+# View logs
+./scripts/start_transcription_service_docker.ps1 -Logs
+```
+
+**API Endpoints:**
+- `POST /transcribe` - Upload WAV file, get job ID
+- `GET /status/{job_id}` - Check transcription status
+- `GET /download/{job_id}` - Download completed transcript
+- `GET /health` - Service health and GPU status
+
+**Performance (NVIDIA RTX 3080):**
+- 1 minute audio: ~5-10 seconds
+- 10 minute audio: ~30-60 seconds
+
+**MCP Integration:**
+The `transcribe-wav.py` MCP server provides agent-friendly tools that use this service:
+- `transcribe_wav(filename)` - Upload and transcribe audio file
+- `check_transcription_status(job_id)` - Poll job status
+- `download_transcript(job_id)` - Retrieve completed transcript
+
+CPU fallback is automatic when GPU isn't available (much slower). See [TRANSCRIPTION_SERVICE.md](vibe/TRANSCRIPTION_SERVICE.md) for detailed setup and troubleshooting.
 
 ## Event-Driven Testing Pattern
 
