@@ -85,7 +85,12 @@ class CodexMonitor:
     def build_file_event_payload(self, file_path: Path) -> str:
         """Build the payload for a file event."""
         timestamp = datetime.now(timezone.utc).isoformat()
-        relative_path = file_path.relative_to(self.workspace_path)
+
+        # Resolve to absolute paths
+        abs_file_path = file_path.resolve()
+        abs_workspace_path = self.workspace_path.resolve()
+
+        relative_path = abs_file_path.relative_to(abs_workspace_path)
         container_path = f"/workspace/{relative_path.as_posix()}"
 
         return f"""FILE EVENT DETECTED
@@ -93,7 +98,7 @@ class CodexMonitor:
 Timestamp: {timestamp}
 Action: Created
 File: {file_path.name}
-Full Path: {file_path.as_posix()}
+Full Path: {abs_file_path.as_posix()}
 Container Path: {container_path}"""
 
     def execute_codex(self, payload: str) -> str:
