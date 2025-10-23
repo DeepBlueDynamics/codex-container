@@ -1039,125 +1039,55 @@ invoke_codex_monitor() {
     exit 1
   fi
 
-  local session_state_path="${monitor_dir}/.codex-monitor-session"
-  local monitor_session_id=""
-
-  # Check for existing monitor session (unless --new-session specified)
-  if [[ "$NEW_SESSION" != "true" ]]; then
-    monitor_session_id=$(get_monitor_session "$session_state_path")
+  # Use Python-based monitor for better portability
+  local monitor_script="${SCRIPT_DIR}/monitor.py"
+  if [[ ! -f "$monitor_script" ]]; then
+    echo "Error: Monitor script not found at $monitor_script" >&2
+    exit 1
   fi
 
-  if [[ -n "$monitor_session_id" ]]; then
-    echo "Monitor resuming session: $monitor_session_id" >&2
+  # Find Python
+  local python_bin=""
+  if command -v python3 >/dev/null 2>&1; then
+    python_bin=$(command -v python3)
+  elif command -v python >/dev/null 2>&1; then
+    python_bin=$(command -v python)
   else
-    if [[ "$NEW_SESSION" == "true" ]]; then
-      echo "Monitor starting fresh session (forced by --new-session)" >&2
-      # Clear any existing session file
-      rm -f "$session_state_path"
-    else
-      echo "Monitor starting new session" >&2
-    fi
+    echo "Error: python3 or python is required for monitor mode" >&2
+    exit 1
   fi
 
-  echo "Monitoring ${monitor_dir} using prompt ${prompt_path}" >&2
+  # Build monitor command
+  local -a monitor_cmd=("$python_bin" "$monitor_script")
+  monitor_cmd+=(--watch-path "$monitor_dir")
+  monitor_cmd+=(--workspace "$WORKSPACE_PATH")
+  monitor_cmd+=(--codex-script "$0")
+  monitor_cmd+=(--monitor-prompt-file "$MONITOR_PROMPT_FILE")
 
-  declare -A seen_map=()
+  if [[ "$NEW_SESSION" == "true" ]]; then
+    monitor_cmd+=(--new-session)
+  fi
 
-  while true; do
-    # Only read full prompt template for first event (new session)
-    # For subsequent events, just send file details
-    local prompt=""
-    if [[ -z "$monitor_session_id" ]]; then
-      # First event - need full prompt template
-      if [[ ! -f "$prompt_path" ]]; then
-        echo "Prompt file $prompt_path missing; waiting..." >&2
-        sleep 5
-        continue
-      fi
-      prompt=$(cat "$prompt_path" 2>/dev/null)
-      if [[ -z "$prompt" ]]; then
-        sleep 5
-        continue
-      fi
-    fi
+  if [[ "$JSON_MODE" == "legacy" ]]; then
+    monitor_cmd+=(--json-mode legacy)
+  elif [[ "$JSON_MODE" == "experimental" ]]; then
+    monitor_cmd+=(--json-mode experimental)
+  fi
 
-    while IFS= read -r -d '' file; do
-      local key="$file"
-      local stamp
-      stamp=$(stat -c %Y "$file" 2>/dev/null)
-      local prev="${seen_map[$key]:-}"
-      if [[ -n "$prev" && "$prev" -eq "$stamp" ]]; then
-        continue
-      fi
-      echo "[monitor] Change detected: $file" >&2
-      seen_map[$key]=$stamp
+  if [[ ${#CODEX_ARGS[@]} -gt 0 ]]; then
+    for arg in "${CODEX_ARGS[@]}"; do
+      monitor_cmd+=(--codex-arg "$arg")
+    done
+  fi
 
-      # Build payload based on whether this is first event or resuming
-      local payload
-      if [[ -n "$monitor_session_id" ]]; then
-        # Resuming session - send only event details
-        local timestamp
-        timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S%z")
-        payload="FILE EVENT DETECTED
+  if [[ ${#EXEC_ARGS[@]} -gt 0 ]]; then
+    for arg in "${EXEC_ARGS[@]}"; do
+      monitor_cmd+=(--exec-arg "$arg")
+    done
+  fi
 
-Timestamp: $timestamp
-Action: Modified
-File: $(basename "$file")
-Full Path: $file
-Container Path: /workspace/$(realpath --relative-to="$WORKSPACE_PATH" "$file")"
-      else
-        # First event - send full prompt with file details
-        payload="$prompt
-
-File: $file"
-      fi
-
-      local -a cmd=("${SCRIPT_DIR}/codex_container.sh" --exec --workspace "$WORKSPACE_PATH")
-      if [[ "$JSON_MODE" == "legacy" ]]; then
-        cmd+=(--json)
-      elif [[ "$JSON_MODE" == "experimental" ]]; then
-        cmd+=(--json-e)
-      fi
-
-      # Add session resume if we have a persisted session
-      if [[ -n "$monitor_session_id" ]]; then
-        cmd+=(--session-id "$monitor_session_id")
-      fi
-
-      if [[ ${#CODEX_ARGS[@]} -gt 0 ]]; then
-        for arg in "${CODEX_ARGS[@]}"; do
-          cmd+=(--codex-arg "$arg")
-        done
-      fi
-      if [[ ${#EXEC_ARGS[@]} -gt 0 ]]; then
-        for arg in "${EXEC_ARGS[@]}"; do
-          cmd+=(--exec-arg "$arg")
-        done
-      fi
-      cmd+=(--)
-      cmd+=("$payload")
-
-      # Execute and capture session if first run
-      if [[ -z "$monitor_session_id" ]]; then
-        local output
-        output=$("${cmd[@]}" 2>&1)
-        echo "$output"
-
-        # Try to extract session ID from output
-        local new_session
-        new_session=$(echo "$output" | grep -oP 'session_[a-zA-Z0-9_]+' | head -1)
-        if [[ -n "$new_session" ]]; then
-          monitor_session_id="$new_session"
-          set_monitor_session "$session_state_path" "$monitor_session_id"
-          echo "Monitor persisted session: $monitor_session_id" >&2
-        fi
-      else
-        "${cmd[@]}"
-      fi
-    done < <(find "$monitor_dir" -maxdepth 1 -type f -print0)
-
-    sleep 5
-  done
+  # Execute Python monitor
+  exec "${monitor_cmd[@]}"
 }
 
 docker_build_image() {
