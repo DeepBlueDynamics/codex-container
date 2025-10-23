@@ -88,13 +88,19 @@ def _upload_file(service_url: str, file_path: Path, job_id: str, model: str) -> 
 
 def _check_status(service_url: str, job_id: str) -> Dict:
     """Check transcription status."""
+    import urllib.error
     status_url = urljoin(service_url, f"/status/{job_id}")
     req = _urlrequest.Request(status_url, headers={"User-Agent": "transcribe-wav-mcp/1.0"})
 
-    with _urlrequest.urlopen(req, timeout=10) as resp:
-        if resp.status < 200 or resp.status >= 300:
-            raise RuntimeError(f"Status check failed with HTTP {resp.status}")
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with _urlrequest.urlopen(req, timeout=10) as resp:
+            if resp.status < 200 or resp.status >= 300:
+                raise RuntimeError(f"Status check failed with HTTP {resp.status}")
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        # Read error response body for debugging
+        error_body = e.read().decode("utf-8") if e.fp else "No error body"
+        raise RuntimeError(f"HTTP Error {e.code}: {e.reason} - {error_body}")
 
 
 def _download_transcript(service_url: str, job_id: str) -> str:
@@ -254,16 +260,35 @@ async def check_transcription_status(
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
 
-            transcript_file = output_path / f"{job_id}.txt"
-            transcript_file.write_text(transcript_text)
-            print(f"✅ Transcript saved to {transcript_file}", file=sys.stderr, flush=True)
-
-            # Remove .transcribing.txt status file if exists
+            # Find the corresponding .transcribing.txt file to get original filename
+            transcript_filename = None
+            transcribing_file = None
             for status_file in output_path.glob("*.transcribing.txt"):
                 status_content = status_file.read_text()
                 if job_id in status_content:
-                    print(f"  Removing status file: {status_file}", file=sys.stderr, flush=True)
-                    status_file.unlink()
+                    # Extract original filename from status file
+                    # Status file is named {original_stem}.transcribing.txt
+                    # Remove .transcribing.txt extension to get original base name
+                    original_name = status_file.name.replace(".transcribing.txt", "")
+                    transcript_filename = original_name + ".txt"
+                    transcribing_file = status_file
+                    print(f"  Found status file: {status_file}", file=sys.stderr, flush=True)
+                    print(f"  Will save as: {transcript_filename}", file=sys.stderr, flush=True)
+                    break
+
+            # Fallback: use job_id if we can't find the original filename
+            if not transcript_filename:
+                transcript_filename = f"{job_id}.txt"
+                print(f"  Warning: Could not find original filename, using job_id: {transcript_filename}", file=sys.stderr, flush=True)
+
+            transcript_file = output_path / transcript_filename
+            transcript_file.write_text(transcript_text)
+            print(f"✅ Transcript saved to {transcript_file}", file=sys.stderr, flush=True)
+
+            # Remove .transcribing.txt status file
+            if transcribing_file and transcribing_file.exists():
+                print(f"  Removing status file: {transcribing_file}", file=sys.stderr, flush=True)
+                transcribing_file.unlink()
 
             result["transcript"] = transcript_text
             result["transcript_file"] = str(transcript_file)
