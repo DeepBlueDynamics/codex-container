@@ -12,7 +12,12 @@
       "Bash(pwsh:*)",
       "Bash(git push)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker network:*)",
+      "Bash(docker network inspect:*)",
+      "Read(//c/Users/kord/Code/gnosis/vhf_monitor/recordings//**)",
+      "Bash(git mv:*)"
     ],
     "deny": [],
     "ask": []
