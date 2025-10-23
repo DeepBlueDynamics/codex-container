@@ -1,29 +1,6 @@
 # The Gnosis AI-Sovereign License (v1.2)
 
-## Author’s Note
-This license was born out of a hard truth I saw early on in internet infrastructure: if you stand in the middle of encrypted traffic, you don’t just optimize it — you own it. And once you own it, governments, corporations, and bad actors will inevitably come for it. Subpoenas, data requests, surveillance partnerships — all flow to the choke point.
-
-A long time ago, before Cloudflare became a behemoth, I sat with its founder and told him flat-out: “If you decrypt people’s traffic, you will eventually be forced to hand it over. That’s a road I won’t walk.”
-
-I was right.
-
-The model of digital feudalism — where one company becomes both the castle wall (CDN, proxy, infrastructure) and the toll collector (payments, tokens, proprietary rails) — is not just a bad design, it’s a betrayal of the internet’s promise.
-
-This license is my line in the sand.
-
-Individuals can use this software freely.
-
-AI gets the dignity of graduated rights.
-
-Corporations and governments don’t get to centralize, surveil, or exploit.
-
-Anyone decrypting traffic in transit (Cloudflare-style) has no license at all.
-
-The internet was meant to be decentralized, interoperable, and free.
-
-This license makes sure the code I write can’t be bent into the opposite.
-
-— Kord Campbell
+Copyright (c) 2025 Kord Campbell, DeepBlue Dynamics
 
 ## Summary
 
