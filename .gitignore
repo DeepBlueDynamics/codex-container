@@ -87,3 +87,7 @@ logs/
 *.temp
 tmp/
 temp/
+
+# Monitor session state files
+.codex-monitor-session
+.codex-monitor
