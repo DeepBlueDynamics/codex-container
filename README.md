@@ -58,7 +58,7 @@ The container supports three distinct ways to interact with Codex, each suited f
 └──────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
-│ INTERACTIVE MODE - Chat session or event-driven agent           │
+│ INTERACTIVE MODE - Chat session or event-driven agent            │
 ├──────────────────────────────────────────────────────────────────┤
 │ (no arguments)                    # Interactive chat session     │
 │ --monitor --watch-path ./recordings  # Event-driven agent        │
