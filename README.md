@@ -15,7 +15,7 @@ These scripts launch the OpenAI Codex CLI inside a reproducible Docker container
 The *codex-container* application supports three distinct ways to interact with the system, each suited for different workflows:
 
 ### 1. TERMINAL MODE (Exec)
-Interactive or non-interactive xecution for quick queries and commands.
+Interactive or non-interactive execution for quick queries and commands.
 
 ```bash
 codex-container --exec "create a new README.md based off PLAN.md" # Single command exits with session ID
@@ -50,7 +50,7 @@ codex-container --serve --gateway-port 4000
 - Multi-user scenarios
 - Language-agnostic clients
 
-### 3. MONITOR MODE
+### 3. MONITOR MODE (Monitor)
 Chat sessions or event-driven autonomous agents.
 
 ```bash
@@ -62,7 +62,6 @@ codex-container --monitor --watch-path ./recordings  # Event-driven agent
 **Template Variables:** `{{file}}`, `{{path}}`, `{{timestamp}}`, etc.
 
 **Use Cases:**
-- Interactive chat for exploration and development
 - VHF monitor (new recordings → transcribe → analyze)
 - Code watchers (new commits → review → report)
 - Log monitoring (errors → investigate → alert)
