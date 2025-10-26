@@ -54,7 +54,7 @@ RUN mkdir -p /usr/local/share/npm-global \
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH="${PATH}:/usr/local/share/npm-global/bin"
 
-ARG CODEX_CLI_VERSION=0.47.0
+ARG CODEX_CLI_VERSION=0.50.0
 ARG BAML_CLI_VERSION=0.211.2
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} \
   && npm cache clean --force \
@@ -79,7 +79,8 @@ RUN python3 -m venv "$MCP_VENV" \
     google-api-python-client \
     baml-py \
     pydantic \
-    faster-whisper
+    faster-whisper \
+    watchdog
 ENV PATH="$MCP_VENV/bin:$PATH"
 ENV VIRTUAL_ENV="$MCP_VENV"
 
@@ -119,6 +120,12 @@ RUN sed -i 's/\r$//' /usr/local/bin/codex_login.sh \
 COPY scripts/codex_gateway.js /usr/local/bin/
 RUN sed -i 's/\r$//' /usr/local/bin/codex_gateway.js \
   && chmod 555 /usr/local/bin/codex_gateway.js
+
+# Copy monitor script for container-based monitoring
+RUN mkdir -p /opt/scripts
+COPY scripts/monitor.py /opt/scripts/
+RUN sed -i 's/\r$//' /opt/scripts/monitor.py \
+  && chmod 555 /opt/scripts/monitor.py
 
 # Copy MCP source files into the image
 COPY MCP/ /opt/mcp-source/

@@ -30,6 +30,7 @@ JOBS = {}
 
 # Model loading
 MODEL = None
+GPU_AVAILABLE = False
 
 
 def utc_now():
@@ -39,9 +40,10 @@ def utc_now():
 
 async def load_model():
     """Load Whisper model on startup."""
-    global MODEL
+    global MODEL, GPU_AVAILABLE
     import torch
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    GPU_AVAILABLE = torch.cuda.is_available()
+    device = "cuda" if GPU_AVAILABLE else "cpu"
     print(f"🔄 Loading Whisper model: {WHISPER_MODEL} on {device.upper()}", file=sys.stderr, flush=True)
     MODEL = whisper.load_model(WHISPER_MODEL, device=device)
     print(f"✅ Model {WHISPER_MODEL} loaded on {device.upper()} and ready", file=sys.stderr, flush=True)
@@ -190,6 +192,7 @@ async def handle_health(request):
         "status": "ok",
         "model_loaded": MODEL is not None,
         "model_name": WHISPER_MODEL,
+        "gpu_available": GPU_AVAILABLE,
         "queue": {
             "queued": queued_count,
             "processing": processing_count,
@@ -279,15 +282,15 @@ async def process_queue():
                             max_amp = max(amplitudes) if amplitudes else 1
                             normalized = [int((amp / max_amp) * 8) if max_amp > 0 else 0 for amp in amplitudes]
 
-                            # Create vertical bar chart using block characters
-                            bars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█', '█']
+                            # Create vertical bar chart using ASCII characters
+                            bars = [' ', '.', ':', '=', '*', '%', '$', '#', '#']
                             waveform_viz = "".join([bars[n] for n in normalized])
                         else:
-                            waveform_viz = "▁" * viz_width
+                            waveform_viz = " " * viz_width
 
                 except Exception as e:
                     print(f"⚠️  Waveform visualization error: {e}", file=sys.stderr, flush=True)
-                    waveform_viz = "▁" * 60
+                    waveform_viz = " " * 60
 
                 # Create speech activity visualization from segments
                 if segments:
@@ -302,9 +305,9 @@ async def process_queue():
                         start_pos = int(start_pct * viz_width)
                         end_pos = int(end_pct * viz_width)
 
-                        # Mark speech activity with █
+                        # Mark speech activity with #
                         for i in range(start_pos, min(end_pos + 1, viz_width)):
-                            viz_chars[i] = "█"
+                            viz_chars[i] = "#"
 
                     speech_viz = "".join(viz_chars)
                 else:

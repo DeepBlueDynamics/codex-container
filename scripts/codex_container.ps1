@@ -28,6 +28,9 @@
 .PARAMETER Monitor
     Watch directory for file changes and trigger Codex with MONITOR.md template
 
+.PARAMETER UseWatchdog
+    Use Python watchdog for event-driven monitoring (faster, more efficient than default FileSystemWatcher)
+
 .PARAMETER ListSessions
     Show recent sessions with copyable resume commands, then exit
 
@@ -82,12 +85,18 @@
     codex-container -Monitor -WatchPath vhf_monitor
     Monitor directory for changes
 
+.EXAMPLE
+    codex-container -Monitor -WatchPath vhf_monitor -UseWatchdog
+    Monitor directory using Python watchdog (event-driven, more efficient)
+
 .LINK
     https://github.com/DeepBlueDynamics/codex-container
 #>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
     [switch]$Install,
+    [Alias('Build')]
+    [switch]$Rebuild,
     [switch]$Login,
     [switch]$Run,
     [switch]$Serve,
@@ -95,6 +104,7 @@ param(
     [string]$WatchPath,
     [switch]$Monitor,
     [string]$MonitorPrompt = 'MONITOR.md',
+    [switch]$UseWatchdog,
     [switch]$NewSession,
     [string[]]$Exec,
     [switch]$Shell,
@@ -661,12 +671,14 @@ function Invoke-CodexMonitor {
         [string]$WatchPath,
         [string]$PromptFile,
         [switch]$JsonOutput,
-        [string[]]$CodexArgs
+        [string[]]$CodexArgs,
+        [switch]$UseWatchdog
     )
 
     Write-Host "DEBUG: Invoke-CodexMonitor called" -ForegroundColor Yellow
     Write-Host "DEBUG: WatchPath = '$WatchPath'" -ForegroundColor Yellow
     Write-Host "DEBUG: PromptFile = '$PromptFile'" -ForegroundColor Yellow
+    Write-Host "DEBUG: UseWatchdog = $UseWatchdog" -ForegroundColor Yellow
 
     if (-not $WatchPath) {
         $WatchPath = $Context.WorkspacePath
@@ -677,10 +689,64 @@ function Invoke-CodexMonitor {
     }
 
     $resolvedWatch = (Resolve-Path -LiteralPath $WatchPath).ProviderPath
+
+    # Auto-detect prompt file if not specified
     if (-not $PromptFile) {
-        $PromptFile = 'MONITOR.md'
+        # First check for MONITOR.md
+        $defaultPrompt = Join-Path $resolvedWatch 'MONITOR.md'
+        if (Test-Path $defaultPrompt) {
+            $PromptFile = 'MONITOR.md'
+        } else {
+            # Look for MONITOR_*.md pattern
+            $monitorFiles = Get-ChildItem -Path $resolvedWatch -Filter 'MONITOR_*.md' -File -ErrorAction SilentlyContinue
+            if ($monitorFiles -and $monitorFiles.Count -gt 0) {
+                $PromptFile = $monitorFiles[0].Name
+                Write-Host "Auto-detected prompt file: $PromptFile" -ForegroundColor Cyan
+            } else {
+                $PromptFile = 'MONITOR.md'  # Fallback, will error later if missing
+            }
+        }
     }
     $promptPath = Join-Path $resolvedWatch $PromptFile
+
+    # Use Python watchdog monitor running inside container
+    if ($UseWatchdog) {
+        Write-Host "🐍 Using Python watchdog monitor (event-driven, running in container)" -ForegroundColor Cyan
+
+        # Calculate relative path from workspace to watch directory
+        $watchRelative = $resolvedWatch.Substring($Context.WorkspacePath.Length).TrimStart('\', '/')
+        $containerWatchPath = if ($watchRelative) { "/workspace/$($watchRelative.Replace('\', '/'))" } else { "/workspace" }
+
+        Write-Host "   Watch path (host): $resolvedWatch" -ForegroundColor DarkGray
+        Write-Host "   Watch path (container): $containerWatchPath" -ForegroundColor DarkGray
+        Write-Host "   Prompt file: $PromptFile" -ForegroundColor DarkGray
+
+        # Build monitor command to run inside container
+        $monitorCmd = @(
+            "python3", "/opt/scripts/monitor.py",
+            "--watch-path", $containerWatchPath,
+            "--workspace", "/workspace",
+            "--codex-script", "codex",
+            "--monitor-prompt-file", $PromptFile
+        )
+
+        if ($Context.NewSession) {
+            $monitorCmd += "--new-session"
+        }
+
+        if ($JsonOutput) {
+            $jsonMode = if ($Context.JsonE) { "experimental" } else { "legacy" }
+            $monitorCmd += @("--json-mode", $jsonMode)
+        }
+
+        # Launch container with monitor running inside
+        Write-Host "Starting monitor in container..." -ForegroundColor Cyan
+        Invoke-CodexContainer -Context $Context -CommandArgs $monitorCmd
+        return
+    }
+
+    # Fall back to PowerShell FileSystemWatcher monitor
+    Write-Host "📁 Using PowerShell FileSystemWatcher monitor (polling-based)" -ForegroundColor Cyan
 
     $logPath = Join-Path $resolvedWatch 'codex-monitor.log'
     $sessionStatePath = Join-Path $resolvedWatch '.codex-monitor-session'
@@ -865,26 +931,21 @@ function Invoke-CodexMonitor {
 
             $lastProcessed[$fullPath] = $now
 
-            # Only read full prompt template for first event (new session)
-            # For subsequent events, just send file details
-            $promptText = ""
-            if (-not $monitorSessionId) {
-                # First event - need full prompt template
-                if (-not (Test-Path $promptPath)) {
-                    $msg = "Prompt file missing; skipping event for ${fullPath}"
-                    Write-Host $msg -ForegroundColor Yellow
-                    Write-MonitorLog $msg
-                    continue
-                }
+            # Always read full prompt template - agent needs full instructions every time
+            if (-not (Test-Path $promptPath)) {
+                $msg = "Prompt file missing; skipping event for ${fullPath}"
+                Write-Host $msg -ForegroundColor Yellow
+                Write-MonitorLog $msg
+                continue
+            }
 
-                try {
-                    $promptText = Get-Content -LiteralPath $promptPath -Raw -ErrorAction Stop
-                } catch {
-                    $msg = "Failed reading prompt file ${promptPath}: $($_.Exception.Message)"
-                    Write-Host $msg -ForegroundColor Red
-                    Write-MonitorLog $msg
-                    continue
-                }
+            try {
+                $promptText = Get-Content -LiteralPath $promptPath -Raw -ErrorAction Stop
+            } catch {
+                $msg = "Failed reading prompt file ${promptPath}: $($_.Exception.Message)"
+                Write-Host $msg -ForegroundColor Red
+                Write-MonitorLog $msg
+                continue
             }
 
             $changeType = $event.SourceEventArgs.ChangeType.ToString()
@@ -948,25 +1009,9 @@ function Invoke-CodexMonitor {
                 'old_dir' = $oldDirectoryRelative
             }
 
-            # Build payload based on whether this is first event or resuming
-            if ($monitorSessionId) {
-                # Resuming session - send only event details
-                $payload = @"
-FILE EVENT DETECTED
-
-Timestamp: $($values['timestamp'])
-Action: $($values['action'])
-File: $($values['relative_path'])
-Full Path: $($values['full_path'])
-Container Path: $($values['container_path'])
-"@
-                if ($oldFullPath) {
-                    $payload += "`nPrevious Path: $($values['old_relative_path'])"
-                }
-            } else {
-                # First event - send full prompt with template
-                $payload = Format-MonitorPrompt -Template $promptText.TrimEnd() -Values $values
-            }
+            # Build payload - ALWAYS send full template with substitution
+            # Agent needs the full instructions every time to remember to check for duplicates
+            $payload = Format-MonitorPrompt -Template $promptText.TrimEnd() -Values $values
 
             # If monitoring a subdirectory, fix paths for correct container mapping
             if ($resolvedWatch -ne $Context.WorkspacePath) {
@@ -1176,6 +1221,7 @@ function Ensure-CodexAuthentication {
 
 $actions = @()
 if ($Install) { $actions += 'Install' }
+if ($Rebuild) { $actions += 'Install' }  # -Build/-Rebuild is alias for Install
 if ($Login) { $actions += 'Login' }
 if ($Shell) { $actions += 'Shell' }
 if ($Exec) { $actions += 'Exec' }
@@ -1189,7 +1235,7 @@ if (-not $actions) {
 }
 
 if ($actions.Count -gt 1) {
-    throw "Specify only one primary action (choose one of -Install, -Login, -Run, -Exec, -Shell, -Serve, -Monitor, -ListSessions)."
+    throw "Specify only one primary action (choose one of -Install, -Build, -Login, -Run, -Exec, -Shell, -Serve, -Monitor, -ListSessions)."
 }
 
 $action = $actions[0]
@@ -1241,7 +1287,7 @@ switch ($action) {
     'Monitor' {
         $context.NewSession = $NewSession
         Ensure-CodexAuthentication -Context $context -Silent:($Json -or $JsonE)
-        Invoke-CodexMonitor -Context $context -WatchPath $WatchPath -PromptFile $MonitorPrompt -JsonOutput:($Json -or $JsonE) -CodexArgs $CodexArgs
+        Invoke-CodexMonitor -Context $context -WatchPath $WatchPath -PromptFile $MonitorPrompt -JsonOutput:($Json -or $JsonE) -CodexArgs $CodexArgs -UseWatchdog:$UseWatchdog
     }
     'ListSessions' {
         Show-RecentSessions -Context $context -Limit 10

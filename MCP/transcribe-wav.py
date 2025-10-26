@@ -114,6 +114,20 @@ def _download_transcript(service_url: str, job_id: str) -> str:
         return resp.read().decode("utf-8")
 
 
+def _check_health(service_url: str) -> Dict:
+    """Check transcription service health and GPU availability."""
+    health_url = urljoin(service_url, "/health")
+    req = _urlrequest.Request(health_url, headers={"User-Agent": "transcribe-wav-mcp/1.0"})
+
+    try:
+        with _urlrequest.urlopen(req, timeout=5) as resp:
+            if resp.status < 200 or resp.status >= 300:
+                return {"gpu_available": False}
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return {"gpu_available": False}
+
+
 @mcp.tool()
 async def transcribe_wav(
     filename: str,
@@ -164,6 +178,11 @@ async def transcribe_wav(
         job_id = _generate_job_id()
         print(f"  Job ID: {job_id}", file=sys.stderr, flush=True)
 
+        # Check if service has GPU (for polling recommendation)
+        health_info = _check_health(svc_url)
+        has_gpu = health_info.get("gpu_available", False)
+        print(f"  Service GPU available: {has_gpu}", file=sys.stderr, flush=True)
+
         # Upload file
         print(f"📤 Uploading {file_path.name} to transcription service...", file=sys.stderr, flush=True)
         upload_response = _upload_file(svc_url, file_path, job_id, model)
@@ -171,6 +190,16 @@ async def transcribe_wav(
 
         # Create local .transcribing.txt status file
         status_file = output_path / f"{file_path.stem}.transcribing.txt"
+
+        # Recommend immediate polling if GPU available (fast processing)
+        polling_suggestion = (
+            "GPU acceleration detected - transcription will complete in seconds.\n"
+            "Grab a quick cup of water at the cooler and come back for the message."
+        ) if has_gpu else (
+            "CPU processing - transcription may take several minutes.\n"
+            "Use check_transcription_status(job_id=\"{job_id}\") to poll for completion."
+        )
+
         status_content = f"""TRANSCRIPTION IN PROGRESS
 
 Job ID: {job_id}
@@ -178,11 +207,16 @@ Source: {filename}
 Model: {model}
 Service: {svc_url}
 Status: Queued at transcription service
+GPU Acceleration: {"Yes" if has_gpu else "No"}
 
-Use check_transcription_status(job_id="{job_id}") to poll for completion.
+{polling_suggestion}
 """
         status_file.write_text(status_content)
         print(f"  Created status file: {status_file}", file=sys.stderr, flush=True)
+
+        message = f"WAV file uploaded to transcription service. Job ID: {job_id}"
+        if has_gpu:
+            message += " (GPU acceleration available - should complete in seconds)"
 
         return {
             "success": True,
@@ -191,7 +225,9 @@ Use check_transcription_status(job_id="{job_id}") to poll for completion.
             "file": str(file_path),
             "status_file": str(status_file),
             "service_url": svc_url,
-            "message": f"WAV file uploaded to transcription service. Job ID: {job_id}"
+            "gpu_available": has_gpu,
+            "message": message,
+            "recommendation": "Grab a quick cup of water at the cooler and come back for the message" if has_gpu else "Poll with check_transcription_status() in 1-2 minutes"
         }
 
     except Exception as e:
