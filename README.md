@@ -10,88 +10,72 @@
 
 These scripts launch the OpenAI Codex CLI inside a reproducible Docker container. Drop either script somewhere on your `PATH`, change into any project, and the helper mounts the current working directory alongside a persistent Codex home so credentials survive between runs.
 
-## Three Interaction Modes (TRI)
+## Three Interaction Modes
 
-The container supports three distinct ways to interact with Codex, each suited for different workflows:
+The gnosis-radio application supports three distinct ways to interact with the system, each suited for different workflows:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     CODEX CONTAINER TRI                         │
-│                  (Three Interaction Modes)                      │
-└─────────────────────────────────────────────────────────────────┘
+### 1. TERMINAL MODE (Exec)
+One-shot execution for quick queries and commands.
 
-┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│  1. TERMINAL     │  │  2. REMOTE API   │  │  3. INTERACTIVE  │
-│     (Exec)       │  │    (Serve)       │  │    (Monitor)     │
-└──────────────────┘  └──────────────────┘  └──────────────────┘
-
-┌──────────────────────────────────────────────────────────────────┐
-│ TERMINAL MODE - One-shot execution                               │
-├──────────────────────────────────────────────────────────────────┤
-│ --exec "hello world"          # Single command                   │
-│ --exec "status" --session-id abc12  # Resume conversation        │
-│                                                                  │
-│ Use Cases:                                                       │
-│ • Quick queries and commands                                     │
-│ • Long-running conversations via session ID                      │
-│ • Scripted automation                                            │
-│ • CI/CD integration                                              │
-└──────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────┐
-│ REMOTE API MODE - HTTP gateway                                   │
-├──────────────────────────────────────────────────────────────────┤
-│ --serve --gateway-port 4000   # Start HTTP server                │
-│                                                                  │
-│ POST /completion                                                 │
-│ {                                                                │
-│   "prompt": "Analyze this code",                                 │
-│   "model": "opus-4",                                             │
-│   "workspace": "/workspace"                                      │
-│ }                                                                │
-│                                                                  │
-│ Use Cases:                                                       │
-│ • Webwright integration                                          │
-│ • External tool access to Codex                                  │
-│ • Multi-user scenarios                                           │
-│ • Language-agnostic clients                                      │
-└──────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────┐
-│ INTERACTIVE MODE - Chat session or event-driven agent            │
-├──────────────────────────────────────────────────────────────────┤
-│ (no arguments)                    # Interactive chat session     │
-│ --monitor --watch-path ./recordings  # Event-driven agent        │
-│                                                                  │
-│ Event-driven: File changes → Template substitution → Codex       │
-│                                                                  │
-│ Template Variables: {{file}}, {{path}}, {{timestamp}}, etc.      │
-│                                                                  │
-│ Use Cases:                                                       │
-│ • Interactive chat for exploration and development               │
-│ • Autonomous agents responding to events                         │
-│ • VHF monitor (new recordings → transcribe → analyze)            │
-│ • Code watchers (new commits → review → report)                  │
-│ • Log monitoring (errors → investigate → alert)                  │
-└──────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────┐
-│ MIXING MODES                                                     │
-├──────────────────────────────────────────────────────────────────┤
-│ • Run API server in background: --serve                          │
-│ • Test monitor behavior manually: --exec "$(cat MONITOR.md)"     │
-│ • Debug event-driven logic before enabling --monitor             │
-│ • Use session IDs to maintain context across exec calls          │
-└──────────────────────────────────────────────────────────────────┘
+```bash
+gnosis-radio --exec "status"                    # Single command
+gnosis-radio --exec "scan" --session-id abc12   # Resume conversation
 ```
 
-**Terminal (Exec)**: Direct command execution with optional session persistence for multi-turn conversations.
+**Use Cases:**
+- Quick queries and commands
+- Long-running conversations via session ID
+- Scripted automation
+- CI/CD integration
 
-**Remote API (Serve)**: HTTP gateway exposing Codex as a service for programmatic access.
+### 2. REMOTE API MODE (Serve)
+HTTP gateway for external tool access and multi-user scenarios.
 
-**Interactive**: Traditional chat session (no arguments) or event-driven agent (--monitor) that activates automatically based on file system changes.
+```bash
+gnosis-radio --serve --gateway-port 4000
+```
 
-All three modes share the same workspace, MCP tools, and configuration - they're just different interfaces to the same underlying Codex engine.
+**Endpoint:** `POST /completion`
+
+```json
+{
+  "prompt": "Analyze VHF traffic",
+  "model": "opus-4",
+  "workspace": "/workspace"
+}
+```
+
+**Use Cases:**
+- Integration with external tools (Webwright, etc.)
+- Multi-user scenarios
+- Language-agnostic clients
+- Remote access to gnosis-radio capabilities
+
+### 3. INTERACTIVE MODE (Monitor)
+Chat sessions or event-driven autonomous agents.
+
+```bash
+gnosis-radio                                    # Interactive chat
+gnosis-radio --monitor --watch-path ./recordings  # Event-driven agent
+```
+
+**Event Flow:** File changes → Template substitution → Processing
+
+**Template Variables:** `{{file}}`, `{{path}}`, `{{timestamp}}`, etc.
+
+**Use Cases:**
+- Interactive chat for exploration and development
+- VHF monitor (new recordings → transcribe → analyze)
+- Code watchers (new commits → review → report)
+- Log monitoring (errors → investigate → alert)
+- Autonomous agents responding to file system events
+
+### MIXING MODES
+
+- Run API server in background: `--serve`
+- Test monitor behavior manually: `--exec "$(cat MONITOR.md)"`
+- Debug event-driven logic before enabling `--monitor`
+- Use session IDs to maintain context across exec calls
 
 ## Event-Driven Agent Pattern
 
