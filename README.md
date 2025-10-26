@@ -8,18 +8,18 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Shell](https://img.shields.io/badge/shell-PowerShell%20%7C%20Bash-orange.svg)]()
 
-These scripts launch the OpenAI Codex CLI inside a reproducible Docker container. Drop either script somewhere on your `PATH`, change into any project, and the helper mounts the current working directory alongside a persistent Codex home so credentials survive between runs.
+These scripts launch the OpenAI Codex CLI inside a reproducible Docker container. The installable helper script will mount the current working directory alongside a persistent Codex home so credentials survive between runs.
 
 ## Three Interaction Modes
 
-The gnosis-radio application supports three distinct ways to interact with the system, each suited for different workflows:
+The *codex-container* application supports three distinct ways to interact with the system, each suited for different workflows:
 
 ### 1. TERMINAL MODE (Exec)
-One-shot execution for quick queries and commands.
+Interactive or non-interactive xecution for quick queries and commands.
 
 ```bash
-gnosis-radio --exec "status"                    # Single command
-gnosis-radio --exec "scan" --session-id abc12   # Resume conversation
+codex-container --exec "create a new README.md based off PLAN.md" # Single command exits with session ID
+codex-container --session-id abc12   # Resume interactive conversation with that ID
 ```
 
 **Use Cases:**
@@ -32,7 +32,7 @@ gnosis-radio --exec "scan" --session-id abc12   # Resume conversation
 HTTP gateway for external tool access and multi-user scenarios.
 
 ```bash
-gnosis-radio --serve --gateway-port 4000
+codex-container --serve --gateway-port 4000
 ```
 
 **Endpoint:** `POST /completion`
@@ -46,17 +46,15 @@ gnosis-radio --serve --gateway-port 4000
 ```
 
 **Use Cases:**
-- Integration with external tools (Webwright, etc.)
+- Integration with external tools
 - Multi-user scenarios
 - Language-agnostic clients
-- Remote access to gnosis-radio capabilities
 
-### 3. INTERACTIVE MODE (Monitor)
+### 3. MONITOR MODE
 Chat sessions or event-driven autonomous agents.
 
 ```bash
-gnosis-radio                                    # Interactive chat
-gnosis-radio --monitor --watch-path ./recordings  # Event-driven agent
+codex-container --monitor --watch-path ./recordings  # Event-driven agent
 ```
 
 **Event Flow:** File changes → Template substitution → Processing
