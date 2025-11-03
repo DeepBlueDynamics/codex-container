@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -65,6 +66,12 @@ def main(argv: list[str]) -> int:
         table = tomlkit.table()
         table.add("command", python_cmd)
         table.add("args", ["-u", f"/opt/codex-home/mcp/{filename}"])
+        # Pass ANTHROPIC_API_KEY to MCP servers if set in environment
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        if anthropic_key:
+            env_table = tomlkit.table()
+            env_table.add("ANTHROPIC_API_KEY", anthropic_key)
+            table.add("env", env_table)
         mcp_table[name] = table
 
     config_path.write_text(tomlkit.dumps(doc), encoding="utf-8")

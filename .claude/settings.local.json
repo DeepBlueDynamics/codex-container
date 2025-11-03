@@ -21,7 +21,9 @@
       "Bash(curl:*)",
       "Bash(chmod:*)",
       "Bash(docker logs:*)",
-      "Bash(docker rm:*)"
+      "Bash(docker rm:*)",
+      "Bash(docker ps:*)",
+      "Bash(rm:*)"
     ],
     "deny": [],
     "ask": []

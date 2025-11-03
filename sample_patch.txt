@@ -1,0 +1,4 @@
+Line 1: original text
+Line 2: updated content
+Line 2.5: inserted line
+Line 3: final line

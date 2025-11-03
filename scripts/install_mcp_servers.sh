@@ -55,7 +55,7 @@ done
 mkdir -p "$MCP_DEST"
 
 # Copy files and collect basenames
-BASENAMES=()
+MANIFEST_ENTRIES=()
 COPIED=0
 for src in "${SORTED[@]}"; do
   base="$(basename "$src")"
@@ -68,13 +68,17 @@ for src in "${SORTED[@]}"; do
     log "Error: Failed to chmod ${base}"
     exit 1
   }
-  BASENAMES+=("$base")
   COPIED=$((COPIED + 1))
+  if [[ "$base" == _*.py ]]; then
+    log "Skipping ${base} in manifest (helper module)"
+    continue
+  fi
+  MANIFEST_ENTRIES+=("$base")
   log "Successfully copied ${base}"
 done
 
 # Create a manifest file with the list of MCP servers
-echo "${BASENAMES[*]}" > "${MCP_DEST}/.manifest"
+echo "${MANIFEST_ENTRIES[*]}" > "${MCP_DEST}/.manifest"
 
 log "Successfully prepared ${COPIED} MCP server(s) in ${MCP_DEST}"
 log "These will be installed to /opt/codex-home/mcp at container startup"

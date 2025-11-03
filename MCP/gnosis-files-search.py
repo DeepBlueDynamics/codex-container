@@ -12,6 +12,7 @@ import sys
 import os
 import re
 from pathlib import Path
+import fnmatch
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 
@@ -219,7 +220,10 @@ async def file_search_content(
     search_text: str,
     file_pattern: Optional[str] = "*.txt",
     case_sensitive: bool = False,
-    max_results: int = 50
+    max_results: int = 50,
+    include_hidden: bool = False,
+    skip_dirs: Optional[List[str]] = None,
+    max_file_size_mb: float = 5.0
 ) -> Dict[str, Any]:
     """Search for text content within files in a directory tree.
 
@@ -233,6 +237,9 @@ async def file_search_content(
         file_pattern: Glob pattern to filter which files to search (default: "*.txt"). Use "*" for all files.
         case_sensitive: If True, search is case-sensitive. If False, ignores case (default: False).
         max_results: Maximum number of matching files to return (default: 50).
+        include_hidden: Include hidden files/directories in the search (default: False).
+        skip_dirs: Optional list of directory names to skip (case-insensitive).
+        max_file_size_mb: Skip files larger than this size to avoid huge reads (default: 5 MB).
 
     Returns:
         Dictionary containing:
@@ -241,6 +248,8 @@ async def file_search_content(
         - search_text (str): Text that was searched for
         - file_pattern (str): Pattern used to filter files
         - case_sensitive (bool): Whether case-sensitive matching was used
+        - include_hidden (bool): Whether hidden files were included
+        - skipped_directories (list): Directories omitted during traversal
         - count (int): Number of files containing matches (up to max_results)
         - matches (list): List of match information dictionaries with:
             - file (str): Path to file containing match
@@ -270,50 +279,89 @@ async def file_search_content(
                 "error": f"Not a directory: {directory}"
             }
 
-        # Find files matching pattern
-        files = list(path.rglob(file_pattern))
+        # Prepare search parameters
+        search_target = search_text if case_sensitive else search_text.lower()
+        pattern = file_pattern or "*"
+        max_bytes = int(max_file_size_mb * 1024 * 1024) if max_file_size_mb > 0 else None
+        skip_set = {d.lower() for d in (skip_dirs or {
+            ".git", ".svn", ".hg", ".mcp-cache", "__pycache__", ".venv", "venv",
+            "node_modules", "dist", "build", "logs", "tmp", "temp", "target"
+        })}
 
-        # Search each file
-        search_lower = search_text.lower() if not case_sensitive else search_text
         matches = []
+        truncated = False
+        for root, dirs, files in os.walk(path):
+            # Apply directory filters in-place for os.walk efficiency
+            filtered_dirs = []
+            for d in dirs:
+                d_lower = d.lower()
+                if d_lower in skip_set:
+                    continue
+                if not include_hidden and d.startswith('.'):
+                    continue
+                filtered_dirs.append(d)
+            dirs[:] = filtered_dirs
 
-        for f in files:
-            if not f.is_file():
-                continue
+            for filename in files:
+                if len(matches) >= max_results:
+                    truncated = True
+                    break
 
-            try:
-                # Try to read as text
-                content = f.read_text(encoding='utf-8', errors='ignore')
-                lines = content.splitlines()
+                if not include_hidden and filename.startswith('.'):
+                    continue
 
-                # Search for text
-                matching_lines = []
-                for line_num, line in enumerate(lines, start=1):
-                    line_to_search = line if case_sensitive else line.lower()
-                    if search_lower in line_to_search:
-                        matching_lines.append((line_num, line))
+                file_path = Path(root) / filename
 
-                if matching_lines:
-                    first_line_num, first_line = matching_lines[0]
-                    preview = first_line.strip()[:200]
-                    if len(first_line.strip()) > 200:
-                        preview += "..."
+                if pattern not in ("*", None):
+                    try:
+                        relative_path = str(file_path.relative_to(path))
+                    except ValueError:
+                        relative_path = str(file_path)
 
-                    matches.append({
-                        "file": str(f),
-                        "line_count": len(matching_lines),
-                        "first_line_num": first_line_num,
-                        "preview": preview
-                    })
+                    if not (
+                        fnmatch.fnmatch(filename, pattern)
+                        or fnmatch.fnmatch(relative_path, pattern)
+                    ):
+                        continue
 
-                    if len(matches) >= max_results:
-                        break
+                try:
+                    if not file_path.is_file() or file_path.is_symlink():
+                        continue
 
-            except Exception:
-                # Skip files we can't read
-                continue
+                    if max_bytes is not None and file_path.stat().st_size > max_bytes:
+                        continue
 
-        truncated = len(matches) >= max_results
+                    with file_path.open("r", encoding="utf-8", errors="ignore") as fh:
+                        first_line_num = None
+                        first_line = ""
+                        match_count = 0
+
+                        for line_num, line in enumerate(fh, start=1):
+                            haystack = line if case_sensitive else line.lower()
+                            if search_target in haystack:
+                                match_count += 1
+                                if first_line_num is None:
+                                    first_line_num = line_num
+                                    first_line = line.strip()
+
+                        if match_count:
+                            preview = first_line[:200]
+                            if len(first_line) > 200:
+                                preview += "..."
+
+                            matches.append({
+                                "file": str(file_path),
+                                "line_count": match_count,
+                                "first_line_num": first_line_num or 0,
+                                "preview": preview
+                            })
+
+                except (UnicodeDecodeError, OSError):
+                    # Skip unreadable files
+                    continue
+
+            if truncated:
+                break
 
         return {
             "success": True,
@@ -321,6 +369,8 @@ async def file_search_content(
             "search_text": search_text,
             "file_pattern": file_pattern,
             "case_sensitive": case_sensitive,
+            "include_hidden": include_hidden,
+            "skipped_directories": sorted(skip_set),
             "count": len(matches),
             "matches": matches,
             "truncated": truncated

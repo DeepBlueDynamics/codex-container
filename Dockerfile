@@ -54,7 +54,7 @@ RUN mkdir -p /usr/local/share/npm-global \
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH="${PATH}:/usr/local/share/npm-global/bin"
 
-ARG CODEX_CLI_VERSION=0.50.0
+ARG CODEX_CLI_VERSION=0.53.0
 ARG BAML_CLI_VERSION=0.211.2
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} \
   && npm cache clean --force \
@@ -65,22 +65,14 @@ RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} \
 RUN npm install -g @boundaryml/baml@${BAML_CLI_VERSION} \
   && npm cache clean --force
 
+# Copy Python dependencies manifest for MCP environment early for layer reuse
+COPY requirements.txt /opt/mcp-requirements/requirements.txt
+
 # Install MCP server dependencies inside a virtual environment to avoid PEP-668 issues
 ENV MCP_VENV=/opt/mcp-venv
 RUN python3 -m venv "$MCP_VENV" \
   && "$MCP_VENV/bin/pip" install --no-cache-dir --upgrade pip \
-  && "$MCP_VENV/bin/pip" install --no-cache-dir \
-    aiohttp \
-    fastmcp \
-    tomlkit \
-    google-auth \
-    google-auth-oauthlib \
-    google-auth-httplib2 \
-    google-api-python-client \
-    baml-py \
-    pydantic \
-    faster-whisper \
-    watchdog
+  && "$MCP_VENV/bin/pip" install --no-cache-dir -r /opt/mcp-requirements/requirements.txt
 ENV PATH="$MCP_VENV/bin:$PATH"
 ENV VIRTUAL_ENV="$MCP_VENV"
 

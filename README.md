@@ -144,6 +144,19 @@ Container path: {{container_path}}
 
 Combine with MCP tools (e.g., `transcribe_pending_recordings` from `radio_control.py`) for end-to-end automation. The agent can call tools, read files, and take actions - all triggered by file system events.
 
+### Pipeline Orchestrator Tool
+
+The new `pipeline-orchestrator` MCP module lets Claude select and execute the best MCP tool for a task. Set `ANTHROPIC_API_KEY` (and optionally `ORCHESTRATOR_MODEL`) before invoking the tool methods:
+
+Expose it alongside the other MCP modules and call the registered tools:
+
+- `route_task` – Ask Claude to pick the best tool and parameters for the task.
+- `execute_routed_task` – Invoke the recommended tool with automatic fallback attempts.
+- `get_tool_manifest` – Inspect the discovered MCP tools and schema issues.
+- `explain_routing_decision` – Request an audit-friendly rationale from Claude.
+
+All endpoints require an Anthropic API key with access to Claude 3.5 (Sonnet by default). Set the key in `ANTHROPIC_API_KEY` before use.
+
 ## Codex Home Directory
 
 By default the container mounts a user-scoped directory as its `$HOME`:

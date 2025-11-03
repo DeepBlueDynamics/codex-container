@@ -246,6 +246,14 @@ function New-CodexContext {
         '-e', 'HF_HOME=/opt/whisper-cache'
     )
 
+    # Pass ANTHROPIC_API_KEY if set in host environment
+    if ($env:ANTHROPIC_API_KEY) {
+        Write-Host "  Passing ANTHROPIC_API_KEY to container ($($env:ANTHROPIC_API_KEY.Length) chars)" -ForegroundColor DarkGray
+        $runArgs += @('-e', "ANTHROPIC_API_KEY=$($env:ANTHROPIC_API_KEY)")
+    } else {
+        Write-Host "  ANTHROPIC_API_KEY not set in PowerShell environment" -ForegroundColor DarkGray
+    }
+
     if ($workspacePath) {
         # Docker's --mount parser on Windows prefers forward slashes. Convert drive roots like I:\\ to I:/.
         $normalized = $workspacePath.Replace('\\', '/')

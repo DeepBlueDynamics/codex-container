@@ -5,6 +5,7 @@ install_mcp_servers_runtime() {
   local mcp_source="/opt/mcp-installed"
   local mcp_dest="/opt/codex-home/mcp"
   local mcp_python="/opt/mcp-venv/bin/python3"
+  local mcp_requirements="/opt/mcp-requirements/requirements.txt"
   local config_dir="/opt/codex-home/.codex"
   local config_path="${config_dir}/config.toml"
   local helper_script="/opt/update_mcp_config.py"
@@ -41,6 +42,13 @@ install_mcp_servers_runtime() {
 
   mkdir -p "$mcp_dest"
   mkdir -p "$config_dir"
+
+  if [[ -f "$mcp_requirements" ]]; then
+    echo "[codex_entry] Ensuring MCP Python dependencies are installed..." >&2
+    if ! "$mcp_python" -m pip install --no-cache-dir -r "$mcp_requirements" >/dev/null 2>&1; then
+      echo "[codex_entry] Warning: MCP dependency installation failed" >&2
+    fi
+  fi
 
   # Remove previously installed servers that we manage
   if [[ -n "$current_manifest" ]]; then
@@ -143,6 +151,13 @@ fi
 
 ensure_codex_api_key
 ensure_baml_workspace
+
+# Log environment variable status for debugging
+if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+  echo "[codex_entry] ANTHROPIC_API_KEY is set (${#ANTHROPIC_API_KEY} chars)" >&2
+else
+  echo "[codex_entry] ANTHROPIC_API_KEY is NOT set" >&2
+fi
 
 # Note: Transcription daemon is now a separate persistent service container
 # Started via scripts/start_transcription_service.ps1
