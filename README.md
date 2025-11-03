@@ -4,11 +4,11 @@
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 [![GPU](https://img.shields.io/badge/GPU-CUDA%20enabled-brightgreen.svg)](vibe/TRANSCRIPTION_SERVICE.md)
-[![MCP Tools](https://img.shields.io/badge/MCP%20tools-112-green.svg)](MCP/)
+[![MCP Tools](https://img.shields.io/badge/MCP%20tools-128-green.svg)](MCP/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Shell](https://img.shields.io/badge/shell-PowerShell%20%7C%20Bash-orange.svg)]()
 
-These scripts launch the OpenAI Codex CLI inside a reproducible Docker container. The installable helper script will mount the current working directory alongside a persistent Codex home so credentials survive between runs.
+**Codex CLI in a box.** These scripts launch the OpenAI Codex CLI inside a reproducible Docker container with **128 specialized MCP tools**, GPU-accelerated transcription, event-driven monitoring, and AI-powered multi-agent orchestration. The installable helper mounts your workspace alongside persistent credentials, giving you a production-ready autonomous agent platform in minutes.
 
 ## Three Interaction Modes
 
@@ -144,18 +144,39 @@ Container path: {{container_path}}
 
 Combine with MCP tools (e.g., `transcribe_pending_recordings` from `radio_control.py`) for end-to-end automation. The agent can call tools, read files, and take actions - all triggered by file system events.
 
-### Pipeline Orchestrator Tool
+### AI-Powered Task Planning
 
-The new `pipeline-orchestrator` MCP module lets Claude select and execute the best MCP tool for a task. Set `ANTHROPIC_API_KEY` (and optionally `ORCHESTRATOR_MODEL`) before invoking the tool methods:
+The container includes **stateless instructor agents** that guide multi-step workflows without taking control away from Codex:
 
-Expose it alongside the other MCP modules and call the registered tools:
+**Pattern: Instructor → Execute → Report → Repeat**
 
-- `route_task` – Ask Claude to pick the best tool and parameters for the task.
-- `execute_routed_task` – Invoke the recommended tool with automatic fallback attempts.
-- `get_tool_manifest` – Inspect the discovered MCP tools and schema issues.
-- `explain_routing_decision` – Request an audit-friendly rationale from Claude.
+```bash
+# Codex asks: "What should I do next?"
+get_next_step(task="Check weather and post to Slack")
+# → Returns: {"next_action": "call_tool", "tool_call": {"tool": "noaa-marine.get_forecast", ...}}
 
-All endpoints require an Anthropic API key with access to Claude 3.5 (Sonnet by default). Set the key in `ANTHROPIC_API_KEY` before use.
+# Codex executes the suggested tool, then asks again
+get_next_step(task="...", completed_steps=[{...forecast result...}])
+# → Returns: {"next_action": "call_tool", "tool_call": {"tool": "slackbot.post_message", ...}}
+
+# After final step
+get_next_step(task="...", completed_steps=[...])
+# → Returns: {"next_action": "complete", "summary": "Weather posted to Slack"}
+```
+
+**Key Tools:**
+- `get_next_step()` - Stateless planning: gives next action based on task + progress
+- `recommend_tool()` - Claude analyzes task and suggests which MCP tools to use
+- `check_with_agent()` - Consult Claude with specific role/expertise
+- `agent_to_agent()` - Have specialized agents consult each other
+
+**Why this pattern?**
+- **Codex stays in control** - It executes, the instructor just advises
+- **Fully testable** - Each step can be run manually
+- **Transparent** - User sees every decision and action
+- **Adaptable** - Plan adjusts based on actual results, not assumptions
+
+Set `ANTHROPIC_API_KEY` before use. The instructor agents use Claude 3.5 Sonnet by default.
 
 ## Codex Home Directory
 
@@ -321,19 +342,23 @@ codex-container/
 
 After running install, these servers will be available to Codex for tool execution.
 
-### Available MCP Tools (112 total)
+### Available MCP Tools (128 total)
 
-The container includes comprehensive tool coverage across multiple domains:
+The container provides **128 specialized tools** spanning file operations, web scraping, AI orchestration, maritime operations, and cloud integrations. Every tool uses the FastMCP framework for reliable async execution.
+
+**AI Orchestration & Agent Communication**
+- **Agent Chat**: `check_with_agent`, `chat_with_context`, `agent_to_agent` - Multi-agent collaboration with role specialization
+- **Task Planning**: `get_next_step` - Stateless instructor pattern for multi-step workflows
+- **Tool Discovery**: `recommend_tool`, `list_available_tools`, `list_anthropic_models` - Claude-powered tool selection
 
 **File Operations** (gnosis-files-*.py)
 - Basic: `file_read`, `file_write`, `file_stat`, `file_exists`, `file_delete`, `file_copy`, `file_move`
 - Advanced: `file_diff`, `file_backup`, `file_list_versions`, `file_restore`, `file_patch`
-- Search: `file_search`, `file_search_content`, `file_search_regex`
+- Search: `file_list`, `file_find_by_name`, `file_search_content`, `file_tree`, `file_find_recent`
 
 **Web Scraping & Search**
-- `crawl_url`, `crawl_batch`, `raw_html` - Web crawling with markdown conversion
-- `serpapi_search` - Google search results via SerpAPI
-- `product_search` - E-commerce product search
+- **Wraith Integration**: `crawl_url`, `crawl_batch`, `raw_html`, `set_auth_token`, `crawl_status` - Production web scraper with markdown conversion
+- **SerpAPI**: `google_search`, `google_search_markdown`, `set_serpapi_key`, `serpapi_status` - Google search with optional page fetching
 
 **Google Workspace Integration**
 - **Calendar**: `gcal_list_events`, `gcal_create_event`, `gcal_update_event`, `gcal_delete_event`, etc.
@@ -345,20 +370,24 @@ The container includes comprehensive tool coverage across multiple domains:
 - **Human Interaction**: `talk_to_human`, `report_to_supervisor`
 - **Notes**: `create_sticky_note`, `read_sticky_notes`, `update_sticky_note`, `delete_sticky_note`
 
-**Maritime & Radio Operations**
-- VHF radio control and monitoring
-- Radio network management
-- Audio transcription with Whisper AI
+**Maritime & Navigation**
+- **VHF Radio**: Full SDR control, monitoring, recording, and automated transcription
+- **NOAA Marine**: `get_marine_forecast`, `get_marine_warnings` - Official marine weather data
+- **OpenCPN Integration**: Chart plotting and navigation data access
+- **Radio Networks**: Frequency management and scanning coordination
 
 **Weather & Environment**
-- `get_current_weather`, `get_forecast`, `get_marine_weather` - Open-Meteo integration with marine conditions
+- **Open-Meteo**: `get_current_weather`, `get_forecast`, `get_marine_weather` - Global weather with marine conditions, wave heights, and wind data
 
-**Utilities**
-- Time operations and scheduling
-- Log file reading and monitoring
-- Background process coordination (`wait_at_water_cooler`, `take_cups`, `recycle_cups`)
+**Development & Monitoring**
+- **Logs**: `logs_tail`, `logs_list_files`, `logs_read_file`, `logs_status` - System log analysis with level filtering
+- **Monitor Status**: Real-time monitoring of active processes and file watchers
+- **Environment Testing**: `check_env`, `say_hello` - Anthropic API connectivity verification
 
-All MCP servers use the FastMCP framework for reliable, async tool execution.
+**Utilities & Coordination**
+- **Time**: Scheduling, timezone conversion, and temporal operations
+- **Water Cooler**: Background process coordination (`wait_at_water_cooler`, `take_cups`, `recycle_cups`)
+- **Transcription**: `transcribe_wav`, `check_transcription_status`, `download_transcript` - GPU-accelerated Whisper large-v3
 
 ## GPU-Accelerated Transcription Service
 
