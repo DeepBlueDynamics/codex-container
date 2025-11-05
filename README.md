@@ -10,6 +10,15 @@
 
 **Codex CLI in a box.** These scripts launch the OpenAI Codex CLI inside a reproducible Docker container with **135 specialized MCP tools**, GPU-accelerated transcription, event-driven monitoring, time-based scheduling, and AI-powered multi-agent orchestration. The installable helper mounts your workspace alongside persistent credentials, giving you a production-ready autonomous agent platform in minutes.
 
+## System Capabilities Snapshot
+
+- **Autonomous agent platform**: Runs Codex inside Docker with persistent session state, tool access, and GPU acceleration for Whisper transcription.
+- **Three operating modes**: Terminal (exec/resume), API gateway (`--serve`), and Monitor mode for event-driven automation.
+- **Unified event queue**: File changes and scheduled triggers flow through the same pipeline, keeping session context and writing `last_fired` metadata back to `.codex-monitor-triggers.json`.
+- **Self-scheduling agents**: Use `monitor-scheduler.*` tools to create interval, daily, or one-shot triggers (including immediate fire-on-reload patterns) directly from Codex conversations.
+- **135 MCP tools across domains**: File operations, web/search integrations, Google Workspace, maritime navigation, weather, task planners, agent-to-agent comms, and more.
+- **Observability & persistence**: Trigger configuration, session IDs, and logs live alongside your workspace so behavior survives restarts and remains audit-able.
+
 ## Three Interaction Modes
 
 The *codex-container* application supports three distinct ways to interact with the system, each suited for different workflows:
@@ -405,6 +414,15 @@ The container provides **135 specialized tools** spanning file operations, web s
 - **Time**: Scheduling, timezone conversion, and temporal operations
 - **Water Cooler**: Background process coordination (`wait_at_water_cooler`, `take_cups`, `recycle_cups`)
 - **Transcription**: `transcribe_wav`, `check_transcription_status`, `download_transcript` - GPU-accelerated Whisper large-v3
+
+## Key Differentiators
+
+- **Self-modifying agents**: Codex can create, update, or delete its own scheduled triggers (interval, daily, once, and fire-on-reload tags) by calling the `monitor-scheduler.*` tools mid-conversation.
+- **Hybrid event pipeline**: File system events and scheduled triggers share a single queue, so context is preserved regardless of how work is initiated.
+- **Session continuity**: `.codex-monitor-session` keeps chat state across container restarts, file events, and trigger executions.
+- **Template-driven prompts**: `MONITOR.md` (or `MONITOR_*.md`) supports moustache variables such as `{{trigger_title}}`, `{{now_local}}`, and `{{container_path}}` so responses adapt to each event.
+- **Persistent, auditable state**: `.codex-monitor-triggers.json` records schedules plus `last_fired` timestamps, and structured logs show trigger detection, execution, and queue activity.
+- **Domain-specialized tooling**: Maritime navigation, VHF radio automation, NOAA/Open-Meteo weather, and OpenCPN charting live alongside general developer tooling and cloud integrations.
 
 ## GPU-Accelerated Transcription Service
 
