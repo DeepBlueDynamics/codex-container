@@ -14,9 +14,23 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from monitor_scheduler import (
+    CONFIG_FILENAME,
+    TriggerRecord,
+    list_trigger_records,
+    load_config,
+    save_config,
+    render_template,
+)
 
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
@@ -40,7 +54,12 @@ class CodexFileHandler(FileSystemEventHandler):
             return False
 
         # Skip hidden files except our config files
-        if file_path.name.startswith(".") and file_path.name not in [".codex-monitor", ".codex-monitor-session"]:
+        if file_path.name == CONFIG_FILENAME:
+            print(f"[schedule] Trigger configuration changed: {file_path.name}", file=sys.stderr, flush=True)
+            self.monitor.reload_triggers()
+            return False
+
+        if file_path.name.startswith(".") and file_path.name not in [".codex-monitor", ".codex-monitor-session", CONFIG_FILENAME]:
             return False
 
         # Skip monitor log file
@@ -97,6 +116,7 @@ class CodexMonitor:
         self.codex_script = codex_script
         self.prompt_file = watch_path / monitor_prompt_file
         self.session_file = watch_path / ".codex-monitor-session"
+        self.trigger_config_path = watch_path / CONFIG_FILENAME
         self.new_session = new_session
         self.json_mode = json_mode
         self.codex_args = codex_args or []
@@ -107,17 +127,46 @@ class CodexMonitor:
 
         # Queue management for batch processing
         self.processing = False
-        self.pending_changes: list = []  # List of (file_path, action) tuples
+        self.pending_changes: List[Dict[str, Any]] = []
         self.max_concurrent = 1  # Only 1 Codex run at a time
+
+        # Scheduler state
+        self.triggers_lock = threading.Lock()
+        self.triggers: Dict[str, TriggerRecord] = {}
+        self.scheduler_event = threading.Event()
+        self.scheduler_stop = threading.Event()
+        self.scheduler_thread: Optional[threading.Thread] = None
 
     def queue_file(self, file_path: Path, action: str):
         """Add file to pending changes queue."""
-        # Add to pending list
-        change = (str(file_path), action, time.time())
+        change = {
+            "type": "file",
+            "path": str(file_path),
+            "action": action,
+            "timestamp": time.time(),
+        }
         self.pending_changes.append(change)
-        print(f"[queue] Added {file_path.name} to queue (total: {len(self.pending_changes)})", file=sys.stderr, flush=True)
+        print(f"[queue] Added file {file_path.name} (total: {len(self.pending_changes)})", file=sys.stderr, flush=True)
 
         # Try to process if not busy
+        if not self.processing:
+            self.process_pending()
+
+    def queue_trigger_event(self, trigger: TriggerRecord, fired_at: datetime):
+        """Queue a scheduled trigger execution."""
+
+        task = {
+            "type": "trigger",
+            "trigger": trigger,
+            "fired_at": fired_at.astimezone(timezone.utc).isoformat(),
+        }
+        self.pending_changes.append(task)
+        print(
+            f"[schedule] Queued trigger '{trigger.title}' for execution (pending: {len(self.pending_changes)})",
+            file=sys.stderr,
+            flush=True,
+        )
+
         if not self.processing:
             self.process_pending()
 
@@ -132,47 +181,18 @@ class CodexMonitor:
 
         # Mark as processing
         self.processing = True
-
-        # Get all pending changes
-        batch = self.pending_changes.copy()
-        self.pending_changes.clear()
-
-        print(f"[queue] Processing batch of {len(batch)} changes", file=sys.stderr, flush=True)
-
         try:
-            # Build combined payload - ALWAYS send full template with substitution
-            # Agent needs the full instructions every time to remember to check for duplicates
-            prompt_text = self.prompt_file.read_text()
+            batch = self.pending_changes.copy()
+            self.pending_changes.clear()
+            if not batch:
+                return
 
-            # Use first file for template substitution
-            if batch:
-                file_path_str, action, timestamp_val = batch[0]
-                file_path = Path(file_path_str)
-                abs_file_path = file_path.resolve()
-                abs_workspace_path = self.workspace_path.resolve()
-                relative_path = abs_file_path.relative_to(abs_workspace_path)
-                container_path = f"/workspace/{relative_path.as_posix()}"
+            payload, triggers_fired = self._build_combined_payload(batch)
+            if not payload:
+                return
 
-                # Substitute template variables
-                prompt_text = prompt_text.replace("{{container_path}}", container_path)
-                prompt_text = prompt_text.replace("{{filename}}", file_path.name)
-                prompt_text = prompt_text.replace("{{action}}", action)
-                prompt_text = prompt_text.replace("{{timestamp}}", datetime.fromtimestamp(timestamp_val, timezone.utc).isoformat())
-
-            payload_parts = [prompt_text]
-
-            # Add additional files if batch has more than one
-            if len(batch) > 1:
-                for file_path_str, action, timestamp_val in batch[1:]:
-                    file_path = Path(file_path_str)
-                    payload_parts.append(self.build_file_event_payload(file_path))
-
-            payload = "\n\n".join(payload_parts)
-
-            # Execute Codex
             output = self.execute_codex(payload)
 
-            # If this is first event, try to extract session ID
             if not self.session_id:
                 session_id = self.extract_session_id(output)
                 if session_id:
@@ -180,19 +200,162 @@ class CodexMonitor:
                     self.save_session(session_id)
                     print(f"[monitor] Persisted session: {self.session_id}", file=sys.stderr, flush=True)
 
-        except Exception as e:
-            print(f"[queue] Error processing batch: {e}", file=sys.stderr)
+            for trigger, fired_at in triggers_fired:
+                self.mark_trigger_fired(trigger, fired_at)
+
+        except Exception as exc:
+            print(f"[queue] Error processing batch: {exc}", file=sys.stderr)
             import traceback
             traceback.print_exc(file=sys.stderr)
         finally:
-            # Mark as done
             self.processing = False
-            print(f"[queue] Batch complete, processing={self.processing}, pending={len(self.pending_changes)}", file=sys.stderr, flush=True)
-
-            # Process next batch if anything queued while we were busy
             if self.pending_changes:
-                print(f"[queue] New changes arrived during processing, starting next batch", file=sys.stderr, flush=True)
                 self.process_pending()
+
+    def load_triggers(self) -> List[TriggerRecord]:
+        records = list_trigger_records(self.trigger_config_path)
+        with self.triggers_lock:
+            self.triggers = {record.id: record for record in records if record.enabled}
+
+        if records:
+            enabled_count = len([r for r in records if r.enabled])
+            disabled_count = len(records) - enabled_count
+            print(f"[schedule] Loaded {len(records)} trigger(s) from {self.trigger_config_path.name}", file=sys.stderr, flush=True)
+
+            for record in records:
+                status = "✓ enabled" if record.enabled else "✗ disabled"
+                next_fire_str = record.next_fire.strftime('%Y-%m-%d %H:%M:%S %Z') if record.next_fire else "never"
+                mode = record.schedule.get("mode", "unknown")
+                schedule_detail = self._format_schedule_detail(record)
+                print(f"  [{status}] '{record.title}' ({mode}: {schedule_detail}) - next: {next_fire_str}", file=sys.stderr, flush=True)
+
+            if disabled_count > 0:
+                print(f"[schedule] Summary: {enabled_count} enabled, {disabled_count} disabled", file=sys.stderr, flush=True)
+        else:
+            print(f"[schedule] No triggers configured in {self.trigger_config_path}", file=sys.stderr, flush=True)
+
+        self.scheduler_event.set()
+        return records
+
+    def _format_schedule_detail(self, record: TriggerRecord) -> str:
+        """Format schedule details for logging."""
+        mode = record.schedule.get("mode", "unknown")
+        if mode == "daily":
+            time_str = record.schedule.get("time", "??:??")
+            tz = record.schedule.get("timezone", "UTC")
+            return f"{time_str} {tz}"
+        elif mode == "interval":
+            minutes = record.schedule.get("interval_minutes", 0)
+            return f"every {minutes} min"
+        elif mode == "once":
+            at_str = record.schedule.get("at", "unknown")
+            return f"at {at_str}"
+        return "unknown"
+
+    def reload_triggers(self):
+        """Reload triggers and optionally fire newly added/enabled ones immediately."""
+        print("[schedule] Reloading triggers from configuration", file=sys.stderr, flush=True)
+
+        # Track previous trigger states
+        old_triggers = {}
+        with self.triggers_lock:
+            old_triggers = {tid: rec for tid, rec in self.triggers.items()}
+
+        # Load new configuration
+        new_records = self.load_triggers()
+
+        # Check for newly added or newly enabled triggers
+        for record in new_records:
+            if not record.enabled:
+                continue
+
+            was_new_or_enabled = False
+            if record.id not in old_triggers:
+                # Brand new trigger
+                print(f"[schedule] New trigger detected: '{record.title}'", file=sys.stderr, flush=True)
+                was_new_or_enabled = True
+            elif not old_triggers[record.id].enabled and record.enabled:
+                # Was disabled, now enabled
+                print(f"[schedule] Trigger enabled: '{record.title}'", file=sys.stderr, flush=True)
+                was_new_or_enabled = True
+
+            # Fire immediately if it's a new/enabled trigger and has fire_on_reload tag
+            if was_new_or_enabled and "fire_on_reload" in record.tags:
+                print(f"[schedule] Firing trigger immediately (fire_on_reload tag): '{record.title}'", file=sys.stderr, flush=True)
+                now = datetime.now(timezone.utc)
+                self.queue_trigger_event(record, now)
+
+    def start_scheduler(self):
+        self.scheduler_stop.clear()
+        self.load_triggers()
+        if self.scheduler_thread and self.scheduler_thread.is_alive():
+            return
+        self.scheduler_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
+        self.scheduler_thread.start()
+
+    def stop_scheduler(self):
+        self.scheduler_stop.set()
+        self.scheduler_event.set()
+        if self.scheduler_thread and self.scheduler_thread.is_alive():
+            self.scheduler_thread.join(timeout=2)
+
+    def _scheduler_loop(self):
+        while not self.scheduler_stop.is_set():
+            trigger, wait_seconds = self._next_scheduled_trigger()
+            if trigger is None or wait_seconds is None:
+                self.scheduler_event.clear()
+                self.scheduler_event.wait(timeout=60)
+                continue
+
+            self.scheduler_event.clear()
+            woke_early = self.scheduler_event.wait(timeout=wait_seconds)
+            if woke_early:
+                continue
+
+            now = datetime.now(timezone.utc)
+            self.queue_trigger_event(trigger, now)
+
+    def _next_scheduled_trigger(self) -> tuple[Optional[TriggerRecord], Optional[float]]:
+        with self.triggers_lock:
+            if not self.triggers:
+                return None, None
+            now = datetime.now(timezone.utc)
+            upcoming: List[TriggerRecord] = []
+            for trigger in self.triggers.values():
+                try:
+                    next_fire = trigger.compute_next_fire(now)
+                    trigger.next_fire = next_fire
+                    if next_fire:
+                        upcoming.append(trigger)
+                except Exception as exc:
+                    print(f"[schedule] Trigger {trigger.id} disabled due to error: {exc}", file=sys.stderr, flush=True)
+            if not upcoming:
+                return None, None
+            upcoming.sort(key=lambda rec: rec.next_fire)
+            next_trigger = upcoming[0]
+            wait_seconds = max(0.0, (next_trigger.next_fire - now).total_seconds())
+            return next_trigger, wait_seconds
+
+    def mark_trigger_fired(self, trigger: TriggerRecord, fired_at: datetime):
+        trigger.last_fired = fired_at.isoformat()
+        config = load_config(self.trigger_config_path)
+        updated = False
+        for item in config.get("triggers", []):
+            if item.get("id") == trigger.id:
+                item["last_fired"] = trigger.last_fired
+                updated = True
+                break
+        if updated:
+            save_config(self.trigger_config_path, config)
+        with self.triggers_lock:
+            trigger.next_fire = trigger.compute_next_fire(fired_at + timedelta(seconds=1))
+            self.triggers[trigger.id] = trigger
+        self.scheduler_event.set()
+        print(
+            f"[schedule] Trigger '{trigger.title}' recorded at {trigger.last_fired}",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def process_file(self, file_path: Path):
         """Process a file event and dispatch to Codex."""
@@ -257,24 +420,96 @@ class CodexMonitor:
 
         return None
 
-    def build_file_event_payload(self, file_path: Path) -> str:
+    def build_file_event_payload(self, event: Dict[str, Any]) -> str:
         """Build the payload for a file event."""
-        timestamp = datetime.now(timezone.utc).isoformat()
 
-        # Resolve to absolute paths
+        file_path = Path(event["path"])
+        timestamp = datetime.fromtimestamp(event.get("timestamp", time.time()), timezone.utc).isoformat()
+        action = event.get("action", "modified")
+
         abs_file_path = file_path.resolve()
         abs_workspace_path = self.workspace_path.resolve()
-
         relative_path = abs_file_path.relative_to(abs_workspace_path)
         container_path = f"/workspace/{relative_path.as_posix()}"
 
-        return f"""FILE EVENT DETECTED
+        return (
+            "FILE EVENT DETECTED\n\n"
+            f"Timestamp: {timestamp}\n"
+            f"Action: {action}\n"
+            f"File: {file_path.name}\n"
+            f"Full Path: {abs_file_path.as_posix()}\n"
+            f"Container Path: {container_path}"
+        )
 
-Timestamp: {timestamp}
-Action: Created
-File: {file_path.name}
-Full Path: {abs_file_path.as_posix()}
-Container Path: {container_path}"""
+    def _render_trigger_prompt(self, trigger: TriggerRecord, fired_at_iso: str) -> str:
+        fired_at = datetime.fromisoformat(fired_at_iso).astimezone(timezone.utc)
+        tz = trigger.timezone
+        local_time = fired_at.astimezone(tz)
+
+        substitutions = {
+            "now_iso": fired_at.isoformat(),
+            "now_local": local_time.isoformat(),
+            "trigger_time": trigger.schedule.get("time") or trigger.schedule.get("at") or local_time.isoformat(),
+            "trigger_id": trigger.id,
+            "trigger_title": trigger.title,
+            "trigger_description": trigger.description,
+            "watch_root": str(self.watch_path),
+            "created_at": trigger.created_at,
+            "created_by.id": trigger.created_by.get("id", "unknown"),
+            "created_by.name": trigger.created_by.get("name", "unknown"),
+            "session_id": self.session_id or "",
+        }
+
+        prompt_text = trigger.prompt_text or "Scheduled trigger fired with no prompt text provided."
+        return render_template(prompt_text, substitutions)
+
+    def _build_combined_payload(self, items: List[Dict[str, Any]]) -> tuple[str, List[tuple[TriggerRecord, datetime]]]:
+        files = [item for item in items if item.get("type") == "file"]
+        triggers = [item for item in items if item.get("type") == "trigger"]
+
+        sections: List[str] = []
+        triggers_fired: List[tuple[TriggerRecord, datetime]] = []
+
+        if files:
+            prompt_text = self.prompt_file.read_text()
+            first = files[0]
+            first_path = Path(first["path"])
+            abs_file_path = first_path.resolve()
+            abs_workspace_path = self.workspace_path.resolve()
+            relative_path = abs_file_path.relative_to(abs_workspace_path)
+            container_path = f"/workspace/{relative_path.as_posix()}"
+
+            prompt_text = prompt_text.replace("{{container_path}}", container_path)
+            prompt_text = prompt_text.replace("{{filename}}", first_path.name)
+            prompt_text = prompt_text.replace("{{action}}", first.get("action", "modified"))
+            prompt_text = prompt_text.replace(
+                "{{timestamp}}",
+                datetime.fromtimestamp(first.get("timestamp", time.time()), timezone.utc).isoformat(),
+            )
+
+            sections.append(prompt_text)
+
+            if len(files) > 1:
+                for event in files[1:]:
+                    sections.append(self.build_file_event_payload(event))
+
+        for trigger_item in triggers:
+            trigger: TriggerRecord = trigger_item["trigger"]
+            fired_at_iso: str = trigger_item["fired_at"]
+            sections.append(self._render_trigger_prompt(trigger, fired_at_iso))
+            triggers_fired.append((trigger, datetime.fromisoformat(fired_at_iso).astimezone(timezone.utc)))
+
+        if not sections:
+            return "", []
+
+        payload = "\n\n---\n\n".join(sections)
+        print(
+            f"[queue] Combined payload contains {len(files)} file events and {len(triggers)} trigger(s)",
+            file=sys.stderr,
+            flush=True,
+        )
+
+        return payload, triggers_fired
 
     def execute_codex(self, payload: str) -> str:
         """Execute Codex with the given payload."""
@@ -283,7 +518,11 @@ Container Path: {container_path}"""
 
         if is_in_container:
             # Running inside container - call codex CLI directly
-            cmd = ["codex", "--exec"]
+            # Format: codex exec [FLAGS] [resume SESSION_ID] -- <prompt>
+            cmd = ["codex", "exec"]
+
+            # Add --skip-git-repo-check flag (only available on exec subcommand)
+            cmd.append("--skip-git-repo-check")
 
             # Add JSON mode if specified
             if self.json_mode == "legacy":
@@ -291,15 +530,15 @@ Container Path: {container_path}"""
             elif self.json_mode == "experimental":
                 cmd.append("--json-e")
 
-            # Add session resume if we have a session
-            if self.session_id:
-                cmd.extend(["--session-id", self.session_id])
-
             # Add custom codex args
             cmd.extend(self.codex_args)
 
             # Add custom exec args
             cmd.extend(self.exec_args)
+
+            # If we have a session, use "codex exec resume <session-id>"
+            if self.session_id:
+                cmd.extend(["resume", self.session_id])
 
             # Add separator and payload
             cmd.append("--")
@@ -398,17 +637,18 @@ Container Path: {container_path}"""
         event_handler = CodexFileHandler(self)
         observer = PollingObserver()
         observer.schedule(event_handler, str(self.watch_path), recursive=False)
+        self.start_scheduler()
         observer.start()
 
         try:
-            # Keep the script running
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
             print("\n✋ Monitor stopped by user", file=sys.stderr)
+        finally:
             observer.stop()
-
-        observer.join()
+            observer.join()
+            self.stop_scheduler()
 
 
 def main():

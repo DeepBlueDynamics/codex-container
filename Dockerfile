@@ -116,8 +116,11 @@ RUN sed -i 's/\r$//' /usr/local/bin/codex_gateway.js \
 # Copy monitor script for container-based monitoring
 RUN mkdir -p /opt/scripts
 COPY scripts/monitor.py /opt/scripts/
+COPY monitor_scheduler.py /opt/scripts/monitor_scheduler.py
 RUN sed -i 's/\r$//' /opt/scripts/monitor.py \
-  && chmod 555 /opt/scripts/monitor.py
+  && sed -i 's/\r$//' /opt/scripts/monitor_scheduler.py \
+  && chmod 555 /opt/scripts/monitor.py \
+  && chmod 444 /opt/scripts/monitor_scheduler.py
 
 # Copy MCP source files into the image
 COPY MCP/ /opt/mcp-source/

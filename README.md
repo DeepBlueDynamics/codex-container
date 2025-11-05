@@ -4,11 +4,11 @@
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 [![GPU](https://img.shields.io/badge/GPU-CUDA%20enabled-brightgreen.svg)](vibe/TRANSCRIPTION_SERVICE.md)
-[![MCP Tools](https://img.shields.io/badge/MCP%20tools-128-green.svg)](MCP/)
+[![MCP Tools](https://img.shields.io/badge/MCP%20tools-135-green.svg)](MCP/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Shell](https://img.shields.io/badge/shell-PowerShell%20%7C%20Bash-orange.svg)]()
 
-**Codex CLI in a box.** These scripts launch the OpenAI Codex CLI inside a reproducible Docker container with **128 specialized MCP tools**, GPU-accelerated transcription, event-driven monitoring, and AI-powered multi-agent orchestration. The installable helper mounts your workspace alongside persistent credentials, giving you a production-ready autonomous agent platform in minutes.
+**Codex CLI in a box.** These scripts launch the OpenAI Codex CLI inside a reproducible Docker container with **135 specialized MCP tools**, GPU-accelerated transcription, event-driven monitoring, time-based scheduling, and AI-powered multi-agent orchestration. The installable helper mounts your workspace alongside persistent credentials, giving you a production-ready autonomous agent platform in minutes.
 
 ## Three Interaction Modes
 
@@ -143,6 +143,16 @@ Container path: {{container_path}}
 ```
 
 Combine with MCP tools (e.g., `transcribe_pending_recordings` from `radio_control.py`) for end-to-end automation. The agent can call tools, read files, and take actions - all triggered by file system events.
+
+### Scheduled Monitor Triggers
+
+The monitor can now wake itself up on a schedule without waiting for new files. Define time-based prompts with the `monitor-scheduler` MCP tool; each watch directory persists its configuration in `.codex-monitor-triggers.json`.
+
+- `monitor-scheduler.list_triggers(watch_path="./recordings")` – inspect current schedules and the next planned run.
+- `monitor-scheduler.create_trigger(...)` – supply a `schedule_mode` (`daily`, `once`, or `interval`), timezone, and the full `prompt_text` that Codex should receive when the trigger fires. The prompt can include moustache placeholders such as `{{now_iso}}`, `{{now_local}}`, `{{trigger_title}}`, `{{trigger_time}}`, `{{created_by.name}}`, and `{{watch_root}}`.
+- `monitor-scheduler.update_trigger` / `toggle_trigger` / `delete_trigger` – adjust existing entries.
+
+While the monitor is running, it loads the trigger config, keeps a lightweight scheduler thread, and queues scheduled prompts through the same execution pipeline as file events (respecting session reuse and concurrency limits). After each run it records `last_fired` back into the config so operators can audit when a reminder last executed.
 
 ### AI-Powered Task Planning
 
@@ -342,14 +352,21 @@ codex-container/
 
 After running install, these servers will be available to Codex for tool execution.
 
-### Available MCP Tools (128 total)
+### Available MCP Tools (135 total)
 
-The container provides **128 specialized tools** spanning file operations, web scraping, AI orchestration, maritime operations, and cloud integrations. Every tool uses the FastMCP framework for reliable async execution.
+The container provides **135 specialized tools** spanning file operations, web scraping, AI orchestration, time-based scheduling, maritime operations, and cloud integrations. Every tool uses the FastMCP framework for reliable async execution.
 
 **AI Orchestration & Agent Communication**
 - **Agent Chat**: `check_with_agent`, `chat_with_context`, `agent_to_agent` - Multi-agent collaboration with role specialization
 - **Task Planning**: `get_next_step` - Stateless instructor pattern for multi-step workflows
 - **Tool Discovery**: `recommend_tool`, `list_available_tools`, `list_anthropic_models` - Claude-powered tool selection
+
+**Time-Based Scheduling** (monitor-scheduler.py)
+- **Trigger Management**: `list_triggers`, `get_trigger`, `create_trigger`, `update_trigger`, `toggle_trigger`, `delete_trigger`, `record_fire_result`
+- **Schedule Modes**: Daily (specific time + timezone), Interval (every N minutes), Once (specific datetime)
+- **Self-Modifying Agents**: Agents can create/modify their own schedules while running
+- **Fire on Reload**: Tag triggers with `"fire_on_reload"` to execute immediately when created/enabled
+- **Persistent State**: Triggers stored in `.codex-monitor-triggers.json` in watch directory
 
 **File Operations** (gnosis-files-*.py)
 - Basic: `file_read`, `file_write`, `file_stat`, `file_exists`, `file_delete`, `file_copy`, `file_move`
