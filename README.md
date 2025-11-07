@@ -512,6 +512,7 @@ To wipe Codex state quickly:
 ## Requirements
 
 - Docker Desktop / Docker Engine accessible from your shell. On Windows + WSL, enable Docker Desktop's WSL integration **and** add your user to the `docker` group (`sudo usermod -aG docker $USER`).
+- The helper runs `docker run … --network codex-network`, so make sure that bridge network exists once per host: `docker network create codex-network`. The command is idempotent and will simply return the existing network if it is already present (`docker network ls` should list it).
 - No local Node.js install is required; the CLI lives inside the container.
 - Building the image (or running the update step) requires internet access to fetch `@openai/codex` from npm. You can pin a version at build time via `--build-arg CODEX_CLI_VERSION=0.42.0` if desired.
 - The container includes a Python 3 virtual environment at `/opt/mcp-venv` for MCP server execution with pre-installed dependencies (`aiohttp`, `fastmcp`, `tomlkit`).
@@ -521,6 +522,7 @@ To wipe Codex state quickly:
 ## Troubleshooting
 
 - **`permission denied` talking to Docker** – ensure your user is in the `docker` group and restart the shell; verify `docker ps` works before rerunning the scripts.
+- **`network codex-network not found`** – create the bridge network once via `docker network create codex-network` (safe to rerun). The PowerShell/Bash wrappers expect that network so the containers can talk to companion services like the transcription API.
 - **Codex keeps asking for login** – run `-Login`/`--login` to refresh credentials. The persisted files live under the configured Codex home (not the repo).
 - **`… does not support tools` from Ollama** – switch to a model that advertises tool support or disable tool usage when invoking Codex; the OSS bridge assumes the provider can execute tool calls.
 - **Reset everything** – delete the Codex home folder you configured (e.g. `%USERPROFILE%\.codex-service`) and reinstall/login.
