@@ -16,6 +16,7 @@ pydantic
 
 # Audio / transcription
 faster-whisper
+elevenlabs
 
 # File watching utilities
 watchdog

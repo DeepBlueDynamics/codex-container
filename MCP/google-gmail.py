@@ -66,18 +66,24 @@ except ImportError:
 
 mcp = FastMCP("google-gmail")
 
-# OAuth 2.0 scopes
+# OAuth 2.0 scopes - includes all Google service scopes since same OAuth client is shared
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.send',
     'https://www.googleapis.com/auth/gmail.compose',
     'https://www.googleapis.com/auth/gmail.modify',
-    'https://www.googleapis.com/auth/gmail.labels'
+    'https://www.googleapis.com/auth/gmail.labels',
+    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/drive',
+    'openid',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile'
 ]
 
 # Config
 GMAIL_ENV_FILE = os.path.join(os.getcwd(), ".gmail.env")
 DEFAULT_TOKEN_FILE = os.path.join(os.getcwd(), ".gmail-tokens.json")
+GMAIL_REDIRECT_URI = "http://localhost:8080"
 
 
 def _get_config() -> Dict[str, Optional[str]]:
@@ -311,6 +317,8 @@ async def gmail_auth_setup(
             }
 
     try:
+        redirect_uri = GMAIL_REDIRECT_URI
+
         # Create credentials dict for OAuth flow
         client_config = {
             "installed": {
@@ -318,13 +326,104 @@ async def gmail_auth_setup(
                 "client_secret": config["client_secret"],
                 "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": ["http://localhost"],
             }
         }
 
-        # Run OAuth flow (opens browser)
         flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-        creds = flow.run_local_server(port=0)
+        flow.redirect_uri = redirect_uri
+
+        # Always return manual auth instructions so user can complete in browser
+        auth_url, _ = flow.authorization_url(
+            access_type="offline",
+            prompt="consent"
+        )
+
+        return {
+            "success": True,
+            "manual_auth_required": True,
+            "auth_url": auth_url,
+            "instructions": [
+                "1. Open the auth_url in your own browser.",
+                "2. Complete Google login and grant access.",
+                "3. After approval, Google redirects to http://localhost:8080 (may show connection error - that's OK).",
+                "4. Copy the ENTIRE URL from your browser's address bar.",
+                "5. Extract the code parameter: look for '?code=XXXXXX' or '&code=XXXXXX'.",
+                "6. Run gmail_complete_auth(authorization_code='PASTE_CODE_HERE')."
+            ],
+            "message": "Authorization URL generated. Complete login in browser, then call gmail_complete_auth with the returned code."
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Authentication failed: {str(e)}"
+        }
+
+
+@mcp.tool()
+async def gmail_complete_auth(
+    authorization_code: str,
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """
+    Complete OAuth authentication using an authorization code.
+
+    **USE THIS** when gmail_auth_setup() returns an auth_url but can't accept input interactively.
+
+    Workflow:
+    1. Call gmail_auth_setup() - it returns auth_url
+    2. Open auth_url in your browser
+    3. Complete Google login and authorization
+    4. Google redirects to http://localhost:8080/?code=...
+    5. Copy the code value from the URL
+    6. Call this tool with that code
+
+    Args:
+        authorization_code: The authorization code from Google OAuth flow (required)
+        ctx: MCP context (optional)
+
+    Returns:
+        Dictionary containing:
+            - success: bool - Whether authentication completed
+            - authenticated: bool - Whether valid credentials now exist
+            - token_file: str - Path where tokens were saved
+            - message: str - Success message
+        OR on error:
+            - success: bool - False
+            - error: str - Error description
+    """
+    if not GOOGLE_AVAILABLE:
+        return {
+            "success": False,
+            "error": "Google Gmail libraries not installed"
+        }
+
+    config = _get_config()
+    if not config["client_id"] or not config["client_secret"]:
+        return {
+            "success": False,
+            "error": "Missing OAuth configuration (client_id or client_secret)"
+        }
+
+    token_file = config["token_file"]
+
+    try:
+        # Create credentials dict for OAuth flow
+        client_config = {
+            "installed": {
+                "client_id": config["client_id"],
+                "client_secret": config["client_secret"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        }
+
+        flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+        flow.redirect_uri = GMAIL_REDIRECT_URI
+
+        # Exchange authorization code for credentials
+        flow.fetch_token(code=authorization_code)
+        creds = flow.credentials
 
         # Save credentials
         with open(token_file, 'w') as token:
@@ -334,13 +433,13 @@ async def gmail_auth_setup(
             "success": True,
             "authenticated": True,
             "token_file": token_file,
-            "message": "Successfully authenticated! Tokens saved for future use."
+            "message": "Successfully authenticated! Gmail tokens saved for future use."
         }
 
     except Exception as e:
         return {
             "success": False,
-            "error": f"Authentication failed: {str(e)}"
+            "error": f"Failed to exchange authorization code: {str(e)}. Make sure the code is valid and hasn't expired."
         }
 
 

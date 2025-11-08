@@ -19,6 +19,48 @@
 - **135 MCP tools across domains**: File operations, web/search integrations, Google Workspace, maritime navigation, weather, task planners, agent-to-agent comms, and more.
 - **Observability & persistence**: Trigger configuration, session IDs, and logs live alongside your workspace so behavior survives restarts and remains audit-able.
 
+## Deep Dive: Container Architecture & Capabilities
+
+### Core Architecture
+- **Codex CLI + MCP toolchain** packaged in Docker with CUDA acceleration, so every session has standardized dependencies, credentials, and GPU-ready Whisper transcription.
+- **Multi-agent orchestration** through Claude-powered helpers (`agent_to_agent`, `check_with_agent`, `get_next_step`) lets tasks bounce between specialists without leaving the container.
+- **Persistent state**: Session IDs, trigger definitions, logs, and sticky notes all live under your mounted workspace (`/workspace/temp` by default) to survive restarts and provide audit trails.
+
+### Operating Modes at a Glance
+1. **Terminal Mode** – one-shot or conversational `--exec` / `--session-id` calls. Ideal for scripting, CI, or quick manual interventions.
+2. **API Mode** – `--serve` exposes REST endpoints (`POST /completion`, `GET /health`) so external systems can treat the container like a hosted LLM gateway.
+3. **Monitor Mode** – `--monitor --watch-path …` turns Codex into an autonomous agent that reacts to filesystem events or scheduler triggers using prompt templates such as `monitor_prompts/MONITOR.md` or `/workspace/temp/MONITOR.md`.
+
+### Automation Inputs
+- **File-system events**: Watchdogs detect create/modify/move events, substitute metadata (`{{container_path}}`, `{{filename}}`, etc.), then feed the resulting prompt to Codex.
+- **Scheduled triggers (NEW)**: Use the `monitor-scheduler.*` MCP tools to create cron-like jobs (`once`, `interval`, or `daily`). Triggers can opt into tags like `fire_on_reload` and are serialized inside `.codex-monitor-triggers.json`.
+
+```python
+create_trigger(
+    watch_path="/workspace/temp",
+    title="Hourly Weather Check",
+    schedule_mode="interval",
+    interval_minutes=60,
+    prompt_text="Check NOAA marine forecast and log summary",
+    tags=["fire_on_reload"]
+)
+```
+
+### Tooling Surface (135 tools across categories)
+- **AI orchestration**: `agent_to_agent`, `chat_with_context`, `get_next_step`, and `recommend_tool`.
+- **File operations**: `gnosis-files-basic`, `gnosis-files-diff`, and `gnosis-files-search` families handle read/write, backup/diff, patching, and tree/search at scale.
+- **Web & search**: Wraith-powered `gnosis-crawl.*` plus SerpAPI search utilities capture Markdown or raw HTML from the open web.
+- **Productivity suites**: Google Calendar/Drive/Gmail, Slack, sticky notes, and task planners keep humans in the loop.
+- **Maritime & navigation**: NOAA marine forecasts, VHF control, radio network comms, and OpenCPN integration address the sailing/VHF monitoring workflows.
+- **Utilities**: Time conversions, log readers, water-cooler coordination, and transcription services (Whisper large-v3 running warm on the GPU) round out the platform.
+
+### Key Differentiators
+1. **Self-modifying agents** – Automations can create/update/delete their own triggers, sticky notes, or prompts mid-run, making adaptive schedules trivial.
+2. **GPU-accelerated transcription** – The Whisper large-v3 model stays loaded in VRAM, so minutes of audio process in seconds with `transcribe_wav`.
+3. **Unified prompt templates** – The same `MONITOR.md` prompt used for automation can be executed manually via `--exec` for deterministic testing.
+4. **Persistent memory** – Sticky notes and trigger metadata let agents leave breadcrumbs (“Agent Lumen”) for later sessions to resume safely.
+5. **Multi-channel communication** – Slack, Gmail, Google Calendar, and radio tools mean the agent can both ingest signals and notify humans without leaving the container.
+
 ## Three Interaction Modes
 
 The *codex-container* application supports three distinct ways to interact with the system, each suited for different workflows:

@@ -77,6 +77,19 @@ logs/
 .env.local
 .env.*.local
 
+# Google OAuth credentials and tokens
+.gcal.env
+.gmail.env
+.gdrive.env
+.gcal-tokens.json
+.gmail-tokens.json
+.gdrive-tokens.json
+*credentials*.json
+credentials/
+
+# API keys and secrets
+.elevenlabs.env
+
 # Database files
 *.db
 *.sqlite
@@ -91,3 +104,5 @@ temp/
 # Monitor session state files
 .codex-monitor-session
 .codex-monitor
+.codex-monitor-triggers.json
+*-triggers.json

@@ -6,33 +6,68 @@ Google Calendar MCP Bridge
 Exposes Google Calendar API to AI assistants via MCP, enabling calendar
 and event management through natural language.
 
-Tools:
-  - gcal_status: Check authentication and configuration status
-  - gcal_auth_setup: Initialize OAuth 2.0 authentication flow
-  - gcal_list_calendars: List all accessible calendars
-  - gcal_list_events: List events from a calendar
-  - gcal_create_event: Create a new calendar event
-  - gcal_update_event: Update an existing event
-  - gcal_delete_event: Delete an event
-  - gcal_freebusy: Check free/busy status across calendars
+**FIRST TIME SETUP**: Call `gcal_setup_guide()` for step-by-step instructions!
 
-Env/config:
-  - GOOGLE_CALENDAR_CLIENT_ID     (required for OAuth)
-  - GOOGLE_CALENDAR_CLIENT_SECRET (required for OAuth)
-  - GOOGLE_CALENDAR_TOKEN_FILE    (default: .gcal-tokens.json)
-  - .gcal.env file in repo root with credentials
+Available Tools:
+  Setup & Configuration:
+    - gcal_setup_guide: **START HERE** - Complete setup walkthrough with instructions
+    - gcal_status: Quick check of authentication and configuration status
+    - gcal_auth_setup: Run OAuth 2.0 authentication flow (console/manual mode)
+    - gcal_complete_auth: Complete authentication with authorization code (for containers)
 
-Setup:
-  1. Create OAuth 2.0 Desktop App credentials in Google Cloud Console
-  2. Enable Google Calendar API
-  3. Save client_id and client_secret to .gcal.env or environment
-  4. Run gcal_auth_setup to authenticate (opens browser)
-  5. Tokens are saved locally for future use
+  Calendar Operations:
+    - gcal_list_calendars: List all accessible calendars
+    - gcal_list_events: List events from a calendar with filtering
+    - gcal_create_event: Create a new calendar event
+    - gcal_update_event: Update an existing event
+    - gcal_delete_event: Delete an event
+    - gcal_freebusy: Check free/busy status across calendars
 
-Notes:
-  - First use requires browser-based OAuth consent
-  - Tokens refresh automatically
-  - All credentials stay local, never transmitted to external servers
+Configuration (one of these methods):
+  Option 1 - Environment variables:
+    export GOOGLE_CALENDAR_CLIENT_ID='your_client_id'
+    export GOOGLE_CALENDAR_CLIENT_SECRET='your_client_secret'
+
+  Option 2 - .gcal.env file (in workspace root):
+    GOOGLE_CALENDAR_CLIENT_ID=your_client_id
+    GOOGLE_CALENDAR_CLIENT_SECRET=your_client_secret
+
+  Optional:
+    GOOGLE_CALENDAR_TOKEN_FILE=.gcal-tokens.json
+
+Quick Start:
+  1. Call gcal_setup_guide() to get detailed setup instructions
+  2. Follow the steps to create OAuth credentials
+  3. Authenticate (two methods):
+     Method A (interactive): gcal_auth_setup() - prints URL, prompts for code
+     Method B (container-friendly): gcal_auth_setup() → copy auth_url →
+                                     open in browser → get code →
+                                     gcal_complete_auth(code="...")
+  4. Start using calendar tools! Try gcal_list_calendars()
+
+Security Notes:
+  - OAuth 2.0 Desktop App credentials required
+  - First use requires browser-based Google login
+  - Access tokens refresh automatically
+  - All credentials stored locally, never transmitted to external servers
+  - Tokens stored in .gcal-tokens.json (add to .gitignore)
+
+Example Usage:
+  # First time setup
+  guide = gcal_setup_guide()
+  # ... follow instructions to create credentials ...
+  gcal_auth_setup()  # Opens browser for login
+
+  # Daily use
+  calendars = gcal_list_calendars()
+  events = gcal_list_events(max_results=10)
+
+  gcal_create_event(
+      summary="Team Meeting",
+      start_time="2025-01-15T14:00:00",
+      end_time="2025-01-15T15:00:00",
+      attendees=["alice@example.com", "bob@example.com"]
+  )
 """
 
 import os
@@ -58,12 +93,24 @@ except ImportError:
 
 mcp = FastMCP("google-calendar")
 
-# OAuth 2.0 scopes
-SCOPES = ['https://www.googleapis.com/auth/calendar']
+# OAuth 2.0 scopes - includes all Google service scopes since same OAuth client is shared
+SCOPES = [
+    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.compose',
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/gmail.labels',
+    'https://www.googleapis.com/auth/drive',
+    'openid',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile'
+]
 
 # Config
 GCAL_ENV_FILE = os.path.join(os.getcwd(), ".gcal.env")
 DEFAULT_TOKEN_FILE = os.path.join(os.getcwd(), ".gcal-tokens.json")
+GCAL_REDIRECT_URI = "http://localhost:8080"
 
 
 def _get_config() -> Dict[str, Optional[str]]:
@@ -140,15 +187,126 @@ def _get_service():
 
 
 @mcp.tool()
+async def gcal_setup_guide(ctx: Context = None) -> Dict[str, Any]:
+    """
+    Get step-by-step instructions for setting up Google Calendar integration.
+
+    **CALL THIS FIRST** if you've never used Google Calendar tools before.
+    This provides a complete setup guide with links and examples.
+
+    Returns:
+        Dictionary containing:
+            - success: bool - Always True
+            - setup_complete: bool - Whether setup is already done
+            - current_status: dict - Current configuration state
+            - steps: list - Ordered setup steps with instructions
+            - next_action: str - What to do next
+
+    Example:
+        ```python
+        guide = await gcal_setup_guide()
+        print(guide["steps"])  # Follow the instructions
+        ```
+    """
+    config = _get_config()
+    creds = _get_credentials() if GOOGLE_AVAILABLE else None
+
+    status = {
+        "libs_installed": GOOGLE_AVAILABLE,
+        "client_id_set": bool(config["client_id"]),
+        "client_secret_set": bool(config["client_secret"]),
+        "authenticated": creds is not None and creds.valid if creds else False,
+    }
+
+    setup_complete = all(status.values())
+
+    steps = [
+        {
+            "step": 1,
+            "title": "Install Python libraries (if needed)",
+            "done": status["libs_installed"],
+            "command": "pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client",
+            "description": "Install required Google API client libraries"
+        },
+        {
+            "step": 2,
+            "title": "Create OAuth 2.0 credentials in Google Cloud Console",
+            "done": False,  # We can't auto-detect this
+            "instructions": [
+                "1. Go to https://console.cloud.google.com/",
+                "2. Create a new project or select existing one",
+                "3. Go to 'APIs & Services' → 'Library'",
+                "4. Search for 'Google Calendar API' and click 'Enable'",
+                "5. Go to 'APIs & Services' → 'Credentials'",
+                "6. Click 'Create Credentials' → 'OAuth client ID'",
+                "7. If prompted, configure consent screen (External/Internal, add app name)",
+                "8. Application type: 'Desktop app'",
+                "9. Name it something like 'Codex Calendar Integration'",
+                "10. IMPORTANT: Ensure 'http://localhost:8080/' is in Authorized redirect URIs",
+                "11. Click 'Create' and note the Client ID and Client Secret"
+            ],
+            "link": "https://console.cloud.google.com/apis/credentials",
+            "note": "Desktop app type should include http://localhost:8080/ by default, but verify it's present"
+        },
+        {
+            "step": 3,
+            "title": "Configure credentials in environment",
+            "done": status["client_id_set"] and status["client_secret_set"],
+            "options": [
+                {
+                    "method": "Environment variables",
+                    "commands": [
+                        "export GOOGLE_CALENDAR_CLIENT_ID='your_client_id_here'",
+                        "export GOOGLE_CALENDAR_CLIENT_SECRET='your_client_secret_here'"
+                    ]
+                },
+                {
+                    "method": "Create .gcal.env file",
+                    "file_path": GCAL_ENV_FILE,
+                    "content_example": "GOOGLE_CALENDAR_CLIENT_ID=your_client_id_here\nGOOGLE_CALENDAR_CLIENT_SECRET=your_client_secret_here"
+                }
+            ],
+            "description": "Store your OAuth credentials securely"
+        },
+        {
+            "step": 4,
+            "title": "Run authentication flow",
+            "done": status["authenticated"],
+            "command": "await gcal_auth_setup()",
+            "description": "Opens browser for Google login. Tokens saved to .gcal-tokens.json"
+        }
+    ]
+
+    # Determine next action
+    if setup_complete:
+        next_action = "Setup complete! Use gcal_list_calendars() to get started."
+    elif not status["libs_installed"]:
+        next_action = f"Install libraries: pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client"
+    elif not status["client_id_set"] or not status["client_secret_set"]:
+        next_action = "Create OAuth credentials in Google Cloud Console and configure them (see step 2-3)"
+    elif not status["authenticated"]:
+        next_action = "Run: await gcal_auth_setup() to authenticate"
+    else:
+        next_action = "Ready to use!"
+
+    return {
+        "success": True,
+        "setup_complete": setup_complete,
+        "current_status": status,
+        "steps": steps,
+        "next_action": next_action,
+        "google_cloud_console": "https://console.cloud.google.com/",
+        "env_file_location": GCAL_ENV_FILE
+    }
+
+
+@mcp.tool()
 async def gcal_status(ctx: Context = None) -> Dict[str, Any]:
     """
     Check Google Calendar authentication and configuration status.
 
-    Use this to verify your OAuth credentials are configured and valid
-    before attempting calendar operations.
-
-    Args:
-        ctx: MCP context (optional)
+    **QUICK CHECK**: Use this to verify setup before calendar operations.
+    For detailed setup instructions, call gcal_setup_guide() first.
 
     Returns:
         Dictionary containing:
@@ -159,18 +317,47 @@ async def gcal_status(ctx: Context = None) -> Dict[str, Any]:
             - token_file: str - Path to token storage file
             - authenticated: bool - Whether valid tokens exist
             - credentials_valid: bool - Whether credentials are currently valid
+            - ready_to_use: bool - Whether all setup is complete
+            - next_step: str - What to do if not ready
+
+    Example:
+        ```python
+        status = await gcal_status()
+        if not status["ready_to_use"]:
+            print(status["next_step"])
+            guide = await gcal_setup_guide()
+        ```
     """
     config = _get_config()
     creds = _get_credentials() if GOOGLE_AVAILABLE else None
 
+    libs_ok = GOOGLE_AVAILABLE
+    client_id_ok = bool(config["client_id"])
+    client_secret_ok = bool(config["client_secret"])
+    auth_ok = creds is not None and (creds.valid if creds else False)
+
+    ready = libs_ok and client_id_ok and client_secret_ok and auth_ok
+
+    # Determine next step
+    if not libs_ok:
+        next_step = "Install libraries: pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client"
+    elif not client_id_ok or not client_secret_ok:
+        next_step = "Configure OAuth credentials. Run: await gcal_setup_guide() for instructions"
+    elif not auth_ok:
+        next_step = "Authenticate with Google. Run: await gcal_auth_setup()"
+    else:
+        next_step = "Ready! Try: await gcal_list_calendars()"
+
     return {
         "success": True,
-        "google_libs_installed": GOOGLE_AVAILABLE,
-        "client_id_present": bool(config["client_id"]),
-        "client_secret_present": bool(config["client_secret"]),
+        "google_libs_installed": libs_ok,
+        "client_id_present": client_id_ok,
+        "client_secret_present": client_secret_ok,
         "token_file": config["token_file"],
-        "authenticated": creds is not None,
+        "authenticated": auth_ok,
         "credentials_valid": creds.valid if creds else False,
+        "ready_to_use": ready,
+        "next_step": next_step
     }
 
 
@@ -248,6 +435,8 @@ async def gcal_auth_setup(
             }
 
     try:
+        redirect_uri = GCAL_REDIRECT_URI
+
         # Create credentials dict for OAuth flow
         client_config = {
             "installed": {
@@ -255,13 +444,117 @@ async def gcal_auth_setup(
                 "client_secret": config["client_secret"],
                 "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": ["http://localhost"],
             }
         }
 
-        # Run OAuth flow (opens browser)
         flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-        creds = flow.run_local_server(port=0)
+        flow.redirect_uri = redirect_uri
+
+        # Always return manual auth instructions so user can complete in browser
+        auth_url, _ = flow.authorization_url(
+            access_type="offline",
+            prompt="consent"
+        )
+
+        return {
+            "success": True,
+            "manual_auth_required": True,
+            "auth_url": auth_url,
+            "instructions": [
+                "1. Open the auth_url in your own browser.",
+                "2. Complete Google login and grant access.",
+                "3. After approval, Google redirects to http://localhost:8080 (may show connection error - that's OK).",
+                "4. Copy the ENTIRE URL from your browser's address bar.",
+                "5. Extract the code parameter: look for '?code=XXXXXX' or '&code=XXXXXX'.",
+                "6. Run gcal_complete_auth(authorization_code='PASTE_CODE_HERE')."
+            ],
+            "message": "Authorization URL generated. Complete login in browser, then call gcal_complete_auth with the returned code."
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Authentication failed: {str(e)}"
+        }
+
+
+@mcp.tool()
+async def gcal_complete_auth(
+    authorization_code: str,
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """
+    Complete OAuth authentication using an authorization code.
+
+    **USE THIS** when gcal_auth_setup() returns an auth_url but can't accept input interactively.
+
+    Workflow:
+    1. Call gcal_auth_setup() - it returns auth_url
+    2. Open auth_url in your browser
+    3. Complete Google login and authorization
+    4. Google displays authorization code
+    5. Call this tool with that code
+
+    Args:
+        authorization_code: The authorization code from Google OAuth flow (required)
+        ctx: MCP context (optional)
+
+    Returns:
+        Dictionary containing:
+            - success: bool - Whether authentication completed
+            - authenticated: bool - Whether valid credentials now exist
+            - token_file: str - Path where tokens were saved
+            - message: str - Success message
+            OR on error:
+            - success: bool - False
+            - error: str - Error message
+
+    Example:
+        ```python
+        # Step 1: Start auth and get URL
+        result = await gcal_auth_setup()
+        auth_url = result["auth_url"]
+
+        # Step 2: User opens URL in browser, gets code like "4/0AbC...XYZ"
+
+        # Step 3: Complete auth with code
+        await gcal_complete_auth(authorization_code="4/0AbC...XYZ")
+        ```
+    """
+    if not GOOGLE_AVAILABLE:
+        return {
+            "success": False,
+            "error": "Google Calendar libraries not installed"
+        }
+
+    config = _get_config()
+
+    # Check for required config
+    if not config["client_id"] or not config["client_secret"]:
+        return {
+            "success": False,
+            "error": "OAuth credentials not configured. Run gcal_setup_guide() first."
+        }
+
+    token_file = config["token_file"]
+
+    try:
+        # Create credentials dict for OAuth flow
+        client_config = {
+            "installed": {
+                "client_id": config["client_id"],
+                "client_secret": config["client_secret"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        }
+
+        flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+        flow.redirect_uri = GCAL_REDIRECT_URI
+
+        # Exchange authorization code for credentials
+        flow.fetch_token(code=authorization_code)
+        creds = flow.credentials
 
         # Save credentials
         with open(token_file, 'w') as token:
@@ -277,7 +570,7 @@ async def gcal_auth_setup(
     except Exception as e:
         return {
             "success": False,
-            "error": f"Authentication failed: {str(e)}"
+            "error": f"Failed to exchange authorization code: {str(e)}. Make sure the code is valid and hasn't expired."
         }
 
 

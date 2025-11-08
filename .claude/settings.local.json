@@ -23,7 +23,9 @@
       "Bash(docker logs:*)",
       "Bash(docker rm:*)",
       "Bash(docker ps:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker images:*)"
     ],
     "deny": [],
     "ask": []
