@@ -40,7 +40,7 @@ TRANSCRIPTION_SERVICE_URL="http://host.docker.internal:8765"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --install)
+    -I|-i|--install|-install|-Install)
       if [[ -n "$ACTION" && "$ACTION" != "install" ]]; then
         echo "Error: multiple actions specified" >&2
         exit 1
