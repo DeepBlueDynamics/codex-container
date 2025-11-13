@@ -11,6 +11,11 @@ JSON_MODE="none"
 CODEX_HOME_OVERRIDE=""
 USE_OSS=false
 OSS_MODEL=""
+CODEX_MODEL="${CODEX_DEFAULT_MODEL:-${CODEX_CLOUD_MODEL:-}}"
+OSS_SERVER_URL_OVERRIDE=""
+OLLAMA_HOST_OVERRIDE=""
+RESOLVED_OSS_SERVER_URL=""
+RESOLVED_OLLAMA_HOST=""
 NO_CACHE=false
 declare -a CODEX_ARGS=()
 declare -a EXEC_ARGS=()
@@ -318,6 +323,35 @@ while [[ $# -gt 0 ]]; do
       OSS_MODEL="$1"
       shift
       ;;
+    --codex-model)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --codex-model requires a value" >&2
+        exit 1
+      fi
+      CODEX_MODEL="$1"
+      shift
+      ;;
+    --oss-server-url)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --oss-server-url requires a value" >&2
+        exit 1
+      fi
+      OSS_SERVER_URL_OVERRIDE="$1"
+      USE_OSS=true
+      shift
+      ;;
+    --ollama-host)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --ollama-host requires a value" >&2
+        exit 1
+      fi
+      OLLAMA_HOST_OVERRIDE="$1"
+      USE_OSS=true
+      shift
+      ;;
     --)
       shift
       POSITIONAL_ARGS=("$@")
@@ -443,6 +477,18 @@ if [[ -z "$CODEX_HOME" ]]; then
 fi
 
 mkdir -p "$CODEX_HOME"
+
+if [[ -n "$OSS_SERVER_URL_OVERRIDE" ]]; then
+  RESOLVED_OSS_SERVER_URL="$OSS_SERVER_URL_OVERRIDE"
+elif [[ -n "${OSS_SERVER_URL:-}" ]]; then
+  RESOLVED_OSS_SERVER_URL="${OSS_SERVER_URL}"
+fi
+
+if [[ -n "$OLLAMA_HOST_OVERRIDE" ]]; then
+  RESOLVED_OLLAMA_HOST="$OLLAMA_HOST_OVERRIDE"
+elif [[ -n "${OLLAMA_HOST:-}" ]]; then
+  RESOLVED_OLLAMA_HOST="${OLLAMA_HOST}"
+fi
 
 if [[ ! -f "${CODEX_ROOT}/Dockerfile" ]]; then
   echo "Error: Dockerfile not found in ${CODEX_ROOT}" >&2
@@ -612,7 +658,35 @@ docker_run() {
   fi
   args+=(-v "${CODEX_ROOT}/scripts:/opt/codex-support:ro")
   if [[ "$USE_OSS" == true ]]; then
-    args+=(-e OLLAMA_HOST=http://host.docker.internal:11434 -e OSS_SERVER_URL=http://host.docker.internal:11434 -e ENABLE_OSS_BRIDGE=1)
+    local oss_target="$RESOLVED_OSS_SERVER_URL"
+    local ollama_target="$RESOLVED_OLLAMA_HOST"
+    local enable_bridge=0
+
+    if [[ -z "$oss_target" && -z "$ollama_target" ]]; then
+      oss_target="http://host.docker.internal:11434"
+      ollama_target="$oss_target"
+      enable_bridge=1
+    elif [[ -z "$oss_target" ]]; then
+      oss_target="$ollama_target"
+    elif [[ -z "$ollama_target" ]]; then
+      ollama_target="$oss_target"
+    fi
+
+    if [[ -n "$ollama_target" ]]; then
+      args+=(-e "OLLAMA_HOST=$ollama_target")
+    fi
+    if [[ -n "$oss_target" ]]; then
+      args+=(-e "OSS_SERVER_URL=$oss_target")
+    fi
+    if [[ $enable_bridge -eq 1 ]]; then
+      args+=(-e ENABLE_OSS_BRIDGE=1)
+    fi
+    if [[ -n "${OSS_API_KEY:-}" ]]; then
+      args+=(-e "OSS_API_KEY=${OSS_API_KEY}")
+    fi
+    if [[ -n "${OSS_DISABLE_BRIDGE:-}" ]]; then
+      args+=(-e "OSS_DISABLE_BRIDGE=${OSS_DISABLE_BRIDGE}")
+    fi
   fi
   if [[ -n "$TRANSCRIPTION_SERVICE_URL" ]]; then
     args+=(-e TRANSCRIPTION_SERVICE_URL="$TRANSCRIPTION_SERVICE_URL")
@@ -621,6 +695,13 @@ docker_run() {
     for env_kv in "${DOCKER_RUN_EXTRA_ENVS[@]}"; do
       args+=(-e "$env_kv")
     done
+  fi
+  # Pass Anthropic API key through to the container if present (parity with PowerShell runner)
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    if [[ $quiet -eq 0 ]]; then
+      echo "Passing ANTHROPIC_API_KEY to container (${#ANTHROPIC_API_KEY} chars)" >&2
+    fi
+    args+=(-e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}")
   fi
   if [[ ${#DOCKER_RUN_EXTRA_ARGS[@]} -gt 0 ]]; then
     args+=("${DOCKER_RUN_EXTRA_ARGS[@]}")
@@ -673,6 +754,16 @@ EOF
   else
     echo "Runner installed to ${dest} and available on PATH." >&2
   fi
+}
+
+model_flag_present() {
+  local token
+  for token in "$@"; do
+    if [[ "$token" == "--model" || "$token" == --model=* ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 
@@ -826,6 +917,17 @@ invoke_codex_run() {
       args+=("--model" "$OSS_MODEL")
     fi
   fi
+  if [[ -n "$CODEX_MODEL" ]]; then
+    local has_model=0
+    if model_flag_present "${args[@]}"; then
+      has_model=1
+    elif [[ ${#CODEX_ARGS[@]} -gt 0 ]] && model_flag_present "${CODEX_ARGS[@]}"; then
+      has_model=1
+    fi
+    if [[ $has_model -eq 0 ]]; then
+      args+=("--model" "$CODEX_MODEL")
+    fi
+  fi
   if [[ ${#CODEX_ARGS[@]} -gt 0 ]]; then
     args+=("${CODEX_ARGS[@]}")
   fi
@@ -905,6 +1007,15 @@ invoke_codex_exec() {
       done
     fi
     exec_args=("${new_exec_args[@]}")
+  fi
+
+  if [[ -n "$CODEX_MODEL" ]] && ! model_flag_present "${exec_args[@]}"; then
+    local first_token="${exec_args[0]}"
+    local -a remainder=()
+    if [[ ${#exec_args[@]} -gt 1 ]]; then
+      remainder=("${exec_args[@]:1}")
+    fi
+    exec_args=("$first_token" "--model" "$CODEX_MODEL" "${remainder[@]}")
   fi
 
   local -a cmd=(codex "${exec_args[@]}")
