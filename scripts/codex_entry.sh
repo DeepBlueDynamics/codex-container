@@ -9,32 +9,64 @@ install_mcp_servers_runtime() {
   local config_dir="/opt/codex-home/.codex"
   local config_path="${config_dir}/config.toml"
   local helper_script="/opt/update_mcp_config.py"
-  local manifest_src="${mcp_source}/.manifest"
   local installed_marker="${mcp_dest}/.installed"
-  local manifest_dest="${mcp_dest}/.manifest"
+
+  local workspace_config="/workspace/.codex-mcp.config"
+  local default_config="${mcp_source}/.codex-mcp.config"
+  local active_config=""
+  local using_default=false
 
   # Ensure we have MCP servers prepared during image build
-  if [[ ! -d "$mcp_source" || ! -f "$manifest_src" ]]; then
+  if [[ ! -d "$mcp_source" ]]; then
+    echo "[codex_entry] MCP source directory not found; skipping MCP install" >&2
     return 0
   fi
 
-  local new_manifest
-  new_manifest=$(cat "$manifest_src" 2>/dev/null)
-  if [[ -z "$new_manifest" ]]; then
-    echo "[codex_entry] No MCP servers found in manifest" >&2
+  # Determine which config to use
+  if [[ -f "$workspace_config" ]]; then
+    active_config="$workspace_config"
+    echo "[codex_entry] Using workspace-specific MCP config: ${workspace_config}" >&2
+  elif [[ -f "$default_config" ]]; then
+    active_config="$default_config"
+    using_default=true
+    echo "[codex_entry] Using default MCP config from image" >&2
+  else
+    echo "[codex_entry] No MCP config found; skipping MCP install" >&2
     return 0
   fi
 
-  local current_manifest=""
+  # Read the config file into an array (one tool per line)
+  # Strip carriage returns to handle Windows line endings
+  local tools=()
+  while IFS= read -r line; do
+    # Strip carriage returns and whitespace
+    line="$(echo "$line" | tr -d '\r' | xargs)"
+    # Skip empty lines and comments
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    tools+=("$line")
+  done < "$active_config"
+
+  if [[ ${#tools[@]} -eq 0 ]]; then
+    echo "[codex_entry] No MCP tools listed in config; skipping MCP install" >&2
+    return 0
+  fi
+
+  # If using default config, show helpful message
+  if [[ "$using_default" == true ]]; then
+    echo "[codex_entry] To customize MCP tools for this workspace, create /workspace/.codex-mcp.config with:" >&2
+    for tool in "${tools[@]}"; do
+      echo "[codex_entry]   ${tool}" >&2
+    done
+  fi
+
+  # Get previously installed tools
+  local current_tools=""
   if [[ -f "$installed_marker" ]]; then
-    current_manifest=$(cat "$installed_marker" 2>/dev/null)
-  elif [[ -f "$manifest_dest" ]]; then
-    current_manifest=$(cat "$manifest_dest" 2>/dev/null)
+    current_tools=$(cat "$installed_marker" 2>/dev/null)
   fi
 
   # Always update MCP servers to ensure latest code is deployed
-  # This ensures edits to existing MCP files are picked up
-  if [[ -n "$current_manifest" ]]; then
+  if [[ -n "$current_tools" ]]; then
     echo "[codex_entry] Updating MCP servers..." >&2
   else
     echo "[codex_entry] Installing MCP servers..." >&2
@@ -43,6 +75,7 @@ install_mcp_servers_runtime() {
   mkdir -p "$mcp_dest"
   mkdir -p "$config_dir"
 
+  # Install Python dependencies
   if [[ -f "$mcp_requirements" ]]; then
     echo "[codex_entry] Ensuring MCP Python dependencies are installed..." >&2
     if ! "$mcp_python" -m pip install --no-cache-dir -r "$mcp_requirements" >/dev/null 2>&1; then
@@ -50,15 +83,28 @@ install_mcp_servers_runtime() {
     fi
   fi
 
-  # Remove previously installed servers that we manage
-  if [[ -n "$current_manifest" ]]; then
-    for server_file in $current_manifest; do
+  # Remove previously installed servers
+  if [[ -n "$current_tools" ]]; then
+    for server_file in $current_tools; do
       rm -f "${mcp_dest}/${server_file}" 2>/dev/null || true
     done
   fi
 
-  cp -r "${mcp_source}"/*.py "$mcp_dest/" 2>/dev/null || true
-  cp "$manifest_src" "$manifest_dest" 2>/dev/null || true
+  # Copy only the tools listed in the config
+  local copied_tools=()
+  for tool in "${tools[@]}"; do
+    local src_file="${mcp_source}/${tool}"
+    if [[ -f "$src_file" ]]; then
+      cp "$src_file" "${mcp_dest}/${tool}" 2>/dev/null || {
+        echo "[codex_entry] Warning: Failed to copy ${tool}" >&2
+        continue
+      }
+      copied_tools+=("$tool")
+      echo "[codex_entry] Installed ${tool}" >&2
+    else
+      echo "[codex_entry] Warning: Tool ${tool} not found in ${mcp_source}" >&2
+    fi
+  done
 
   # Copy MCP data directories if they exist (e.g., product_search_data)
   if [[ -d "/opt/mcp-data" ]]; then
@@ -66,20 +112,22 @@ install_mcp_servers_runtime() {
     cp -r /opt/mcp-data/* "$mcp_dest/" 2>/dev/null || true
   fi
 
-  if [[ -f "$helper_script" ]]; then
-    # Split manifest into array while respecting word boundaries
-    # shellcheck disable=SC2206
-    local servers=( $new_manifest )
-    if [[ ${#servers[@]} -gt 0 ]]; then
-      "$mcp_python" "$helper_script" "$config_path" "$mcp_python" "${servers[@]}" || true
-      echo "[codex_entry] Installed MCP servers: $new_manifest" >&2
-    fi
+  # Register tools in Codex config
+  if [[ -f "$helper_script" && ${#copied_tools[@]} -gt 0 ]]; then
+    "$mcp_python" "$helper_script" "$config_path" "$mcp_python" "${copied_tools[@]}" || true
+    echo "[codex_entry] Registered ${#copied_tools[@]} MCP tool(s)" >&2
   fi
 
-  printf '%s\n' "$new_manifest" > "$installed_marker"
+  # Save the list of installed tools
+  printf '%s\n' "${copied_tools[*]}" > "$installed_marker"
 }
 
 start_oss_bridge() {
+  if [[ "${OSS_DISABLE_BRIDGE:-}" == "1" ]]; then
+    echo "[codex_entry] OSS bridge explicitly disabled" >&2
+    return
+  fi
+
   local target="${OSS_SERVER_URL:-${OLLAMA_HOST:-}}"
   if [[ -z "$target" ]]; then
     target="http://host.docker.internal:11434"
@@ -89,7 +137,7 @@ start_oss_bridge() {
     local host="${BASH_REMATCH[1]}"
     local port="${BASH_REMATCH[3]:-80}"
   else
-    echo "[codex_entry] Unrecognized OSS target '$target'; skipping bridge" >&2
+    echo "[codex_entry] OSS target '$target' is not a plain http:// host; skipping bridge" >&2
     return
   fi
 
@@ -142,7 +190,46 @@ ensure_baml_workspace() {
   mkdir -p "${workspace}"
 }
 
+mount_pi_share() {
+  # Optionally mount a Raspberry Pi NFS export into the container.
+  # Controlled via environment variables:
+  #   PI_NFS_DISABLE=1         -> skip mounting
+  #   PI_NFS_SERVER            -> default 192.168.86.37
+  #   PI_NFS_EXPORT            -> default /srv/share
+  #   PI_NFS_MOUNTPOINT        -> default /workspace/pi-share
+
+  if [[ "${PI_NFS_DISABLE:-0}" == "1" ]]; then
+    return
+  fi
+
+  local server="${PI_NFS_SERVER:-192.168.86.37}"
+  local export_path="${PI_NFS_EXPORT:-/srv/share}"
+  local mountpoint="${PI_NFS_MOUNTPOINT:-/workspace/pi-share}"
+
+  mkdir -p "${mountpoint}"
+
+  if command -v mountpoint >/dev/null 2>&1; then
+    if mountpoint -q "${mountpoint}"; then
+      echo "[codex_entry] Pi NFS share already mounted at ${mountpoint}" >&2
+      return
+    fi
+  fi
+
+  if ! command -v mount >/dev/null 2>&1; then
+    echo "[codex_entry] mount command not available; skipping Pi NFS mount" >&2
+    return
+  fi
+
+  # Best-effort mount; failure should not stop Codex from starting.
+  if mount -t nfs "${server}:${export_path}" "${mountpoint}" >/dev/null 2>&1; then
+    echo "[codex_entry] Mounted Pi NFS share ${server}:${export_path} at ${mountpoint}" >&2
+  else
+    echo "[codex_entry] Failed to mount Pi NFS share ${server}:${export_path}; continuing without it" >&2
+  fi
+}
+
 # Install MCP servers on first run
+mount_pi_share
 install_mcp_servers_runtime
 
 if [[ "${ENABLE_OSS_BRIDGE:-}" == "1" ]]; then
@@ -162,5 +249,15 @@ fi
 # Note: Transcription daemon is now a separate persistent service container
 # Started via scripts/start_transcription_service.ps1
 # This keeps Whisper model loaded and avoids reloading on every Codex run
+
+# Allow the Docker CLI to pass "--" as a separator without providing a command.
+if [[ "$#" -eq 0 ]]; then
+  set -- /bin/bash
+elif [[ "$1" == "--" ]]; then
+  shift
+  if [[ "$#" -eq 0 ]]; then
+    set -- /bin/bash
+  fi
+fi
 
 exec "$@"

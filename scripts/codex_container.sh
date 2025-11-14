@@ -703,6 +703,19 @@ docker_run() {
     fi
     args+=(-e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}")
   fi
+  # Pass GitHub tokens if present (GITHUB_TOKEN or GH_TOKEN)
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    if [[ $quiet -eq 0 ]]; then
+      echo "Passing GITHUB_TOKEN to container (${#GITHUB_TOKEN} chars)" >&2
+    fi
+    args+=(-e "GITHUB_TOKEN=${GITHUB_TOKEN}")
+  fi
+  if [[ -n "${GH_TOKEN:-}" ]]; then
+    if [[ $quiet -eq 0 ]]; then
+      echo "Passing GH_TOKEN to container (${#GH_TOKEN} chars)" >&2
+    fi
+    args+=(-e "GH_TOKEN=${GH_TOKEN}")
+  fi
   if [[ ${#DOCKER_RUN_EXTRA_ARGS[@]} -gt 0 ]]; then
     args+=("${DOCKER_RUN_EXTRA_ARGS[@]}")
   fi

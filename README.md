@@ -322,11 +322,14 @@ Sessions are stored in `~/.codex-service/.codex/sessions/` organized by date. Th
   - `-Tag <image>` and `-Push` let you build or push under a custom image name.
   - `-SkipUpdate` skips the npm refresh (useful when you know the CLI is up to date).
   - `-NoAutoLogin` disables the implicit login check; Codex must already be authenticated.
-  - `-Oss` tells Codex to target a locally hosted provider via `--oss` (e.g., Ollama). The helper automatically bridges `127.0.0.1:11434` inside the container to your host service—just keep Ollama running as you normally would.
+  - `-Oss` tells Codex to target a locally hosted provider via `--oss` (e.g., Ollama). The helper automatically bridges `127.0.0.1:11434` inside the container to your host service—just keep Ollama running as you normally would. Set `OSS_DISABLE_BRIDGE=1` if you need to keep `--oss` but do *not* want the helper to start the bridge.
   - `-OssModel <name>` (maps to Codex `-m/--model` and implies `-Oss`) selects the model Codex should request when using the OSS provider.
+  - `-OssServerUrl <url>` / `-OllamaHost <url>` forward custom endpoints to the container. Use these to point Codex at a hosted GPT-OSS cloud endpoint instead of your local Ollama daemon. (`OSS_SERVER_URL`, `OLLAMA_HOST`, and `OSS_API_KEY` environment variables are also honored.)
+  - `-CodexModel <name>` forwards `--model <name>` directly to Codex without enabling `-Oss` (ideal for hosted IDs such as `kimi-k2-thinking` or `gpt-oss:120b-cloud`).
   - `-CodexArgs <value>` and `-Exec` both accept multiple values (repeat the flag or pass positionals after `--`) to forward raw arguments to the CLI.
   - `-SessionId <id>` resumes a previous session (accepts full UUID or last 5 characters)
   - `-TranscriptionServiceUrl <url>` configures the transcription service endpoint (default: `http://host.docker.internal:8765`)
+  - Set `CODEX_DEFAULT_MODEL` (or `CODEX_CLOUD_MODEL`) in your shell to make the wrapper automatically pass that hosted model without toggling `-Oss`.
 
 ## macOS / Linux / WSL (Bash)
 
@@ -340,13 +343,17 @@ Sessions are stored in `~/.codex-service/.codex/sessions/` organized by date. Th
   - `--workspace <path>` mounts an alternate directory as `/workspace`.
   - `--tag <image>` / `--push` match the Docker image controls in the PowerShell script.
   - `--skip-update` skips the npm refresh; `--no-auto-login` avoids implicit login attempts.
-  - `--oss` forwards the `--oss` flag and the helper bridge takes care of sending container traffic to your host Ollama service automatically.
+  - `--oss` forwards the `--oss` flag and the helper bridge takes care of sending container traffic to your host Ollama service automatically (export `OSS_DISABLE_BRIDGE=1` to suppress the bridge even when `--oss` is set).
   - `--model <name>` (maps to Codex `-m/--model` and implies `--oss`) mirrors the PowerShell `-OssModel` flag.
+  - `--oss-server-url <url>` / `--ollama-host <url>` override the endpoint Codex should reach when `--oss` is active (or export `OSS_SERVER_URL` / `OLLAMA_HOST` / `OSS_API_KEY` before invoking the script). Leave these unset to keep the default `127.0.0.1:11434` bridge.
+  - `--codex-model <name>` passes `--model <name>` to Codex without enabling `--oss`; use this for hosted/remote models like `gpt-oss:120b-cloud`.
   - `--codex-arg <value>` and `--exec-arg <value>` forward additional parameters to Codex (repeat the flag as needed).
   - `--watch-*` controls the directory watcher (see *Directory Watcher* below).
   - `--monitor [--monitor-prompt <file>]` watches a directory and, for each change, feeds `MONITOR.md` (or your supplied prompt file) to Codex alongside the file path.
   - `--session-id <id>` resumes a previous session (accepts full UUID or last 5 characters)
   - `--transcription-service-url <url>` configures the transcription service endpoint (default: `http://host.docker.internal:8765`)
+  - Export `CODEX_DEFAULT_MODEL`/`CODEX_CLOUD_MODEL` to inject a remote model automatically without opting into `--oss`.
+  - When using hosted GPT-OSS plans, set `OSS_SERVER_URL` (and, if required, `OSS_API_KEY`) to the HTTPS endpoint your provider gives you, then run `--oss --model gpt-oss:120b-cloud`. The helper only enables the localhost bridge when no custom endpoint is specified, so remote URLs won't trigger giant local downloads.
 
 Typical example:
 
@@ -402,6 +409,49 @@ codex-container/
 ```
 
 After running install, these servers will be available to Codex for tool execution.
+
+### Customizing MCP Tools Per Workspace
+
+You can control which MCP tools are activated using `.codex-mcp.config` files:
+
+**Default Configuration** (`MCP/.codex-mcp.config`):
+- Defines the default set of tools baked into the Docker image
+- Used when no workspace-specific config exists
+- Edit this file and rebuild to change the default tool set
+
+**Workspace-Specific Configuration** (`/workspace/.codex-mcp.config`):
+- Place this file in your workspace root to override the default
+- Only the listed tools will be loaded for that workspace
+- Useful for project-specific tool subsets (e.g., only web scraping tools for a crawling project)
+
+**Config Format**: One tool filename per line (comments with `#` supported)
+```
+# Core utilities
+time-tool.py
+calculate.py
+
+# File operations
+gnosis-files-basic.py
+gnosis-files-search.py
+
+# Web tools
+gnosis-crawl.py
+```
+
+**Runtime Behavior**:
+- On container start, the entrypoint checks `/workspace/.codex-mcp.config` first
+- If not found, falls back to the default config from the image
+- If using the default, logs a helpful message showing which tools are active and how to customize
+
+**Example**: Create `.codex-mcp.config` in your workspace to enable only web scraping and file tools:
+```bash
+cat > .codex-mcp.config << 'EOF'
+gnosis-crawl.py
+gnosis-files-basic.py
+gnosis-files-search.py
+serpapi-search.py
+EOF
+```
 
 ### Available MCP Tools (135 total)
 

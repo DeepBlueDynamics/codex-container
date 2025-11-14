@@ -27,16 +27,19 @@ Setup:
 
 Notes:
   - API key is required for all operations
-  - Generated audio is returned as base64-encoded data
+  - Prefer saving audio to a file (pass `output_path`) to keep MCP responses small
+  - Inline base64 audio is only returned when explicitly requested via `include_audio_base64=True`
+  - Pair with the `speaker-bridge` MCP server (`speaker_play`) to trigger
+    playback once a file is generated
   - Default voice and model can be configured
 """
 
 import os
 import base64
-import subprocess
 import tempfile
+import shutil
+import time
 from typing import Any, Dict, List, Optional
-from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP, Context
 
@@ -98,6 +101,30 @@ def _get_client():
         )
 
     return ElevenLabs(api_key=config["api_key"])
+
+
+def _default_output_path(requested_path: Optional[str]) -> tuple[str, bool]:
+    """Resolve the path where audio should be written."""
+
+    if requested_path:
+        return requested_path, False
+
+    outbox = os.environ.get("VOICE_OUTBOX_CONTAINER_PATH")
+    if outbox:
+        outbox = os.path.realpath(outbox)
+        os.makedirs(outbox, exist_ok=True)
+        filename = f"elevenlabs_{int(time.time())}.mp3"
+        return os.path.join(outbox, filename), False
+
+    tmp_file = tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=".mp3",
+        prefix="elevenlabs_",
+        dir="/workspace"
+    )
+    tmp_name = tmp_file.name
+    tmp_file.close()
+    return tmp_name, True
 
 
 @mcp.tool()
@@ -246,6 +273,7 @@ async def elevenlabs_text_to_speech(
     model_id: str = "eleven_monolingual_v1",
     stability: float = 0.5,
     similarity_boost: float = 0.75,
+    include_audio_base64: bool = False,
     ctx: Context = None
 ) -> Dict[str, Any]:
     """
@@ -254,18 +282,23 @@ async def elevenlabs_text_to_speech(
     Args:
         text: Text to convert to speech (required)
         voice_id: ElevenLabs voice ID (default: Rachel)
-        output_path: Path to save audio file (optional, saves to /tmp if in container)
+        output_path: Path to save audio file. Strongly recommended so downstream
+            agents can reference a filename instead of huge payloads. Defaults to a
+            workspace temp file when omitted.
         model_id: TTS model to use (default: eleven_monolingual_v1)
         stability: Voice stability (0.0-1.0, default: 0.5)
         similarity_boost: Voice similarity (0.0-1.0, default: 0.75)
+        include_audio_base64: Set True only if you explicitly need inline audio
+            data. Defaults to False to avoid megabyte-scale MCP responses.
         ctx: MCP context (optional)
 
     Returns:
         Dictionary containing:
             - success: bool
-            - output_path: str (if saved to file)
-            - audio_base64: str (base64-encoded audio data)
+            - output_path: str (always saved to file)
+            - audio_base64: str (only when include_audio_base64=True)
             - size_bytes: int
+            - relative_path: str (when saved inside voice-outbox; pass to speaker_play)
     """
     try:
         client = _get_client()
@@ -284,21 +317,47 @@ async def elevenlabs_text_to_speech(
         # Collect audio chunks
         audio_data = b"".join(audio_generator)
 
-        # Save to file if path provided
-        saved_path = None
-        if output_path:
-            with open(output_path, "wb") as f:
-                f.write(audio_data)
-            saved_path = output_path
+        # Always write audio to disk so callers can fetch it without inline blobs
+        saved_path, created_temp_file = _default_output_path(output_path)
 
-        return {
+        with open(saved_path, "wb") as f:
+            f.write(audio_data)
+
+        response: Dict[str, Any] = {
             "success": True,
             "output_path": saved_path,
-            "audio_base64": base64.b64encode(audio_data).decode('utf-8'),
             "size_bytes": len(audio_data),
             "voice_id": voice_id,
             "model_id": model_id
         }
+
+        relative_path: Optional[str] = None
+        outbox_root = os.environ.get("VOICE_OUTBOX_CONTAINER_PATH")
+        if outbox_root:
+            try:
+                base_real = os.path.realpath(outbox_root)
+                saved_real = os.path.realpath(saved_path)
+                if os.path.commonpath([saved_real, base_real]) == base_real:
+                    relative_path = os.path.relpath(saved_real, base_real)
+            except Exception:  # pragma: no cover - defensive
+                relative_path = None
+
+        if relative_path:
+            response["relative_path"] = relative_path
+
+        if include_audio_base64:
+            response["audio_base64"] = base64.b64encode(audio_data).decode('utf-8')
+
+        if created_temp_file and not include_audio_base64:
+            response["message"] = (
+                "Audio saved to a workspace temp file. Pass output_path or set "
+                "include_audio_base64=True if you need inline audio next time."
+            )
+        else:
+            hint = "Use speaker_play(relative_path='{}') to replay via the speaker bridge.".format(relative_path) if relative_path else "Use speaker_play to stream this file to the speaker bridge."
+            response.setdefault("message", hint)
+
+        return response
 
     except Exception as e:
         return {
@@ -346,55 +405,76 @@ async def elevenlabs_list_models(ctx: Context = None) -> Dict[str, Any]:
 
 @mcp.tool()
 async def elevenlabs_save_for_playback(
-    audio_base64: str,
+    audio_base64: Optional[str] = None,
     filename: Optional[str] = None,
+    audio_path: Optional[str] = None,
     ctx: Context = None
 ) -> Dict[str, Any]:
     """
-    Save base64 audio to mounted workspace for playback on host machine.
+    Save audio to the mounted workspace for playback on the host machine.
 
-    Since the container has no audio hardware, this saves audio to /workspace
-    which is mounted to the host. The host can then play the file.
+    Since the container has no audio hardware, this writes files to /workspace
+    which is mounted to the host. Provide either inline base64 data (set
+    `include_audio_base64=True` when generating audio) or a path to an existing
+    file previously written by the TTS tool.
 
     Args:
-        audio_base64: Base64-encoded audio data to save (required)
+        audio_base64: Base64-encoded audio data to save.
         filename: Optional filename (default: elevenlabs_TIMESTAMP.mp3)
+        audio_path: Optional source path to copy instead of base64
         ctx: MCP context (optional)
 
     Returns:
         Dictionary containing:
             - success: bool
             - container_path: str - Path inside container
+            - filename: str - Saved filename
+            - size_bytes: int
             - host_path_hint: str - Likely path on host machine
             - message: str - Instructions for playback
+            - playback_instructions: list[str] - Example commands
     """
     try:
         import time
 
-        # Decode audio data
-        audio_data = base64.b64decode(audio_base64)
+        if not audio_base64 and not audio_path:
+            return {
+                "success": False,
+                "error": "Provide audio_base64 or audio_path when calling elevenlabs_save_for_playback"
+            }
 
-        # Generate filename if not provided
+        if audio_path and not os.path.exists(audio_path):
+            return {
+                "success": False,
+                "error": f"audio_path not found: {audio_path}"
+            }
+
         if not filename:
             timestamp = int(time.time())
             filename = f"elevenlabs_{timestamp}.mp3"
 
-        # Ensure .mp3 extension
         if not filename.endswith('.mp3'):
             filename += '.mp3'
 
-        # Save to workspace (mounted to host)
         workspace_path = "/workspace"
         output_path = os.path.join(workspace_path, filename)
 
-        with open(output_path, "wb") as f:
-            f.write(audio_data)
+        if audio_base64:
+            audio_data = base64.b64decode(audio_base64)
+            with open(output_path, "wb") as f:
+                f.write(audio_data)
+        else:
+            shutil.copy(audio_path, output_path)
+            with open(output_path, "rb") as f:
+                audio_data = f.read()
+
+        size_bytes = len(audio_data)
 
         return {
             "success": True,
             "container_path": output_path,
             "filename": filename,
-            "size_bytes": len(audio_data),
+            "size_bytes": size_bytes,
             "host_path_hint": f"C:\\Users\\kord\\Code\\gnosis\\codex-container\\{filename}",
             "message": f"Audio saved to {output_path}. Play on host with: ffplay {filename} or open in your media player.",
             "playback_instructions": [

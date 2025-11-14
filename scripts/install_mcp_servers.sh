@@ -3,11 +3,11 @@ set -euo pipefail
 
 # This script runs inside the container during build to prepare MCP servers
 # It copies MCP Python files from /opt/mcp-source to /opt/mcp-installed
-# These files will be copied to /opt/codex-home/mcp at runtime by the entrypoint.
+# These files will be selectively copied to /opt/codex-home/mcp at runtime based on .codex-mcp.config
 
 MCP_SOURCE="/opt/mcp-source"
 MCP_DEST="/opt/mcp-installed"
-MCP_PYTHON="/opt/mcp-venv/bin/python3"
+MCP_CONFIG="${MCP_SOURCE}/.codex-mcp.config"
 
 log() {
   echo "[install_mcp] $*" >&2
@@ -54,8 +54,7 @@ done
 # Create destination directory
 mkdir -p "$MCP_DEST"
 
-# Copy files and collect basenames
-MANIFEST_ENTRIES=()
+# Copy all MCP files
 COPIED=0
 for src in "${SORTED[@]}"; do
   base="$(basename "$src")"
@@ -69,16 +68,21 @@ for src in "${SORTED[@]}"; do
     exit 1
   }
   COPIED=$((COPIED + 1))
-  if [[ "$base" == _*.py ]]; then
-    log "Skipping ${base} in manifest (helper module)"
-    continue
-  fi
-  MANIFEST_ENTRIES+=("$base")
   log "Successfully copied ${base}"
 done
 
-# Create a manifest file with the list of MCP servers
-echo "${MANIFEST_ENTRIES[*]}" > "${MCP_DEST}/.manifest"
+# Copy .codex-mcp.config if it exists (defines which tools to activate)
+if [[ -f "$MCP_CONFIG" ]]; then
+  log "Copying .codex-mcp.config to ${MCP_DEST}"
+  cp "$MCP_CONFIG" "${MCP_DEST}/.codex-mcp.config" || {
+    log "Error: Failed to copy .codex-mcp.config"
+    exit 1
+  }
+  chmod 0644 "${MCP_DEST}/.codex-mcp.config"
+else
+  log "Warning: No .codex-mcp.config found in ${MCP_SOURCE}"
+  log "All MCP servers will be available but none will be activated by default"
+fi
 
 log "Successfully prepared ${COPIED} MCP server(s) in ${MCP_DEST}"
-log "These will be installed to /opt/codex-home/mcp at container startup"
+log "Tools will be selectively installed based on .codex-mcp.config at container startup"

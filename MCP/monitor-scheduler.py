@@ -32,6 +32,7 @@ from monitor_scheduler import (
     CONFIG_FILENAME,
     TriggerRecord,
     generate_trigger_id,
+    get_session_triggers_path,
     list_trigger_records,
     load_config,
     load_trigger,
@@ -58,9 +59,15 @@ mcp = FastMCP("monitor-scheduler")
 
 
 def _config_path(watch_path: str) -> Path:
+    """DEPRECATED: Get config path from watch directory. Use _session_config_path instead."""
     root = Path(watch_path).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root / CONFIG_FILENAME
+
+
+def _session_config_path(session_id: str) -> Path:
+    """Get config path for a session ID."""
+    return get_session_triggers_path(session_id)
 
 
 def _record_to_payload(record: TriggerRecord) -> Dict[str, Any]:
@@ -86,14 +93,15 @@ def _apply_updates(record: TriggerRecord, updates: Dict[str, Any]) -> TriggerRec
 
 
 @mcp.tool()
-async def list_triggers(watch_path: str) -> Dict[str, Any]:
-    """List configured monitor triggers for a watch path."""
+async def list_triggers(session_id: str) -> Dict[str, Any]:
+    """List configured monitor triggers for a session."""
 
-    config_path = _config_path(watch_path)
+    config_path = _session_config_path(session_id)
     records = list_trigger_records(config_path)
     payload = [_record_to_payload(r) for r in records]
     return {
         "success": True,
+        "session_id": session_id,
         "count": len(payload),
         "triggers": payload,
         "config_path": str(config_path),
@@ -101,10 +109,10 @@ async def list_triggers(watch_path: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
-async def get_trigger(watch_path: str, trigger_id: str) -> Dict[str, Any]:
+async def get_trigger(session_id: str, trigger_id: str) -> Dict[str, Any]:
     """Get a single trigger definition."""
 
-    config_path = _config_path(watch_path)
+    config_path = _session_config_path(session_id)
     record = load_trigger(config_path, trigger_id)
     if not record:
         return {"success": False, "error": f"Trigger {trigger_id} not found"}
@@ -114,7 +122,7 @@ async def get_trigger(watch_path: str, trigger_id: str) -> Dict[str, Any]:
 
 @mcp.tool()
 async def create_trigger(
-    watch_path: str,
+    session_id: str,
     title: str,
     description: str,
     prompt_text: str,
@@ -130,7 +138,7 @@ async def create_trigger(
 ) -> Dict[str, Any]:
     """Create a new monitor trigger."""
 
-    config_path = _config_path(watch_path)
+    config_path = _session_config_path(session_id)
 
     schedule_mode = (schedule_mode or "").lower()
     schedule: Dict[str, Any]
@@ -183,7 +191,7 @@ async def create_trigger(
 
 @mcp.tool()
 async def update_trigger(
-    watch_path: str,
+    session_id: str,
     trigger_id: str,
     updates_json: str,
 ) -> Dict[str, Any]:
@@ -193,7 +201,7 @@ async def update_trigger(
     prompt_text, enabled, tags, schedule, created_by.
     """
 
-    config_path = _config_path(watch_path)
+    config_path = _session_config_path(session_id)
     record = load_trigger(config_path, trigger_id)
     if not record:
         return {"success": False, "error": f"Trigger {trigger_id} not found"}
@@ -216,10 +224,10 @@ async def update_trigger(
 
 
 @mcp.tool()
-async def toggle_trigger(watch_path: str, trigger_id: str, enabled: bool) -> Dict[str, Any]:
+async def toggle_trigger(session_id: str, trigger_id: str, enabled: bool) -> Dict[str, Any]:
     """Enable or disable a trigger."""
 
-    config_path = _config_path(watch_path)
+    config_path = _session_config_path(session_id)
     record = load_trigger(config_path, trigger_id)
     if not record:
         return {"success": False, "error": f"Trigger {trigger_id} not found"}
@@ -232,10 +240,10 @@ async def toggle_trigger(watch_path: str, trigger_id: str, enabled: bool) -> Dic
 
 
 @mcp.tool()
-async def delete_trigger(watch_path: str, trigger_id: str) -> Dict[str, Any]:
+async def delete_trigger(session_id: str, trigger_id: str) -> Dict[str, Any]:
     """Delete a trigger."""
 
-    config_path = _config_path(watch_path)
+    config_path = _session_config_path(session_id)
     removed = remove_trigger(config_path, trigger_id)
     if removed:
         logger.info("Deleted trigger %s", trigger_id)
@@ -245,7 +253,7 @@ async def delete_trigger(watch_path: str, trigger_id: str) -> Dict[str, Any]:
 
 @mcp.tool()
 async def record_fire_result(
-    watch_path: str,
+    session_id: str,
     trigger_id: str,
     fired_at_iso: str,
 ) -> Dict[str, Any]:
@@ -255,7 +263,7 @@ async def record_fire_result(
     trigger fires successfully so that external observers can see usage data.
     """
 
-    config_path = _config_path(watch_path)
+    config_path = _session_config_path(session_id)
     record = load_trigger(config_path, trigger_id)
     if not record:
         return {"success": False, "error": f"Trigger {trigger_id} not found"}

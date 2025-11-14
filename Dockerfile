@@ -26,6 +26,7 @@ RUN apt-get update \
     fzf \
     gh \
     git \
+    nfs-common \
     gnupg2 \
     iproute2 \
     iputils-ping \

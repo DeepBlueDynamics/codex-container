@@ -89,6 +89,7 @@ credentials/
 
 # API keys and secrets
 .elevenlabs.env
+.wraithenv
 
 # Database files
 *.db

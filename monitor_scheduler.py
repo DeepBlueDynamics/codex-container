@@ -12,6 +12,8 @@ import uuid
 
 
 CONFIG_FILENAME = ".codex-monitor-triggers.json"
+SESSION_TRIGGERS_FILENAME = "triggers.json"
+CODEX_HOME = Path("/opt/codex-home")
 
 
 def _utc_now() -> datetime:
@@ -46,6 +48,23 @@ def _parse_hhmm(value: str) -> datetime:
         return datetime(2000, 1, 1, int(hour), int(minute))
     except Exception as exc:  # pragma: no cover
         raise ValueError(f"Invalid schedule time '{value}': {exc}")
+
+
+def get_session_dir(session_id: str) -> Path:
+    """Get the session directory path for a given session ID."""
+    session_dir = CODEX_HOME / "sessions" / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
+
+
+def get_session_triggers_path(session_id: str) -> Path:
+    """Get the triggers file path for a session."""
+    return get_session_dir(session_id) / SESSION_TRIGGERS_FILENAME
+
+
+def get_session_env_path(session_id: str) -> Path:
+    """Get the .env file path for a session."""
+    return get_session_dir(session_id) / ".env"
 
 
 @dataclass
@@ -237,7 +256,12 @@ def render_template(template: str, values: Dict[str, Any]) -> str:
 
 __all__ = [
     "CONFIG_FILENAME",
+    "SESSION_TRIGGERS_FILENAME",
+    "CODEX_HOME",
     "TriggerRecord",
+    "get_session_dir",
+    "get_session_triggers_path",
+    "get_session_env_path",
     "load_config",
     "save_config",
     "list_trigger_records",

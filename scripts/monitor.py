@@ -26,6 +26,7 @@ if str(ROOT_DIR) not in sys.path:
 from monitor_scheduler import (
     CONFIG_FILENAME,
     TriggerRecord,
+    get_session_triggers_path,
     list_trigger_records,
     load_config,
     save_config,
@@ -116,7 +117,6 @@ class CodexMonitor:
         self.codex_script = codex_script
         self.prompt_file = watch_path / monitor_prompt_file
         self.session_file = watch_path / ".codex-monitor-session"
-        self.trigger_config_path = watch_path / CONFIG_FILENAME
         self.new_session = new_session
         self.json_mode = json_mode
         self.codex_args = codex_args or []
@@ -136,6 +136,15 @@ class CodexMonitor:
         self.scheduler_event = threading.Event()
         self.scheduler_stop = threading.Event()
         self.scheduler_thread: Optional[threading.Thread] = None
+
+    @property
+    def trigger_config_path(self) -> Path:
+        """Get the trigger configuration path - session-based if we have a session, else watch-path based."""
+        if self.session_id:
+            return get_session_triggers_path(self.session_id)
+        else:
+            # Fallback to old location for backward compatibility during migration
+            return self.watch_path / CONFIG_FILENAME
 
     def queue_file(self, file_path: Path, action: str):
         """Add file to pending changes queue."""

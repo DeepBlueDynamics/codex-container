@@ -59,6 +59,15 @@
 .PARAMETER OssModel
     Specify Ollama model (implies -Oss)
 
+.PARAMETER OssServerUrl
+    Override the OSS endpoint Codex should call when -Oss is set (set this to your hosted GPT-OSS cloud URL to avoid the localhost bridge)
+
+.PARAMETER OllamaHost
+    Convenience alias for Ollama host override; defaults to the same value as -OssServerUrl when only one is provided
+
+.PARAMETER CodexModel
+    Forward a cloud model ID to Codex without implying -Oss. Useful for providers like gpt-oss:120b-cloud.
+
 .PARAMETER SkipUpdate
     Don't update Codex CLI from npm
 
@@ -114,12 +123,18 @@ param(
     [string]$CodexHome,
     [Parameter(ValueFromRemainingArguments=$true)]
     [string[]]$CodexArgs,
+    [string]$OssServerUrl,
+    [string]$OllamaHost,
+    [string]$CodexModel,
     [switch]$SkipUpdate,
     [switch]$NoAutoLogin,
     [switch]$Json,
     [switch]$JsonE,
     [switch]$Oss,
     [string]$OssModel,
+    [switch]$Speaker,
+    [int]$SpeakerPort = 8777,
+    [switch]$Danger,
     [int]$GatewayPort,
     [string]$GatewayHost,
     [int]$GatewayTimeoutMs,
@@ -127,7 +142,8 @@ param(
     [string[]]$GatewayExtraArgs,
     [string]$TranscriptionServiceUrl = 'http://host.docker.internal:8765',
     [string]$SessionId,
-    [switch]$ListSessions
+    [switch]$ListSessions,
+    [switch]$Privileged
 )
 
 $ErrorActionPreference = 'Stop'
@@ -135,6 +151,25 @@ $ErrorActionPreference = 'Stop'
 if ($OssModel) {
     $Oss = $true
 }
+
+if (-not $CodexModel) {
+    if ($env:CODEX_CLOUD_MODEL) {
+        $CodexModel = $env:CODEX_CLOUD_MODEL
+    } elseif ($env:CODEX_DEFAULT_MODEL) {
+        $CodexModel = $env:CODEX_DEFAULT_MODEL
+    }
+}
+
+if (-not $OssServerUrl -and $env:OSS_SERVER_URL) {
+    $OssServerUrl = $env:OSS_SERVER_URL
+}
+
+if (-not $OllamaHost -and $env:OLLAMA_HOST) {
+    $OllamaHost = $env:OLLAMA_HOST
+}
+
+$script:ResolvedOssServerUrl = $OssServerUrl
+$script:ResolvedOllamaHost = $OllamaHost
 
 function Resolve-WorkspacePath {
     param(
@@ -198,12 +233,194 @@ function Resolve-CodexHomePath {
     }
 }
 
+function Test-HasModelFlag {
+    param(
+        [string[]]$Args
+    )
+
+    if (-not $Args) {
+        return $false
+    }
+
+    for ($i = 0; $i -lt $Args.Count; $i++) {
+        $arg = $Args[$i]
+        if ($arg -eq '--model' -or $arg -like '--model=*') {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-PythonInvocation {
+    if ($env:PYTHON) {
+        return [PSCustomObject]@{ FilePath = $env:PYTHON; Prefix = @() }
+    }
+
+    foreach ($candidate in @('python3', 'python')) {
+        if (Get-Command $candidate -ErrorAction SilentlyContinue) {
+            return [PSCustomObject]@{ FilePath = $candidate; Prefix = @() }
+        }
+    }
+
+    if (Get-Command 'py' -ErrorAction SilentlyContinue) {
+        return [PSCustomObject]@{ FilePath = 'py'; Prefix = @('-3') }
+    }
+
+    throw 'Unable to locate a Python interpreter on the host. Install Python or set $env:PYTHON.'
+}
+
+function Resolve-SpeakerPaths {
+    param(
+        [string]$CodexHome
+    )
+
+    $speakerRoot = Join-Path $CodexHome 'speaker'
+    $voiceOutbox = Join-Path $CodexHome 'voice-outbox'
+    $scriptTarget = Join-Path $speakerRoot 'speaker_service.py'
+    $logPath = Join-Path $speakerRoot 'speaker.log'
+    $pidPath = Join-Path $speakerRoot 'speaker.pid'
+
+    return [PSCustomObject]@{
+        SpeakerRoot   = $speakerRoot
+        VoiceOutbox   = $voiceOutbox
+        ScriptPath    = $scriptTarget
+        LogPath       = $logPath
+        PidPath       = $pidPath
+    }
+}
+
+function Stop-SpeakerService {
+    param(
+        $Config
+    )
+
+    if (-not $Config) {
+        return
+    }
+
+    if ($Config.Process -and -not $Config.Process.HasExited) {
+        try {
+            Stop-Process -Id $Config.Process.Id -ErrorAction SilentlyContinue
+        } catch {
+            # Ignore
+        }
+    }
+
+    if ($Config.PidPath -and (Test-Path $Config.PidPath)) {
+        try {
+            $pidValue = Get-Content -Path $Config.PidPath -ErrorAction SilentlyContinue
+            if ($pidValue) {
+                $parsedPid = $pidValue -as [int]
+                if ($parsedPid) {
+                    try {
+                        Stop-Process -Id $parsedPid -ErrorAction SilentlyContinue
+                    } catch {
+                        # Ignore
+                    }
+                }
+            }
+        } catch {
+            # ignore
+        }
+
+        try {
+            Remove-Item -Path $Config.PidPath -Force -ErrorAction SilentlyContinue
+        } catch {
+            # ignore
+        }
+    }
+}
+
+function Wait-SpeakerHealth {
+    param(
+        [int]$Port,
+        [int]$TimeoutSeconds = 10
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $healthUrl = "http://127.0.0.1:$Port/health"
+    while ((Get-Date) -lt $deadline) {
+        try {
+            Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 2 | Out-Null
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds 200
+        }
+    }
+
+    return $false
+}
+
+function Start-SpeakerService {
+    param(
+        $Context,
+        [int]$Port
+    )
+
+    $paths = Resolve-SpeakerPaths -CodexHome $Context.CodexHome
+    foreach ($dir in @($paths.SpeakerRoot, $paths.VoiceOutbox)) {
+        if (-not (Test-Path $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+    }
+
+    $sourceScript = Join-Path $Context.CodexRoot 'scripts/speaker_service.py'
+    if (-not (Test-Path $sourceScript)) {
+        throw "speaker_service.py not found at $sourceScript"
+    }
+    Copy-Item -Path $sourceScript -Destination $paths.ScriptPath -Force
+
+    if (Test-Path $paths.PidPath) {
+        Stop-SpeakerService -Config @{ PidPath = $paths.PidPath }
+    }
+
+    $python = Get-PythonInvocation
+    $bindAddress = if ($env:SPEAKER_BIND) { $env:SPEAKER_BIND } else { '0.0.0.0' }
+
+    $argumentList = @()
+    if ($python.Prefix) {
+        $argumentList += $python.Prefix
+    }
+    $argumentList += @(
+        $paths.ScriptPath,
+        "--port=$Port",
+        "--outbox=$($paths.VoiceOutbox)",
+        "--log=$($paths.LogPath)",
+        "--bind=$bindAddress"
+    )
+    if ($env:SPEAKER_EXTRA_ARGS) {
+        $argumentList += $env:SPEAKER_EXTRA_ARGS.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
+    }
+
+    $process = Start-Process -FilePath $python.FilePath -ArgumentList $argumentList -PassThru -WindowStyle Hidden
+
+    if (-not (Wait-SpeakerHealth -Port $Port -TimeoutSeconds 10)) {
+        try { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue } catch {}
+        throw "Speaker service failed to start on port $Port"
+    }
+
+    Set-Content -Path $paths.PidPath -Value $process.Id
+
+    $hostUrl = "http://host.docker.internal:$Port/play"
+    return [PSCustomObject]@{
+        Process      = $process
+        PidPath      = $paths.PidPath
+        Port         = $Port
+        VoiceOutbox  = $paths.VoiceOutbox
+        ContainerOutbox = '/workspace/voice-outbox'
+        SpeakerUrl   = $hostUrl
+        LogPath      = $paths.LogPath
+    }
+}
+
 function New-CodexContext {
     param(
         [string]$Tag,
         [string]$Workspace,
         [string]$ScriptRoot,
-        [string]$CodexHomeOverride
+        [string]$CodexHomeOverride,
+        [switch]$Privileged
     )
 
     $scriptDir = if ($ScriptRoot) { $ScriptRoot } else { throw "ScriptRoot is required" }
@@ -262,6 +479,11 @@ function New-CodexContext {
             $normalized = $normalized.TrimEnd('/') + '/'
         }
         $runArgs += @('-v', ("${normalized}:/workspace"), '-w', '/workspace')
+    }
+
+    if ($Privileged) {
+        Write-Host "  Docker run will use --privileged" -ForegroundColor DarkGray
+        $runArgs += '--privileged'
     }
 
     return [PSCustomObject]@{
@@ -370,7 +592,8 @@ function New-DockerRunArgs {
         $Context,
         [switch]$ExposeLoginPort,
         [string[]]$AdditionalArgs,
-        [string[]]$AdditionalEnv
+        [string[]]$AdditionalEnv,
+        [switch]$Danger
     )
 
     $args = @()
@@ -379,11 +602,35 @@ function New-DockerRunArgs {
         $args += @('-p', '1455:1455')
     }
     if ($Oss) {
-        $args += @(
-            '-e', 'OLLAMA_HOST=http://host.docker.internal:11434',
-            '-e', 'OSS_SERVER_URL=http://host.docker.internal:11434',
-            '-e', 'ENABLE_OSS_BRIDGE=1'
-        )
+        $resolvedOss = $script:ResolvedOssServerUrl
+        $resolvedOllama = $script:ResolvedOllamaHost
+        $enableBridge = $false
+
+        if (-not $resolvedOss -and -not $resolvedOllama) {
+            $resolvedOss = 'http://host.docker.internal:11434'
+            $resolvedOllama = $resolvedOss
+            $enableBridge = $true
+        } elseif (-not $resolvedOss -and $resolvedOllama) {
+            $resolvedOss = $resolvedOllama
+        } elseif (-not $resolvedOllama -and $resolvedOss) {
+            $resolvedOllama = $resolvedOss
+        }
+
+        if ($resolvedOllama) {
+            $args += @('-e', "OLLAMA_HOST=$resolvedOllama")
+        }
+        if ($resolvedOss) {
+            $args += @('-e', "OSS_SERVER_URL=$resolvedOss")
+        }
+        if ($enableBridge) {
+            $args += @('-e', 'ENABLE_OSS_BRIDGE=1')
+        }
+        if ($env:OSS_API_KEY) {
+            $args += @('-e', "OSS_API_KEY=$($env:OSS_API_KEY)")
+        }
+        if ($env:OSS_DISABLE_BRIDGE) {
+            $args += @('-e', "OSS_DISABLE_BRIDGE=$($env:OSS_DISABLE_BRIDGE)")
+        }
     }
     if ($TranscriptionServiceUrl) {
         $args += @('-e', "TRANSCRIPTION_SERVICE_URL=$TranscriptionServiceUrl")
@@ -398,6 +645,9 @@ function New-DockerRunArgs {
     }
     $args += $Context.Tag
     $args += '/usr/local/bin/codex_entry.sh'
+    if ($Danger) {
+        $args += '--dangerously-bypass-approvals-and-sandbox'
+    }
     return $args
 }
 
@@ -410,7 +660,7 @@ function Invoke-CodexContainer {
         [string[]]$AdditionalEnv
     )
 
-    $runArgs = New-DockerRunArgs -Context $Context -ExposeLoginPort:$ExposeLoginPort -AdditionalArgs $AdditionalArgs -AdditionalEnv $AdditionalEnv
+    $runArgs = New-DockerRunArgs -Context $Context -ExposeLoginPort:$ExposeLoginPort -AdditionalArgs $AdditionalArgs -AdditionalEnv $AdditionalEnv -Danger:$Danger
     if ($CommandArgs) {
         $runArgs += $CommandArgs
     }
@@ -557,6 +807,17 @@ function Invoke-CodexRun {
             $cmd += @('--model', $OssModel)
         }
     }
+    if ($CodexModel) {
+        $hasModel = $false
+        if (Test-HasModelFlag -Args $cmd) {
+            $hasModel = $true
+        } elseif ($Arguments -and (Test-HasModelFlag -Args $Arguments)) {
+            $hasModel = $true
+        }
+        if (-not $hasModel) {
+            $cmd += @('--model', $CodexModel)
+        }
+    }
     if ($Arguments) {
         $cmd += $Arguments
     }
@@ -621,6 +882,15 @@ function Invoke-CodexExec {
             $rest = $cmdArguments[1..($cmdArguments.Length - 1)]
         }
         $cmdArguments = @($first) + $injectedFlags + $rest
+    }
+
+    if ($CodexModel -and -not (Test-HasModelFlag -Args $cmdArguments)) {
+        $first = $cmdArguments[0]
+        $rest = @()
+        if ($cmdArguments.Length -gt 1) {
+            $rest = $cmdArguments[1..($cmdArguments.Length - 1)]
+        }
+        $cmdArguments = @($first, '--model', $CodexModel) + $rest
     }
 
     Invoke-CodexRun -Context $Context -Arguments $cmdArguments -Silent:($Json -or $JsonE)
@@ -1257,22 +1527,38 @@ if ($jsonFlagsSpecified.Count -gt 1) {
     throw "Specify only one of $($jsonFlagsSpecified -join ', ')."
 }
 
-$context = New-CodexContext -Tag $Tag -Workspace $Workspace -ScriptRoot $PSScriptRoot -CodexHomeOverride $CodexHome
+$speakerConfig = $null
+try {
+    $context = New-CodexContext -Tag $Tag -Workspace $Workspace -ScriptRoot $PSScriptRoot -CodexHomeOverride $CodexHome -Privileged:$Privileged
 
-if (-not $jsonOutput) {
-    Write-Host "Codex container context" -ForegroundColor Cyan
-    Write-Host "  Image:      $Tag" -ForegroundColor DarkGray
-    Write-Host "  Codex home: $($context.CodexHome)" -ForegroundColor DarkGray
-    Write-Host "  Workspace:  $($context.WorkspacePath)" -ForegroundColor DarkGray
-}
-
-if ($action -ne 'Install') {
-    if (-not (Ensure-DockerImage -Tag $context.Tag)) {
-        return
+    if (-not $jsonOutput) {
+        Write-Host "Codex container context" -ForegroundColor Cyan
+        Write-Host "  Image:      $Tag" -ForegroundColor DarkGray
+        Write-Host "  Codex home: $($context.CodexHome)" -ForegroundColor DarkGray
+        Write-Host "  Workspace:  $($context.WorkspacePath)" -ForegroundColor DarkGray
     }
-}
 
-switch ($action) {
+    if ($action -ne 'Install') {
+        if (-not (Ensure-DockerImage -Tag $context.Tag)) {
+            return
+        }
+    }
+
+    if ($Speaker) {
+        if ($action -eq 'Install') {
+            Write-Warning "-Speaker has no effect during -Install."
+        } else {
+            $speakerConfig = Start-SpeakerService -Context $context -Port $SpeakerPort
+            $context.RunArgs += @('-v', ("$($speakerConfig.VoiceOutbox):$($speakerConfig.ContainerOutbox)"))
+            $context.RunArgs += @('-e', "VOICE_SPEAKER_URL=$($speakerConfig.SpeakerUrl)")
+            $context.RunArgs += @('-e', "VOICE_OUTBOX_CONTAINER_PATH=$($speakerConfig.ContainerOutbox)")
+            if (-not $jsonOutput) {
+                Write-Host ("  Speaker:    $($speakerConfig.SpeakerUrl) (outbox: $($speakerConfig.VoiceOutbox))") -ForegroundColor DarkGray
+            }
+        }
+    }
+
+    switch ($action) {
     'Install' {
         Invoke-DockerBuild -Context $context -PushImage:$Push
         Ensure-CodexCli -Context $context -Force
@@ -1351,5 +1637,11 @@ switch ($action) {
         }
 
         Invoke-CodexRun -Context $context -Arguments $runArgs -Silent:($Json -or $JsonE)
+    }
+}
+}
+finally {
+    if ($speakerConfig) {
+        Stop-SpeakerService -Config $speakerConfig
     }
 }

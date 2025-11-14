@@ -3,6 +3,7 @@ aiohttp
 anthropic
 fastmcp
 tomlkit
+requests
 
 # Google APIs
 google-auth
@@ -17,6 +18,14 @@ pydantic
 # Audio / transcription
 faster-whisper
 elevenlabs
+
+# Google GenAI SDK (provides `google.genai`)
+google-genai
+
+# Dog bark detection (YAMNet-based MCP)
+tensorflow
+librosa
+numpy
 
 # File watching utilities
 watchdog
