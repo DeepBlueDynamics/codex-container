@@ -1,14 +1,15 @@
 # Codex Service Container Helper
 
-[![License](https://img.shields.io/badge/license-Gnosis%20AI--Sovereign%20v1.2-blue.svg)](LICENSE.md)
+[![License](https://img.shields.io/badge/license-Gnosis%20AI--Sovereign%20v1.3-blue.svg)](LICENSE.md)
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
+[![Security](https://img.shields.io/badge/security-reproducible%20%7C%20secured%20%7C%20auditable-brightgreen.svg)](#reproducible-secured-and-auditable)
 [![GPU](https://img.shields.io/badge/GPU-CUDA%20enabled-brightgreen.svg)](vibe/TRANSCRIPTION_SERVICE.md)
 [![MCP Tools](https://img.shields.io/badge/MCP%20tools-135-green.svg)](MCP/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Shell](https://img.shields.io/badge/shell-PowerShell%20%7C%20Bash-orange.svg)]()
 
-**Codex CLI in a box.** These scripts launch the OpenAI Codex CLI inside a reproducible Docker container with **135 specialized MCP tools**, GPU-accelerated transcription, event-driven monitoring, time-based scheduling, and AI-powered multi-agent orchestration. The installable helper mounts your workspace alongside persistent credentials, giving you a production-ready autonomous agent platform in minutes. **Skip ahead:** [Installer instructions →](#windows-powershell)
+**Codex CLI in a box.** These scripts launch the OpenAI Codex CLI inside a **reproducible, secured, and auditable** Docker container with **135 specialized MCP tools**, GPU-accelerated transcription, event-driven monitoring, time-based scheduling, and AI-powered multi-agent orchestration. The installable helper mounts your workspace alongside persistent credentials, giving you a production-ready autonomous agent platform in minutes. **Skip ahead:** [Installer instructions →](#windows-powershell)
 
 ## System Capabilities Snapshot
 
@@ -19,12 +20,37 @@
 - **135 MCP tools across domains**: File operations, web/search integrations, Google Workspace, maritime navigation, weather, task planners, agent-to-agent comms, and more.
 - **Observability & persistence**: Trigger configuration, session IDs, and logs live alongside your workspace so behavior survives restarts and remains audit-able.
 
+## Reproducible, Secured, and Auditable
+
+**Reproducibility**
+- **Immutable base images**: Docker ensures identical runtime environments across all deployments - same dependencies, same toolchain, same Python versions
+- **Declarative configuration**: All MCP tools, dependencies, and settings defined in version-controlled files (`Dockerfile`, `requirements.txt`, `.codex-mcp.config`)
+- **Pinned versions**: Codex CLI, BAML, npm packages, and Python libraries use explicit version numbers (e.g., `@openai/codex@0.58.0`)
+- **Build-time validation**: MCP servers are validated during image build, catching configuration errors before runtime
+
+**Security**
+- **Isolated execution**: All agent operations run inside Docker containers with no direct host access unless explicitly mounted
+- **Credential isolation**: API keys and tokens stored in `.env` files excluded from version control (`.gitignore` patterns prevent accidental commits)
+- **Workspace-scoped tools**: `.codex-mcp.config` allows per-project tool activation - disable unnecessary capabilities for defense-in-depth
+- **Secrets management**: Environment variables for sensitive data (Google OAuth tokens, API keys) kept outside the image and injected at runtime
+- **Audit trail prevention of credential leaks**: `.wraithenv`, `*.env`, `*credentials*.json`, and OAuth tokens automatically ignored by git
+
+**Auditability**
+- **Persistent logs**: All MCP tool operations log to `/workspace/.mcp-logs/` with timestamps and structured data
+- **Trigger history**: `.codex-monitor-triggers.json` records `last_fired` timestamps and execution counts for scheduled tasks
+- **Session tracking**: Session IDs tie all operations together - reconstruct agent behavior across multiple runs
+- **File versioning**: `gnosis-files-diff.py` creates `.gnosis_versions/` directories tracking all file modifications with diffs
+- **Configuration transparency**: All active tools visible via `mcp_show_config()` - know exactly what capabilities are enabled
+- **Reproducible investigations**: Session data, trigger configs, and logs survive container restarts for post-mortem analysis
+
 ## Deep Dive: Container Architecture & Capabilities
 
 ### Core Architecture
-- **Codex CLI + MCP toolchain** packaged in Docker with CUDA acceleration, so every session has standardized dependencies, credentials, and GPU-ready Whisper transcription.
-- **Multi-agent orchestration** through Claude-powered helpers (`agent_to_agent`, `check_with_agent`, `get_next_step`) lets tasks bounce between specialists without leaving the container.
-- **Persistent state**: Session IDs, trigger definitions, logs, and sticky notes all live under your mounted workspace (`/workspace/temp` by default) to survive restarts and provide audit trails.
+- **Reproducible runtime**: Docker containers with pinned versions ensure identical behavior across machines - `Codex@0.58.0`, `Node 24`, `Python 3.11+`, and CUDA tooling locked at build time
+- **Secured by default**: Credentials isolated in `.env` files (git-ignored), API keys injected at runtime, and workspace-scoped tool activation limits attack surface
+- **Codex CLI + MCP toolchain** packaged with CUDA acceleration, so every session has standardized dependencies, credentials, and GPU-ready Whisper transcription
+- **Multi-agent orchestration** through Claude-powered helpers (`agent_to_agent`, `check_with_agent`, `get_next_step`) lets tasks bounce between specialists without leaving the container
+- **Auditable state**: Session IDs, trigger definitions, tool logs, and file version history all persist under your mounted workspace (`/workspace` by default) for post-mortem analysis and compliance tracking
 
 ### Operating Modes at a Glance
 1. **Terminal Mode** – one-shot or conversational `--exec` / `--session-id` calls. Ideal for scripting, CI, or quick manual interventions.
@@ -55,11 +81,14 @@ create_trigger(
 - **Utilities**: Time conversions, log readers, water-cooler coordination, and transcription services (Whisper large-v3 running warm on the GPU) round out the platform.
 
 ### Key Differentiators
-1. **Self-modifying agents** – Automations can create/update/delete their own triggers, sticky notes, or prompts mid-run, making adaptive schedules trivial.
-2. **GPU-accelerated transcription** – The Whisper large-v3 model stays loaded in VRAM, so minutes of audio process in seconds with `transcribe_wav`.
-3. **Unified prompt templates** – The same `MONITOR.md` prompt used for automation can be executed manually via `--exec` for deterministic testing.
-4. **Persistent memory** – Sticky notes and trigger metadata let agents leave breadcrumbs (“Agent Lumen”) for later sessions to resume safely.
-5. **Multi-channel communication** – Slack, Gmail, Google Calendar, and radio tools mean the agent can both ingest signals and notify humans without leaving the container.
+1. **Reproducible deployments** – Pinned versions (`Codex@0.58.0`, `Node 24`, `Python 3.11+`) and declarative config (`.codex-mcp.config`, `Dockerfile`) ensure identical behavior across machines and time
+2. **Secured by design** – Credentials isolated outside version control (`.gitignore` patterns), workspace-scoped tool activation, and runtime-injected secrets prevent leaks
+3. **Self-modifying agents** – Automations can create/update/delete their own triggers, sticky notes, or prompts mid-run, making adaptive schedules trivial
+4. **GPU-accelerated transcription** – The Whisper large-v3 model stays loaded in VRAM, so minutes of audio process in seconds with `transcribe_wav`
+5. **Unified prompt templates** – The same `MONITOR.md` prompt used for automation can be executed manually via `--exec` for deterministic testing
+6. **Auditable operations** – Session IDs, trigger histories with `last_fired` timestamps, MCP tool logs, and file version tracking enable post-mortem analysis
+7. **Persistent memory** – Sticky notes and trigger metadata let agents leave breadcrumbs ("Agent Lumen") for later sessions to resume safely
+8. **Multi-channel communication** – Slack, Gmail, Google Calendar, and radio tools mean the agent can both ingest signals and notify humans without leaving the container
 
 ## Three Interaction Modes
 
@@ -509,12 +538,15 @@ The container provides **135 specialized tools** spanning file operations, web s
 
 ## Key Differentiators
 
-- **Self-modifying agents**: Codex can create, update, or delete its own scheduled triggers (interval, daily, once, and fire-on-reload tags) by calling the `monitor-scheduler.*` tools mid-conversation.
-- **Hybrid event pipeline**: File system events and scheduled triggers share a single queue, so context is preserved regardless of how work is initiated.
-- **Session continuity**: `.codex-monitor-session` keeps chat state across container restarts, file events, and trigger executions.
-- **Template-driven prompts**: `MONITOR.md` (or `MONITOR_*.md`) supports moustache variables such as `{{trigger_title}}`, `{{now_local}}`, and `{{container_path}}` so responses adapt to each event.
-- **Persistent, auditable state**: `.codex-monitor-triggers.json` records schedules plus `last_fired` timestamps, and structured logs show trigger detection, execution, and queue activity.
-- **Domain-specialized tooling**: Maritime navigation, VHF radio automation, NOAA/Open-Meteo weather, and OpenCPN charting live alongside general developer tooling and cloud integrations.
+- **Reproducible runtime**: Pinned dependencies (`Codex@0.58.0`, `BAML@0.211.2`, locked Python packages) ensure identical behavior across deployments - rebuild the same image anytime
+- **Secured credential handling**: All secrets (`.wraithenv`, `*.env`, OAuth tokens) excluded from git, injected at runtime, and scoped per-workspace
+- **Self-modifying agents**: Codex can create, update, or delete its own scheduled triggers (interval, daily, once, and fire-on-reload tags) by calling the `monitor-scheduler.*` tools mid-conversation
+- **Hybrid event pipeline**: File system events and scheduled triggers share a single queue, so context is preserved regardless of how work is initiated
+- **Session continuity**: `.codex-monitor-session` keeps chat state across container restarts, file events, and trigger executions
+- **Template-driven prompts**: `MONITOR.md` (or `MONITOR_*.md`) supports moustache variables such as `{{trigger_title}}`, `{{now_local}}`, and `{{container_path}}` so responses adapt to each event
+- **Persistent, auditable state**: `.codex-monitor-triggers.json` records schedules plus `last_fired` timestamps, and structured logs show trigger detection, execution, and queue activity
+- **Configuration transparency**: `.codex-mcp.config` files explicitly list active tools - inspect or modify tool capabilities per workspace with full audit trail
+- **Domain-specialized tooling**: Maritime navigation, VHF radio automation, NOAA/Open-Meteo weather, and OpenCPN charting live alongside general developer tooling and cloud integrations
 
 ## GPU-Accelerated Transcription Service
 
