@@ -45,6 +45,7 @@ mcp = FastMCP("nuts-news")
 
 # Config
 NUTS_ENV_FILE = os.path.join(os.getcwd(), ".nuts.env")
+DEFAULT_MODEL = os.getenv("NUTS_NEWS_MODEL", "claude-sonnet-4-5-20250929")
 
 # Satirical measurement units and tech jargon
 ABSURD_UNITS = [
@@ -199,7 +200,7 @@ Generate in JSON format:
 
         # Call Claude
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=DEFAULT_MODEL,
             max_tokens=4096,
             messages=[{
                 "role": "user",
@@ -273,7 +274,7 @@ Urgency level: {urgency}
 Return only the headline text, no explanation."""
 
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=DEFAULT_MODEL,
             max_tokens=256,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -325,7 +326,7 @@ Style: Should sound technical and credible while being absurd. Include made-up m
 Return JSON: {{"quote": "text", "attribution": "full attribution with title"}}"""
 
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=DEFAULT_MODEL,
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -388,7 +389,7 @@ Requirements:
 Return JSON array: [{{"time": "14:52", "text": "ticker text"}}, ...]"""
 
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=DEFAULT_MODEL,
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}]
         )
