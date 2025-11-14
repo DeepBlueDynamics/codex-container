@@ -1,6 +1,9 @@
 # Legacy Codex runtime artifacts (pre user-scoped home)
 codex-home/
 
+# vars
+*.env
+
 # Python virtual environments
 .venv/
 venv/

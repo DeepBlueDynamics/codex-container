@@ -22,7 +22,7 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("agent-chat")
 
 # Default model
-DEFAULT_MODEL = os.getenv("AGENT_CHAT_MODEL", "claude-3-5-sonnet-20240620")
+DEFAULT_MODEL = os.getenv("AGENT_CHAT_MODEL", "claude-sonnet-4-5-20250929")
 
 
 @mcp.tool()
@@ -47,7 +47,7 @@ async def check_with_agent(
         prompt: The question or task to send to the agent
         role: The role/persona for the agent (e.g., "You are a helpful assistant", "You are a marine weather expert")
         name: Optional name for the agent (default: "Assistant")
-        model: Anthropic model to use (default: from AGENT_CHAT_MODEL env var or claude-3-5-sonnet-20240620)
+        model: Anthropic model to use (default: from AGENT_CHAT_MODEL env var or claude-sonnet-4-5-20250929)
         max_tokens: Maximum tokens in response (default: 1024)
         suggest_function_call: If True, ask Claude to suggest a function call to execute the task (default: False)
 
@@ -156,7 +156,7 @@ async def chat_with_context(
         context: Additional context or information to provide to the agent
         role: The role/persona for the agent (default: "You are a helpful assistant")
         name: Optional name for the agent (default: "Assistant")
-        model: Anthropic model to use (default: from AGENT_CHAT_MODEL env var or claude-3-5-sonnet-20240620)
+        model: Anthropic model to use (default: from AGENT_CHAT_MODEL env var or claude-sonnet-4-5-20250929)
         max_tokens: Maximum tokens in response (default: 1024)
 
     Returns:
@@ -250,7 +250,7 @@ async def agent_to_agent(
         context: Optional context or information to provide (e.g., code snippet, data)
         from_agent_name: Name of the agent asking (default: "Agent")
         to_agent_name: Name of the agent being consulted (default: derived from role)
-        model: Anthropic model to use (default: from AGENT_CHAT_MODEL env var or claude-3-5-sonnet-20240620)
+        model: Anthropic model to use (default: from AGENT_CHAT_MODEL env var or claude-sonnet-4-5-20250929)
         max_tokens: Maximum tokens in response (default: 1024)
 
     Returns:
