@@ -1,6 +1,6 @@
 # Codex Service Container Helper
 
-[![License](https://img.shields.io/badge/license-Gnosis%20AI--Sovereign%20v1.3-blue.svg)](LICENSE.md)
+[![License](https://img.shields.io/badge/license-BSD%20%2F%20Gnosis%20AI--Sovereign%20v1.3-blue.svg)](LICENSE.md)
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 [![Security](https://img.shields.io/badge/security-reproducible%20%7C%20secured%20%7C%20auditable-brightgreen.svg)](#reproducible-secured-and-auditable)
