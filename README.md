@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 [![Security](https://img.shields.io/badge/security-reproducible%20%7C%20secured%20%7C%20auditable-brightgreen.svg)](#reproducible-secured-and-auditable)
 [![GPU](https://img.shields.io/badge/GPU-CUDA%20enabled-brightgreen.svg)](vibe/TRANSCRIPTION_SERVICE.md)
-[![MCP Tools](https://img.shields.io/badge/MCP%20tools-135-green.svg)](MCP/)
+[![MCP Tools](https://img.shields.io/badge/MCP%20tools-194-green.svg)](MCP/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Shell](https://img.shields.io/badge/shell-PowerShell%20%7C%20Bash-orange.svg)]()
 
@@ -17,7 +17,7 @@
 - **Three operating modes**: Terminal (exec/resume), API gateway (`--serve`), and Monitor mode for event-driven automation.
 - **Unified event queue**: File changes and scheduled triggers flow through the same pipeline, keeping session context and writing `last_fired` metadata back to `.codex-monitor-triggers.json`.
 - **Self-scheduling agents**: Use `monitor-scheduler.*` tools to create interval, daily, or one-shot triggers (including immediate fire-on-reload patterns) directly from Codex conversations.
-- **135 MCP tools across domains**: File operations, web/search integrations, Google Workspace, maritime navigation, weather, task planners, agent-to-agent comms, and more.
+- **194 MCP tools across domains**: File operations, web/search integrations, Google Workspace, maritime navigation, weather, task planners, agent-to-agent comms, and more.
 - **Observability & persistence**: Trigger configuration, session IDs, and logs live alongside your workspace so behavior survives restarts and remains audit-able.
 
 ## Reproducible, Secured, and Auditable
@@ -72,7 +72,7 @@ create_trigger(
 )
 ```
 
-### Tooling Surface (135 tools across categories)
+### Tooling Surface (194 tools across categories)
 - **AI orchestration**: `agent_to_agent`, `chat_with_context`, `get_next_step`, and `recommend_tool`.
 - **File operations**: `gnosis-files-basic`, `gnosis-files-diff`, and `gnosis-files-search` families handle read/write, backup/diff, patching, and tree/search at scale.
 - **Web & search**: Wraith-powered `gnosis-crawl.*` plus SerpAPI search utilities capture Markdown or raw HTML from the open web.
@@ -482,9 +482,9 @@ serpapi-search.py
 EOF
 ```
 
-### Available MCP Tools (135 total)
+### Available MCP Tools (194 total)
 
-The container provides **135 specialized tools** spanning file operations, web scraping, AI orchestration, time-based scheduling, maritime operations, and cloud integrations. Every tool uses the FastMCP framework for reliable async execution.
+The container provides **194 specialized tools** spanning file operations, web scraping, AI orchestration, time-based scheduling, maritime operations, and cloud integrations. Every tool uses the FastMCP framework for reliable async execution.
 
 **AI Orchestration & Agent Communication**
 - **Agent Chat**: `check_with_agent`, `chat_with_context`, `agent_to_agent` - Multi-agent collaboration with role specialization
