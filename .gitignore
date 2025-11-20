@@ -104,6 +104,7 @@ credentials/
 *.temp
 tmp/
 temp/
+.codex-gateway-sessions/
 
 # Monitor session state files
 .codex-monitor-session

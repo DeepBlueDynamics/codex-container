@@ -109,26 +109,36 @@ codex-container --session-id abc12   # Resume interactive conversation with that
 - CI/CD integration
 
 ### 2. REMOTE API MODE (Serve)
-HTTP gateway for external tool access and multi-user scenarios.
+HTTP gateway for external tool access, multi-user workflows, and now *session-aware* automation.
 
 ```bash
 codex-container --serve --gateway-port 4000
 ```
 
-**Endpoint:** `POST /completion`
+**Core endpoints (NEW):**
+- `POST /completion` – run Codex with `messages[]`, `system_prompt`, optional `timeout_ms`, `env`, `objective`, and `nudge_prompt`. Returns both the internal `gateway_session_id` and the Codex `codex_session_id` for later lookups.
+-   Add `"persistent": true` (default in the shipped REPL) to keep a Codex worker resident; subsequent calls with the same session reuse the alive process instead of paying startup costs.
+- `GET /sessions` – list active/history sessions with status, timestamps, and model/objective metadata.
+- `GET /sessions/:id` – retrieve recent stdout/stderr tail, run history, and (optionally) raw event JSON for any session id (Codex UUIDs work as shorthand).
+- `GET /sessions/:id/search` – scan stored stdout using substring or fuzzy token matching. Responses include structured *signals* with window boundaries so downstream code never confuses search hits with conversational turns.
+- `POST /sessions/:id/prompt` – resume an existing Codex session with new `messages`/`prompt` without restarting the container.
+- `POST /sessions/:id/nudge` – send an “act now” poke that reuses the saved `nudge_prompt` (or an override) whenever an agent stalls.
+- `POST /sessions/:id/start` / `POST /sessions/:id/stop` *(coming soon)* will expose explicit lifecycle controls, but today simply posting to `/prompt` automatically boots the worker if it was sleeping.
 
 ```json
 {
-  "prompt": "Analyze VHF traffic",
-  "model": "opus-4",
-  "workspace": "/workspace"
+  "messages": [{"role": "user", "content": "Analyze VHF traffic"}],
+  "timeout_ms": 1_200_000,
+  "env": {"SHIPNAME": "HALCYON"},
+  "objective": "Maintain incident log", 
+  "nudge_prompt": "You are idle with no operator attached. Summarize next actions."
 }
 ```
 
 **Use Cases:**
-- Integration with external tools
-- Multi-user scenarios
-- Language-agnostic clients
+- Integration with external tools (Home Assistant, Grafana, on-call bots)
+- Multi-user or headless clients that need to fetch logs later
+- Automated health checks that search for signals or issue nudges on dormant sessions
 
 ### 3. MONITOR MODE (Monitor)
 Chat sessions or event-driven autonomous agents.
