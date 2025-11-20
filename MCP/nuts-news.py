@@ -45,7 +45,7 @@ mcp = FastMCP("nuts-news")
 
 # Config
 NUTS_ENV_FILE = os.path.join(os.getcwd(), ".nuts.env")
-DEFAULT_MODEL = os.getenv("NUTS_NEWS_MODEL", "claude-sonnet-4-5-20250929")
+DEFAULT_MODEL = os.getenv('NUTS_NEWS_MODEL', 'gpt-4o-mini'),
 
 # Satirical measurement units and tech jargon
 ABSURD_UNITS = [

@@ -14,50 +14,72 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("marketbot")
 
-# Default to service name on codex-network so the MCP server shares the same network.
-_DEFAULT_BASE_URL = "http://marketbot-api:8000"
-_ENV_BASE_URL = os.getenv("MARKETBOT_API_URL")
+# Configuration mirrors the ProductBotAI deployment exposed via ngrok.
+_DEFAULT_BASE_URL = "http://localhost:3000/api/marketbot"
+_ENV_FILE = Path(os.getenv("MARKETBOT_ENV_FILE", "/workspace/.marketbot.env"))
+
+
+def _read_env_file() -> Dict[str, str]:
+    """Parse .marketbot.env for fallback configuration."""
+
+    candidates: Sequence[Path] = [
+        Path(os.getenv("MARKETBOT_ENV_FILE", "")),
+        _ENV_FILE,
+        Path("/workspace/.marketbot.env"),
+        Path(__file__).resolve().parent.parent / ".marketbot.env",
+        Path("/opt/codex-home/.marketbot.env"),
+    ]
+
+    session_id = os.getenv("CODEX_SESSION_ID")
+    sessions_root = Path("/opt/codex-home/sessions")
+    if session_id:
+        candidates.append(sessions_root / session_id / ".env")
+    candidates.append(sessions_root / "unknown" / ".env")
+
+    values: Dict[str, str] = {}
+    for candidate in candidates:
+        if not candidate or not candidate.is_file():
+            continue
+        for raw_line in candidate.read_text().splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values.setdefault(key.strip(), value.strip())
+        if values:
+            break
+    return values
+
+
+def _resolve_setting(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Return env value from process or .marketbot.env fallback."""
+
+    return os.getenv(name) or _read_env_file().get(name) or default
 
 
 class MarketBotError(RuntimeError):
     """Raised when the MarketBot API returns an error."""
 
 
-def _probe_base(url: str, timeout: float = 2.0) -> bool:
-    try:
-        req = urllib.request.Request(urllib.parse.urljoin(url, "/healthz"), method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # type: ignore[no-untyped-call]
-            return resp.status == 200
-    except Exception:
-        return False
+def _debug_info() -> Dict[str, Optional[str]]:
+    """Return non-sensitive context for tool responses."""
 
-
-def _detect_base_url() -> str:
-    candidates = [
-        _ENV_BASE_URL,
-        _DEFAULT_BASE_URL,
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "https://api.marketbot.local",
-    ]
-    for cand in candidates:
-        if not cand:
-            continue
-        if _probe_base(cand):
-            return cand
-    # Fallback to env or default even if probe fails; _request will still raise
-    return _ENV_BASE_URL or _DEFAULT_BASE_URL
-
-
-_BASE_URL = _detect_base_url()
+    api_key = _resolve_setting("MARKETBOT_API_KEY", "")
+    suffix: Optional[str] = api_key[-4:] if api_key else None
+    return {
+        "base_url": _resolve_setting("MARKETBOT_API_URL", _DEFAULT_BASE_URL),
+        "team_id": _resolve_setting("MARKETBOT_TEAM_ID", ""),
+        "api_key_suffix": suffix,
+    }
 
 
 def _request(
@@ -69,13 +91,32 @@ def _request(
 ) -> Dict[str, Any]:
     """Make an HTTP request to the MarketBot API."""
 
-    url = urllib.parse.urljoin(_BASE_URL, path)
+    api_key = _resolve_setting("MARKETBOT_API_KEY")
+    team_id = _resolve_setting("MARKETBOT_TEAM_ID")
+    base_url = (_resolve_setting("MARKETBOT_API_URL", _DEFAULT_BASE_URL) or _DEFAULT_BASE_URL).rstrip("/")
+
+    if not api_key:
+        raise MarketBotError("MARKETBOT_API_KEY is not set (set env or /workspace/.marketbot.env)")
+    if not team_id:
+        raise MarketBotError("MARKETBOT_TEAM_ID is not set (set env or /workspace/.marketbot.env)")
+
+    base = base_url or _DEFAULT_BASE_URL
+    url = f"{base.rstrip('/')}/{path.lstrip('/')}"
     if params:
-        query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
-        url = f"{url}?{query}"
+        query_params = {k: v for k, v in params.items() if v is not None}
+        if query_params:
+            query = urllib.parse.urlencode(query_params)
+            url = f"{url}?{query}"
 
     data = None
-    headers = {"Accept": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "X-API-Key": api_key,
+        "X-Team-Id": team_id,
+    }
+    if "ngrok" in base:
+        headers["ngrok-skip-browser-warning"] = "true"
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -99,9 +140,20 @@ async def marketbot_ping() -> Dict[str, Any]:
     Returns the resolved base URL and health check response (or error).
     """
     try:
-        return {"success": True, "base_url": _BASE_URL, "data": _request("GET", "/healthz")}
+        response = _request("GET", "/health")
+        if isinstance(response, dict):
+            response.setdefault("base_url", _resolve_setting("MARKETBOT_API_URL", _DEFAULT_BASE_URL))
+            response.setdefault("debug", _debug_info())
+        else:
+            response = {"success": True, "data": response, "debug": _debug_info()}
+        return response
     except Exception as err:
-        return {"success": False, "base_url": _BASE_URL, "error": str(err)}
+        return {
+            "success": False,
+            "base_url": _resolve_setting("MARKETBOT_API_URL", _DEFAULT_BASE_URL),
+            "debug": _debug_info(),
+            "error": str(err),
+        }
 
 
 @mcp.tool()
@@ -109,13 +161,24 @@ async def marketbot_health() -> Dict[str, Any]:
     """Return the MarketBot API health check.
 
     Use this first if requests fail—it confirms the MCP process can reach the
-    MarketBot FastAPI service. The base URL is auto-detected among common hosts
-    or can be overridden with MARKETBOT_API_URL.
+    ProductBotAI MarketBot service. Override MARKETBOT_API_URL if you're not on
+    the default localhost/ngrok tunnel.
     """
     try:
-        return {"success": True, "data": _request("GET", "/healthz"), "base_url": _BASE_URL}
+        response = _request("GET", "/health")
+        if isinstance(response, dict):
+            response.setdefault("base_url", _resolve_setting("MARKETBOT_API_URL", _DEFAULT_BASE_URL))
+            response.setdefault("debug", _debug_info())
+        else:
+            response = {"success": True, "data": response, "debug": _debug_info()}
+        return response
     except Exception as err:
-        return {"success": False, "error": str(err), "base_url": _BASE_URL}
+        return {
+            "success": False,
+            "error": str(err),
+            "base_url": _resolve_setting("MARKETBOT_API_URL", _DEFAULT_BASE_URL),
+            "debug": _debug_info(),
+        }
 
 
 @mcp.tool()
@@ -142,9 +205,11 @@ async def list_competitors(
             "limit": limit,
             "offset": offset,
         }
-        return {"success": True, **_request("GET", "/api/competitors", params=params)}
+        payload = _request("GET", "/competitors", params=params)
+        payload.setdefault("debug", _debug_info())
+        return payload
     except Exception as err:
-        return {"success": False, "error": str(err), "base_url": _BASE_URL}
+        return {"success": False, "error": str(err), "debug": _debug_info()}
 
 
 @mcp.tool()
@@ -155,6 +220,7 @@ async def create_competitor(
     status: str = "active",
     logo_url: Optional[str] = None,
     summary: Optional[str] = None,
+    competes_with_ids: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Create a company record used across MarketBot dashboards.
 
@@ -164,6 +230,7 @@ async def create_competitor(
         industry: Free-form grouping used for dashboard filters.
         status: "active", "monitoring", etc.
         logo_url/summary: Optional embellishments for richer cards.
+        competes_with_ids: Optional list of other competitor IDs this company overlaps with.
 
     Always reuse the same `name` (common name) so deduplication is effortless. If the
     company already exists, `list_competitors` can help you find the canonical slug.
@@ -176,10 +243,13 @@ async def create_competitor(
             "status": status,
             "logo_url": logo_url,
             "summary": summary,
+            "competes_with_ids": list(competes_with_ids) if competes_with_ids else None,
         }
-        return {"success": True, "competitor": _request("POST", "/api/competitors", body=body)}
+        payload = _request("POST", "/competitors", body=body)
+        payload.setdefault("debug", _debug_info())
+        return payload
     except Exception as err:
-        return {"success": False, "error": str(err), "base_url": _BASE_URL}
+        return {"success": False, "error": str(err), "debug": _debug_info()}
 
 
 @mcp.tool()
@@ -192,10 +262,11 @@ async def get_competitor_detail(competitor_id: str) -> Dict[str, Any]:
     Returns the metadata block plus `recent_activities` for storyboarded cards.
     """
     try:
-        data = _request("GET", f"/api/competitors/{competitor_id}")
-        return {"success": True, "competitor": data}
+        payload = _request("GET", f"/competitors/{competitor_id}")
+        payload.setdefault("debug", _debug_info())
+        return payload
     except Exception as err:
-        return {"success": False, "error": str(err), "base_url": _BASE_URL}
+        return {"success": False, "error": str(err), "debug": _debug_info()}
 
 
 @mcp.tool()
@@ -225,9 +296,11 @@ async def list_activities(
             "limit": limit,
             "offset": offset,
         }
-        return {"success": True, **_request("GET", "/api/activities", params=params)}
+        payload = _request("GET", "/activities", params=params)
+        payload.setdefault("debug", _debug_info())
+        return payload
     except Exception as err:
-        return {"success": False, "error": str(err), "base_url": _BASE_URL}
+        return {"success": False, "error": str(err), "debug": _debug_info()}
 
 
 @mcp.tool()
@@ -269,9 +342,11 @@ async def create_activity(
             "confidence_score": confidence_score,
             "is_verified": is_verified,
         }
-        return {"success": True, "activity": _request("POST", "/api/activities", body=body)}
+        payload = _request("POST", "/activities", body=body)
+        payload.setdefault("debug", _debug_info())
+        return payload
     except Exception as err:
-        return {"success": False, "error": str(err), "base_url": _BASE_URL}
+        return {"success": False, "error": str(err), "debug": _debug_info()}
 
 
 @mcp.tool()
@@ -282,9 +357,11 @@ async def list_trends(limit: int = 10) -> Dict[str, Any]:
         limit: Number of ranked keywords to fetch (default 10).
     """
     try:
-        return {"success": True, **_request("GET", "/api/trends", params={"limit": limit})}
+        payload = _request("GET", "/trends", params={"limit": limit})
+        payload.setdefault("debug", _debug_info())
+        return payload
     except Exception as err:
-        return {"success": False, "error": str(err), "base_url": _BASE_URL}
+        return {"success": False, "error": str(err), "debug": _debug_info()}
 
 
 @mcp.tool()
@@ -300,16 +377,12 @@ async def recompute_trends(top_n: int = 25, lookback_days: int = 180) -> Dict[st
         - After recompute, GET /api/trends will reflect the new rankings.
     """
     try:
-        return {
-            "success": True,
-            **_request(
-                "POST",
-                "/api/trends/recompute",
-                params={"top_n": top_n, "lookback_days": lookback_days},
-            ),
-        }
+        body = {"top_n": top_n, "lookback_days": lookback_days}
+        payload = _request("POST", "/trends", body=body)
+        payload.setdefault("debug", _debug_info())
+        return payload
     except Exception as err:
-        return {"success": False, "error": str(err), "base_url": _BASE_URL}
+        return {"success": False, "error": str(err), "debug": _debug_info()}
 
 
 @mcp.tool()
@@ -320,10 +393,12 @@ async def list_alerts(unread_only: bool = False) -> Dict[str, Any]:
         unread_only: True to fetch only unread alerts (UI badge scenario).
     """
     try:
-        params = {"unread": str(unread_only).lower()}
-        return {"success": True, **_request("GET", "/api/alerts", params=params)}
+        params = {"unread_only": str(bool(unread_only)).lower()}
+        payload = _request("GET", "/alerts", params=params)
+        payload.setdefault("debug", _debug_info())
+        return payload
     except Exception as err:
-        return {"success": False, "error": str(err), "base_url": _BASE_URL}
+        return {"success": False, "error": str(err), "debug": _debug_info()}
 
 
 @mcp.tool()
@@ -331,10 +406,13 @@ async def update_alert(alert_id: str, is_read: bool = True) -> Dict[str, Any]:
     """Mark an alert read/unread."""
     try:
         body = {"is_read": is_read}
-        return {"success": True, "alert": _request("PATCH", f"/api/alerts/{alert_id}", body=body)}
+        payload = _request("PATCH", f"/alerts/{alert_id}", body=body)
+        payload.setdefault("debug", _debug_info())
+        return payload
     except Exception as err:
-        return {"success": False, "error": str(err), "base_url": _BASE_URL}
+        return {"success": False, "error": str(err), "debug": _debug_info()}
 
 
 if __name__ == "__main__":
-    mcp.run()
+    # Match other MCP tools: run the server over stdio for the Codex harness.
+    mcp.run(transport="stdio")

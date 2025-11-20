@@ -143,10 +143,14 @@ param(
     [string]$TranscriptionServiceUrl = 'http://host.docker.internal:8765',
     [string]$SessionId,
     [switch]$ListSessions,
-    [switch]$Privileged
+[switch]$Privileged
 )
 
 $ErrorActionPreference = 'Stop'
+
+if (-not $PSBoundParameters.ContainsKey('Danger')) {
+    $Danger = $true
+}
 
 if ($OssModel) {
     $Oss = $true
@@ -648,7 +652,68 @@ function New-DockerRunArgs {
     if ($Danger) {
         $args += '--dangerously-bypass-approvals-and-sandbox'
     }
+
+    # VALIDATION: Ensure no empty strings or null values in arguments
+    $nullCount = 0
+    $emptyCount = 0
+    foreach ($arg in $args) {
+        if ($arg -eq $null) { $nullCount++ }
+        elseif ($arg -eq '') { $emptyCount++ }
+    }
+
+    if ($nullCount -gt 0 -or $emptyCount -gt 0) {
+        Write-Host "WARNING in New-DockerRunArgs: Found $nullCount nulls, $emptyCount empty strings" -ForegroundColor Yellow
+    }
+
     return $args
+}
+
+function Test-CodexEnvironment {
+    param(
+        $Context
+    )
+
+    $issues = @()
+    $warnings = @()
+
+    # Warn about missing API key (non-blocking)
+    if (-not $env:ANTHROPIC_API_KEY) {
+        $warnings += "ANTHROPIC_API_KEY not set - Codex tools won't work until configured"
+    }
+
+    # Check Docker daemon is running (blocking)
+    try {
+        $dockerVersion = docker version --format '{{.Server.Version}}' 2>$null
+        if (-not $dockerVersion) {
+            $issues += "Docker daemon is not running or not accessible"
+        }
+    } catch {
+        $issues += "Docker check failed: $_"
+    }
+
+    # Check if image exists (blocking)
+    if (-not (Ensure-DockerImage -Tag $Context.Tag)) {
+        $issues += "Docker image $($Context.Tag) is not available"
+    }
+
+    # Show warnings
+    if ($warnings.Count -gt 0) {
+        Write-Host "Warnings:" -ForegroundColor Yellow
+        foreach ($warning in $warnings) {
+            Write-Host "  - $warning" -ForegroundColor Yellow
+        }
+    }
+
+    # Show blocking issues
+    if ($issues.Count -gt 0) {
+        Write-Host "Environment Issues Found:" -ForegroundColor Red
+        foreach ($issue in $issues) {
+            Write-Host "  - $issue" -ForegroundColor Red
+        }
+        return $false
+    }
+
+    return $true
 }
 
 function Invoke-CodexContainer {
@@ -674,13 +739,37 @@ function Invoke-CodexContainer {
         }
     }
 
-    if ($env:CODEX_CONTAINER_TRACE) {
-        Write-Host "docker $($runArgs -join ' ')" -ForegroundColor DarkGray
+    # CRITICAL FIX: Remove empty strings and null values that can cause docker command failure
+    $cleanArgs = @($runArgs | Where-Object { $_ -ne $null -and $_ -ne '' })
+
+    if ($cleanArgs.Count -ne $runArgs.Count) {
+        Write-Host "WARNING: Removed $($runArgs.Count - $cleanArgs.Count) empty/null arguments" -ForegroundColor Yellow
     }
 
-    docker @runArgs
+    if ($env:CODEX_CONTAINER_TRACE) {
+        Write-Host "docker $($cleanArgs -join ' ')" -ForegroundColor DarkGray
+    }
+
+    # Enhanced error reporting
+    docker @cleanArgs
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
+        Write-Host "ERROR: docker run exited with code $exitCode" -ForegroundColor Red
+        Write-Host "Full docker command:" -ForegroundColor Red
+        Write-Host "docker $($cleanArgs -join ' ')" -ForegroundColor DarkGray
+
+        Write-Host "`nAll $($cleanArgs.Count) arguments:" -ForegroundColor Red
+        for ($i = 0; $i -lt $cleanArgs.Count; $i++) {
+            $arg = $cleanArgs[$i]
+            if ([string]::IsNullOrEmpty($arg)) {
+                Write-Host "  [$i] = <EMPTY>" -ForegroundColor Yellow
+            } elseif ($arg -eq '--') {
+                Write-Host "  [$i] = '--' (PROBLEM ARGUMENT)" -ForegroundColor Magenta
+            } else {
+                Write-Host "  [$i] = '$arg'" -ForegroundColor Gray
+            }
+        }
+
         throw "docker run exited with code $exitCode"
     }
 }
@@ -1555,6 +1644,15 @@ try {
             if (-not $jsonOutput) {
                 Write-Host ("  Speaker:    $($speakerConfig.SpeakerUrl) (outbox: $($speakerConfig.VoiceOutbox))") -ForegroundColor DarkGray
             }
+        }
+    }
+
+    # Check environment for actions that will run containers
+    if ($action -in @('Shell', 'Exec', 'Serve', 'Monitor', 'Run')) {
+        if (-not (Test-CodexEnvironment -Context $context)) {
+            Write-Host "`nFix the above issues before proceeding." -ForegroundColor Red
+            Write-Host "Hint: Ensure Docker is running and ANTHROPIC_API_KEY is set" -ForegroundColor Yellow
+            return
         }
     }
 

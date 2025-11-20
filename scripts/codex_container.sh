@@ -37,6 +37,7 @@ MONITOR_PROMPT_FILE="MONITOR.md"
 NEW_SESSION=false
 SESSION_ID=""
 TRANSCRIPTION_SERVICE_URL="http://host.docker.internal:8765"
+DANGER_MODE=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -118,6 +119,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --push)
       PUSH_IMAGE=true
+      shift
+      ;;
+    --danger)
+      DANGER_MODE=1
+      shift
+      ;;
+    --safe|--no-danger)
+      DANGER_MODE=0
       shift
       ;;
     --tag)
@@ -720,6 +729,9 @@ docker_run() {
     args+=("${DOCKER_RUN_EXTRA_ARGS[@]}")
   fi
   args+=("${TAG}" /usr/local/bin/codex_entry.sh)
+  if [[ $DANGER_MODE -eq 1 ]]; then
+    args+=('--dangerously-bypass-approvals-and-sandbox')
+  fi
   args+=("$@")
   if [[ -n "${CODEX_CONTAINER_TRACE:-}" ]]; then
     printf 'docker'

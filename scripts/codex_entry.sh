@@ -1,6 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+load_session_env() {
+  local sessions_root="/opt/codex-home/sessions"
+  local candidates=()
+
+  if [[ -n "${CODEX_SESSION_ID:-}" ]]; then
+    candidates+=("${sessions_root}/${CODEX_SESSION_ID}/.env")
+  fi
+  candidates+=("${sessions_root}/unknown/.env")
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "$candidate" ]]; then
+      echo "[codex_entry] Loading session env from ${candidate}" >&2
+      set -o allexport
+      # shellcheck disable=SC1090
+      source "$candidate"
+      set +o allexport
+      return
+    fi
+  done
+
+  if [[ -d "$sessions_root" ]]; then
+    local fallback
+    fallback=$(find "$sessions_root" -maxdepth 2 -name '.env' -print | head -n 1 2>/dev/null || true)
+    if [[ -n "$fallback" && -f "$fallback" ]]; then
+      echo "[codex_entry] Loading fallback session env from ${fallback}" >&2
+      set -o allexport
+      # shellcheck disable=SC1090
+      source "$fallback"
+      set +o allexport
+    fi
+  fi
+}
+
+load_session_env
+
 install_mcp_servers_runtime() {
   local mcp_source="/opt/mcp-installed"
   local mcp_dest="/opt/codex-home/mcp"
@@ -249,6 +285,12 @@ fi
 # Note: Transcription daemon is now a separate persistent service container
 # Started via scripts/start_transcription_service.ps1
 # This keeps Whisper model loaded and avoids reloading on every Codex run
+
+# Handle --dangerously-bypass-approvals-and-sandbox flag
+if [[ "$1" == "--dangerously-bypass-approvals-and-sandbox" ]]; then
+  export CODEX_UNSAFE_ALLOW_NO_SANDBOX=1
+  shift
+fi
 
 # Allow the Docker CLI to pass "--" as a separator without providing a command.
 if [[ "$#" -eq 0 ]]; then
