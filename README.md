@@ -135,6 +135,13 @@ codex-container --serve --gateway-port 4000
 }
 ```
 
+#### Gateway-managed triggers (NEW)
+- When `--serve` is active, the Node gateway continuously watches `.codex-monitor-triggers.json` (override with `CODEX_GATEWAY_TRIGGER_FILE`) and keeps timers for every enabled trigger. Each firing shares the same `/completion` queue and yields a normal `gateway_session_id`, so you can inspect logs at `/sessions/:id` even if Monitor mode never ran.
+- After a trigger runs, the gateway writes the new `last_fired` timestamp and `gateway_session_id` back to the config file. This keeps interval/daily math in sync with the file-based scheduler and lets agents resume their dedicated session on the next tick.
+- You can rely on `--serve` alone to execute scheduled jobs; it will automatically start Codex workers, hold them open while the timeout window lasts, and reuse them for future trigger executions.
+- The gateway also scans `/opt/codex-home/sessions/*/triggers.json`, so MCP tools that target session IDs (e.g., `session_id=\"unknown\"`) update the same schedules the HTTP server executes—no more split configuration.
+- Set `CODEX_GATEWAY_DISABLE_TRIGGERS=1` to opt out entirely (handy for barebones API deployments or testing).
+
 **Use Cases:**
 - Integration with external tools (Home Assistant, Grafana, on-call bots)
 - Multi-user or headless clients that need to fetch logs later
@@ -239,8 +246,10 @@ Combine with MCP tools (e.g., `transcribe_pending_recordings` from `radio_contro
 The monitor can now wake itself up on a schedule without waiting for new files. Define time-based prompts with the `monitor-scheduler` MCP tool; each watch directory persists its configuration in `.codex-monitor-triggers.json`.
 
 - `monitor-scheduler.list_triggers(watch_path="./recordings")` – inspect current schedules and the next planned run.
-- `monitor-scheduler.create_trigger(...)` – supply a `schedule_mode` (`daily`, `once`, or `interval`), timezone, and the full `prompt_text` that Codex should receive when the trigger fires. The prompt can include moustache placeholders such as `{{now_iso}}`, `{{now_local}}`, `{{trigger_title}}`, `{{trigger_time}}`, `{{created_by.name}}`, and `{{watch_root}}`.
+- `monitor-scheduler.create_trigger(...)` – supply a `schedule_mode` (`daily`, `once`, or `interval`), timezone, and the full `prompt_text` that Codex should receive when the trigger fires. For one-off runs you can now pass `minutes_from_now` instead of hand-computing ISO timestamps.
 - `monitor-scheduler.update_trigger` / `toggle_trigger` / `delete_trigger` – adjust existing entries.
+- Utility helpers `monitor-scheduler.clock_now()` and `monitor-scheduler.clock_add()` give you ISO timestamps (or offsets) directly inside Codex so you can schedule reminders like “five minutes from now” without leaving the chat.
+- Pass `session_id="workspace"` (or an absolute path ending in `.codex-monitor-triggers.json`) when calling these tools to edit the exact file that the API gateway now watches, keeping Codex, Monitor mode, and HTTP clients on the same schedule without manual syncing.
 
 While the monitor is running, it loads the trigger config, keeps a lightweight scheduler thread, and queues scheduled prompts through the same execution pipeline as file events (respecting session reuse and concurrency limits). After each run it records `last_fired` back into the config so operators can audit when a reminder last executed.
 
@@ -317,6 +326,12 @@ Both scripts now support resuming previous Codex sessions:
 ```
 
 Sessions are stored in `~/.codex-service/.codex/sessions/` organized by date. The scripts support Docker-style partial matching - you only need to provide enough characters to uniquely identify the session (typically 5).
+
+## Default PROMPT.md
+
+- A `PROMPT.md` file in your workspace root is treated as the default system prompt whenever you start a brand-new Codex session (i.e., without `--session-id`). The wrappers automatically pass `--system-file /workspace/PROMPT.md` to the CLI so every conversation begins with the reminders captured in that file.
+- Set `CODEX_DISABLE_DEFAULT_PROMPT=1` (or `true/on`) to skip this automatic injection for ad-hoc runs. Resumed sessions never receive the default prompt, so you remain in full control once a session ID exists.
+- Customize the default behavior by editing `PROMPT.md` directly—the helpers simply ensure Codex reads it first.
 
 ## Windows (PowerShell)
 
@@ -425,6 +440,10 @@ Set any of the following environment variables before invoking `--serve` to twea
 | `CODEX_GATEWAY_DEFAULT_MODEL` | Force a specific Codex model (falls back to Codex defaults when unset). |
 | `CODEX_GATEWAY_TIMEOUT_MS` | Override the default 120s request timeout. |
 | `CODEX_GATEWAY_EXTRA_ARGS` | Extra flags forwarded to `codex exec` (space-delimited). |
+| `CODEX_GATEWAY_TRIGGER_FILE` | Optional path override for the trigger config (defaults to `/workspace/.codex-monitor-triggers.json`). |
+| `CODEX_GATEWAY_TRIGGER_FILES` | Comma-separated list of additional trigger files to monitor alongside the defaults. |
+| `CODEX_GATEWAY_DISABLE_TRIGGERS` | Set to `1`, `true`, or `on` to skip loading scheduled triggers while serving. |
+| `CODEX_GATEWAY_TRIGGER_DEBOUNCE_MS` | Tune how aggressively the gateway reloads the trigger file after edits (default 750 ms). |
 
 Stop the gateway with `Ctrl+C`; the container exits when the process ends.
 

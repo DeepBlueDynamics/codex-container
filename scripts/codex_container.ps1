@@ -106,6 +106,7 @@ param(
     [switch]$Install,
     [Alias('Build')]
     [switch]$Rebuild,
+    [switch]$NoCache,
     [switch]$Login,
     [switch]$Run,
     [switch]$Serve,
@@ -174,6 +175,7 @@ if (-not $OllamaHost -and $env:OLLAMA_HOST) {
 
 $script:ResolvedOssServerUrl = $OssServerUrl
 $script:ResolvedOllamaHost = $OllamaHost
+$DefaultSystemPromptFile = 'PROMPT.md'
 
 function Resolve-WorkspacePath {
     param(
@@ -235,6 +237,38 @@ function Resolve-CodexHomePath {
     } catch [System.Management.Automation.ItemNotFoundException] {
         return [System.IO.Path]::GetFullPath($candidate)
     }
+}
+
+function Add-DefaultSystemPrompt {
+    param(
+        [string]$Action,
+        [string]$WorkspacePath
+    )
+
+    if ($SessionId) {
+        return
+    }
+    if ($Action -ne 'Serve') {
+        return
+    }
+    if ($env:CODEX_DISABLE_DEFAULT_PROMPT -match '^(1|true|on)$') {
+        return
+    }
+    if (-not $WorkspacePath) {
+        return
+    }
+
+    $promptPath = Join-Path $WorkspacePath $DefaultSystemPromptFile
+    if (-not (Test-Path $promptPath)) {
+        return
+    }
+
+    if ($CodexArgs -and ($CodexArgs | Where-Object { $_ -like '--system*' })) {
+        return
+    }
+
+    $containerPrompt = "/workspace/$DefaultSystemPromptFile"
+    $script:CodexArgs += @('--system-file', $containerPrompt)
 }
 
 function Test-HasModelFlag {
@@ -524,14 +558,19 @@ function Invoke-DockerBuild {
         New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     }
     $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $logFile = Join-Path $logDir "build-$timestamp.log"
+$logFile = Join-Path $logDir "build-$timestamp.log"
     if (-not (Test-Path $logFile)) {
         New-Item -ItemType File -Path $logFile -Force | Out-Null
     }
     Write-Host "  Log file:   $logFile" -ForegroundColor DarkGray
 
     $buildArgs = @(
-        'build',
+        'build'
+    )
+    if ($NoCache) {
+        $buildArgs += '--no-cache'
+    }
+    $buildArgs += @(
         '-f', (Resolve-Path $dockerfilePath),
         '-t', $Context.Tag,
         (Resolve-Path $Context.CodexRoot)
@@ -1626,6 +1665,8 @@ try {
         Write-Host "  Codex home: $($context.CodexHome)" -ForegroundColor DarkGray
         Write-Host "  Workspace:  $($context.WorkspacePath)" -ForegroundColor DarkGray
     }
+
+    Add-DefaultSystemPrompt -Action $action -WorkspacePath $context.WorkspacePath
 
     if ($action -ne 'Install') {
         if (-not (Ensure-DockerImage -Tag $context.Tag)) {

@@ -6,8 +6,8 @@ Gnosis Crawl MCP Bridge
 Exposes Wraith crawler capabilities to Codex via MCP, mirroring
 the MCP style used in this repo (FastMCP over stdio).
 
-Defaults to LOCAL crawling (gnosis-crawl:6792) with NO AUTH required.
-Automatically fixes localhost/127.0.0.1 references to gnosis-crawl:6792.
+Defaults to LOCAL crawling (gnosis-crawl:8080) with NO AUTH required.
+Automatically fixes localhost/127.0.0.1 references to gnosis-crawl:8080.
 
 Tools:
   - crawl_url: fetch markdown from a single URL (supports JS injection)
@@ -24,11 +24,11 @@ JavaScript Injection for Markdown Extraction:
 
 Env/config:
   - WRAITH_AUTH_TOKEN        (optional, preferred if present)
-  - GNOSIS_CRAWL_BASE_URL    (overrides default gnosis-crawl:6792)
+  - GNOSIS_CRAWL_BASE_URL    (overrides default gnosis-crawl:8080)
   - .wraithenv file in repo root with line: WRAITH_AUTH_TOKEN=...
 
 Defaults:
-  - Local: "http://gnosis-crawl:6792" (default, always used unless overridden)
+  - Local: "http://gnosis-crawl:8080" (default, always used unless overridden)
   - Auth: None required
 """
 
@@ -41,30 +41,30 @@ from urllib.parse import urlparse
 
 mcp = FastMCP("gnosis-crawl")
 
-# Default to local gnosis-crawl:6792 - always the primary server
-LOCAL_SERVER_URL = "http://gnosis-crawl:6792"
+# Default to local gnosis-crawl:8080 - always the primary server
+LOCAL_SERVER_URL = "http://gnosis-crawl:8080"
 WRAITH_ENV_FILE = os.path.join(os.getcwd(), ".wraithenv")
 
 
 def _normalize_server_url(url: str) -> str:
     """
-    Normalize server URLs, converting localhost/127.0.0.1 to gnosis-crawl:6792.
+    Normalize server URLs, converting localhost/127.0.0.1 to gnosis-crawl:8080.
     
     If someone passes localhost or 127.0.0.1 with any port, convert it to the
-    standard gnosis-crawl:6792 local server.
+    standard gnosis-crawl:8080 local server.
     
     Args:
         url: Server URL to normalize
     
     Returns:
-        str: Normalized URL (gnosis-crawl:6792 if localhost detected, otherwise original)
+        str: Normalized URL (gnosis-crawl:8080 if localhost detected, otherwise original)
     """
     if not url:
         return LOCAL_SERVER_URL
     
     try:
         parsed = urlparse(url)
-        # Fix localhost/127.0.0.1 references to use gnosis-crawl:6792
+        # Fix localhost/127.0.0.1 references to use gnosis-crawl:8080
         if parsed.hostname in ("localhost", "127.0.0.1"):
             return LOCAL_SERVER_URL
     except Exception:
@@ -88,7 +88,14 @@ def _extract_domain(url: str) -> str:
     except Exception:
         return "unknown"
 
-
+def _is_google_host(url: str) -> bool:
+    """Block direct Google crawling so users route through the serpapi-search MCP tool."""
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        host = ""
+    host = host.lower()
+    return host.endswith("google.com")
 
 def _get_auth_token() -> Optional[str]:
     """
@@ -97,7 +104,7 @@ def _get_auth_token() -> Optional[str]:
     Checks WRAITH_AUTH_TOKEN environment variable first, then falls back to
     reading from .wraithenv file in the current working directory.
     
-    Returns None by default (no auth required for local gnosis-crawl:6792).
+    Returns None by default (no auth required for local gnosis-crawl:8080).
     
     Returns:
         Optional[str]: Authentication token if found, None otherwise
@@ -122,20 +129,20 @@ def _get_auth_token() -> Optional[str]:
 
 def _resolve_base_url(server_url: Optional[str] = None) -> str:
     """
-    Determine which Wraith server URL to use (defaults to gnosis-crawl:6792).
+    Determine which Wraith server URL to use (defaults to gnosis-crawl:8080).
     
     Args:
         server_url: Optional explicit server URL. Automatically normalized
-                   (localhost/127.0.0.1 converted to gnosis-crawl:6792)
+                   (localhost/127.0.0.1 converted to gnosis-crawl:8080)
     
     Returns:
-        str: The resolved base URL for API calls (gnosis-crawl:6792 by default)
+        str: The resolved base URL for API calls (gnosis-crawl:8080 by default)
     """
     # If explicit server_url provided, normalize it
     if server_url:
         return _normalize_server_url(server_url)
     
-    # Default to local gnosis-crawl:6792
+    # Default to local gnosis-crawl:8080
     return LOCAL_SERVER_URL
 
 
@@ -148,7 +155,7 @@ async def set_auth_token(token: str, ctx: Context = None) -> Dict[str, Any]:
     Stores the token persistently so it doesn't need to be passed with each request.
     The token is saved in .wraithenv in the current working directory.
     
-    Note: auth is not required for local gnosis-crawl:6792.
+    Note: auth is not required for local gnosis-crawl:8080.
     
     Args:
         token: Wraith API authentication token to save
@@ -173,11 +180,11 @@ async def crawl_status(server_url: Optional[str] = None) -> Dict[str, Any]:
     """
     Check Wraith crawler configuration and connection status.
     
-    Reports the server URL being used (defaults to gnosis-crawl:6792) and 
+    Reports the server URL being used (defaults to gnosis-crawl:8080) and 
     whether an auth token is configured. Auth is optional for local server.
     
     Args:
-        server_url: Optional explicit server URL to check (defaults to gnosis-crawl:6792)
+        server_url: Optional explicit server URL to check (defaults to gnosis-crawl:8080)
     
     Returns:
         Dict[str, Any]: Server URL being used and token availability status
@@ -188,7 +195,7 @@ async def crawl_status(server_url: Optional[str] = None) -> Dict[str, Any]:
         "success": True,
         "base_url": base,
         "token_present": _get_auth_token() is not None,
-        "auth_required": False,  # Auth not required for local gnosis-crawl:6792
+        "auth_required": False,  # Auth not required for local gnosis-crawl:8080
     }
 
 
@@ -207,14 +214,14 @@ async def crawl_url(
     """
     Crawl a single URL and extract clean markdown content.
     
-    Fetches a web page through the Wraith API on gnosis-crawl:6792 (local default),
+    Fetches a web page through the Wraith API on gnosis-crawl:8080 (local default),
     which handles JavaScript rendering, content extraction, and markdown conversion.
     Returns structured markdown optimized for AI consumption.
     
     JavaScript injection: If javascript_payload is provided, it will be executed
     FIRST on the page, then markdown extraction will run on the modified content.
     
-    Defaults to LOCAL gnosis-crawl:6792 with NO AUTH required.
+    Defaults to LOCAL gnosis-crawl:8080 with NO AUTH required.
     
     Args:
         url: Target URL to crawl
@@ -224,7 +231,7 @@ async def crawl_url(
                           markdown extraction. Runs first, then markdown processes
                           the modified page content.
         markdown_extraction: Extraction mode ("enhanced" applies content pruning)
-        server_url: Optional explicit server URL (defaults to gnosis-crawl:6792)
+        server_url: Optional explicit server URL (defaults to gnosis-crawl:8080)
         timeout: Request timeout in seconds (minimum 5)
         title: Optional title for the crawl report (defaults to domain name)
         ctx: MCP context (optional)
@@ -235,6 +242,11 @@ async def crawl_url(
 
     if not url:
         return {"success": False, "error": "No URL provided"}
+    if _is_google_host(url):
+        return {
+            "success": False,
+            "error": "Direct Google crawling is disabled—use the serpapi-search MCP tools instead.",
+        }
 
     base = _resolve_base_url(server_url)
     endpoint = f"{base}/api/markdown"
@@ -287,14 +299,14 @@ async def crawl_batch(
     """
     Crawl multiple URLs in a single batch operation.
     
-    Processes multiple URLs through Wraith on gnosis-crawl:6792 (local default),
+    Processes multiple URLs through Wraith on gnosis-crawl:8080 (local default),
     with options for asynchronous processing and automatic collation into a 
     single markdown document. Max 50 URLs per batch.
     
     JavaScript injection: If javascript_payload is provided, it will be executed
     FIRST on each page, then markdown extraction will run on the modified content.
     
-    Defaults to LOCAL gnosis-crawl:6792 with NO AUTH required.
+    Defaults to LOCAL gnosis-crawl:8080 with NO AUTH required.
     
     Args:
         urls: List of URLs to crawl (max 50)
@@ -306,7 +318,7 @@ async def crawl_batch(
         async_mode: If True, process URLs asynchronously (faster)
         collate: If True, combine all results into a single markdown document
         collate_title: Title for collated document (auto-generated if not provided)
-        server_url: Optional explicit server URL (defaults to gnosis-crawl:6792)
+        server_url: Optional explicit server URL (defaults to gnosis-crawl:8080)
         timeout: Request timeout in seconds (minimum 10)
         ctx: MCP context (optional)
     
@@ -318,6 +330,12 @@ async def crawl_batch(
         return {"success": False, "error": "No URLs provided"}
     if len(urls) > 50:
         return {"success": False, "error": "Maximum 50 URLs allowed per batch"}
+    for target in urls:
+        if _is_google_host(target):
+            return {
+                "success": False,
+                "error": "Direct Google crawling is disabled—use the serpapi-search MCP tools instead.",
+            }
 
     base = _resolve_base_url(server_url)
     endpoint = f"{base}/api/markdown"
@@ -368,17 +386,17 @@ async def raw_html(
     """
     Fetch raw HTML from a URL without markdown conversion.
     
-    Returns the raw HTML source from a web page via gnosis-crawl:6792 (local default),
+    Returns the raw HTML source from a web page via gnosis-crawl:8080 (local default),
     optionally with JavaScript execution. Useful when you need the actual HTML 
     structure rather than cleaned markdown content.
     
-    Defaults to LOCAL gnosis-crawl:6792 with NO AUTH required.
+    Defaults to LOCAL gnosis-crawl:8080 with NO AUTH required.
     
     Args:
         url: Target URL to fetch
         javascript_enabled: If True, execute JavaScript before capturing HTML
         javascript_payload: Optional JavaScript code to execute on the page
-        server_url: Optional explicit server URL (defaults to gnosis-crawl:6792)
+        server_url: Optional explicit server URL (defaults to gnosis-crawl:8080)
         timeout: Request timeout in seconds (minimum 5)
         ctx: MCP context (optional)
     
@@ -388,6 +406,11 @@ async def raw_html(
 
     if not url:
         return {"success": False, "error": "No URL provided"}
+    if _is_google_host(url):
+        return {
+            "success": False,
+            "error": "Direct Google crawling is disabled—use the serpapi-search MCP tools instead.",
+        }
 
     base = _resolve_base_url(server_url)
     endpoint = f"{base}/api/raw"

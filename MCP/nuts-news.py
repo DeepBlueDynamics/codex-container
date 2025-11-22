@@ -45,7 +45,7 @@ mcp = FastMCP("nuts-news")
 
 # Config
 NUTS_ENV_FILE = os.path.join(os.getcwd(), ".nuts.env")
-DEFAULT_MODEL = os.getenv('NUTS_NEWS_MODEL', 'gpt-4o-mini'),
+DEFAULT_MODEL = os.getenv('NUTS_NEWS_MODEL', 'claude-sonnet-4-5-20250929')
 
 # Satirical measurement units and tech jargon
 ABSURD_UNITS = [
@@ -71,26 +71,28 @@ FAKE_EXPERTS = [
 
 
 def _get_config() -> Dict[str, Optional[str]]:
-    """Get configuration from environment or .nuts.env file."""
+    """Get API key and model from environment or .nuts.env."""
     config = {
         "api_key": os.environ.get("ANTHROPIC_API_KEY"),
+        "model": os.environ.get("NUTS_NEWS_MODEL", DEFAULT_MODEL),
     }
 
-    # Try loading from .nuts.env if not in environment
-    if not config["api_key"]:
+    # Load fallback values from .nuts.env if missing
+    if not config["api_key"] or config["model"] == DEFAULT_MODEL:
         try:
             if os.path.exists(NUTS_ENV_FILE):
                 with open(NUTS_ENV_FILE, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith("#"):
+                    for raw in f:
+                        line = raw.strip()
+                        if not line or line.startswith("#") or "=" not in line:
                             continue
-                        if "=" in line:
-                            key, value = line.split("=", 1)
-                            key = key.strip()
-                            value = value.strip().strip('"').strip("'")
-                            if key == "ANTHROPIC_API_KEY":
-                                config["api_key"] = value
+                        key, value = line.split("=", 1)
+                        key = key.strip()
+                        value = value.strip().strip('"').strip("'")
+                        if key == "ANTHROPIC_API_KEY" and not config["api_key"]:
+                            config["api_key"] = value
+                        if key == "NUTS_NEWS_MODEL" and config["model"] == DEFAULT_MODEL:
+                            config["model"] = value
         except Exception:
             pass
 
@@ -112,7 +114,9 @@ def _get_client():
             "Set in environment variable."
         )
 
-    return Anthropic(api_key=config["api_key"])
+    client = Anthropic(api_key=config["api_key"])
+    config["model"] = config.get("model") or DEFAULT_MODEL
+    return client, config["model"]
 
 
 @mcp.tool()
@@ -122,6 +126,8 @@ async def nuts_generate_article(
     company_focus: Optional[str] = None,
     include_discontinuation: bool = True,
     absurdity_level: int = 8,
+    recurring_themes: Optional[List[str]] = None,
+    target_length: str = "moderate",
     ctx: Context = None
 ) -> Dict[str, Any]:
     """
@@ -133,6 +139,8 @@ async def nuts_generate_article(
         company_focus: Optional company (Meta, Apple, Microsoft, etc.)
         include_discontinuation: Include Meta discontinuation joke (default: True)
         absurdity_level: Scale 1-10, how absurd to make it (default: 8)
+        recurring_themes: Optional list of recurring themes to weave through the story
+        target_length: Qualitative length guidance (short/moderate/long), default moderate
         ctx: MCP context (optional)
 
     Returns:
@@ -144,9 +152,13 @@ async def nuts_generate_article(
             - quotes: list of fake expert quotes
             - ticker_items: list of breaking news items
             - sidebar_metrics: dict of absurd metrics
+    Note:
+        For best results, call this tool with as much real-world detail as possible
+        (crawl summaries, pricing data, launch windows, etc.) so the humor mirrors
+        plausibly grounded events even while drifting into absurdity.
     """
     try:
-        client = _get_client()
+        client, model_name = _get_client()
 
         # Build the prompt
         prompt = f"""Generate a satirical tech news article for N.U.T.S. News (Neural Unverified Telegraph Service).
@@ -155,6 +167,7 @@ TOPIC: {topic}
 {"CEO FOCUS: " + ceo_focus if ceo_focus else ""}
 {"COMPANY FOCUS: " + company_focus if company_focus else ""}
 ABSURDITY LEVEL: {absurdity_level}/10
+TARGET LENGTH: {target_length}
 
 STYLE GUIDELINES:
 - Maintain serious journalistic tone while being absurd
@@ -165,6 +178,9 @@ STYLE GUIDELINES:
 {"- Include a Meta/Zuckerberg discontinuation joke" if include_discontinuation else ""}
 - Reference Bill Gates finding things in unexpected places
 - Use fake experts from academia
+- Keep overall article {target_length} (roughly 4-5 sturdy sections) with minimal filler
+- Do not repeat non-funny lines; each section must introduce a fresh absurd discovery
+{"- Recurring themes to weave in (refresh each mention): " + ', '.join(recurring_themes) if recurring_themes else "- Include at least one running gag and evolve it each time"}
 
 Generate in JSON format:
 {{
@@ -200,7 +216,7 @@ Generate in JSON format:
 
         # Call Claude
         response = client.messages.create(
-            model=DEFAULT_MODEL,
+            model=model_name,
             max_tokens=4096,
             messages=[{
                 "role": "user",
@@ -264,7 +280,7 @@ async def nuts_generate_headline(
         Dictionary with headline text
     """
     try:
-        client = _get_client()
+        client, model_name = _get_client()
 
         prompt = f"""Generate a satirical N.U.T.S. News headline for: {topic}
 
@@ -274,7 +290,7 @@ Urgency level: {urgency}
 Return only the headline text, no explanation."""
 
         response = client.messages.create(
-            model=DEFAULT_MODEL,
+            model=model_name,
             max_tokens=256,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -311,7 +327,7 @@ async def nuts_generate_quote(
         Dictionary with quote and attribution
     """
     try:
-        client = _get_client()
+        client, model_name = _get_client()
 
         import random
         if not expert_name:
@@ -326,7 +342,7 @@ Style: Should sound technical and credible while being absurd. Include made-up m
 Return JSON: {{"quote": "text", "attribution": "full attribution with title"}}"""
 
         response = client.messages.create(
-            model=DEFAULT_MODEL,
+            model=model_name,
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -375,7 +391,7 @@ async def nuts_generate_ticker(
         Dictionary with list of ticker items
     """
     try:
-        client = _get_client()
+        client, model_name = _get_client()
 
         prompt = f"""Generate {count} satirical breaking news ticker items for N.U.T.S. News.
 
@@ -389,7 +405,7 @@ Requirements:
 Return JSON array: [{{"time": "14:52", "text": "ticker text"}}, ...]"""
 
         response = client.messages.create(
-            model=DEFAULT_MODEL,
+            model=model_name,
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}]
         )

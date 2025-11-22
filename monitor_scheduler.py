@@ -14,6 +14,9 @@ import uuid
 CONFIG_FILENAME = ".codex-monitor-triggers.json"
 SESSION_TRIGGERS_FILENAME = "triggers.json"
 CODEX_HOME = Path("/opt/codex-home")
+WORKSPACE_ROOT = Path("/workspace")
+WORKSPACE_TRIGGER_PATH = (WORKSPACE_ROOT / CONFIG_FILENAME).resolve()
+DEFAULT_SESSION_SENTINELS = {"workspace", "project", "cwd", "default", "unknown"}
 
 
 def _utc_now() -> datetime:
@@ -60,6 +63,32 @@ def get_session_dir(session_id: str) -> Path:
 def get_session_triggers_path(session_id: str) -> Path:
     """Get the triggers file path for a session."""
     return get_session_dir(session_id) / SESSION_TRIGGERS_FILENAME
+
+
+def resolve_custom_session_path(session_id: str) -> Optional[Path]:
+    if session_id is None:
+        return WORKSPACE_TRIGGER_PATH
+    normalized = session_id.strip()
+    if not normalized:
+        return WORKSPACE_TRIGGER_PATH
+    lowered = normalized.lower()
+    if lowered in DEFAULT_SESSION_SENTINELS:
+        return WORKSPACE_TRIGGER_PATH
+    if normalized.startswith(("~", "/", ".")):
+        candidate = Path(normalized).expanduser().resolve()
+        if candidate.is_dir():
+            return (candidate / CONFIG_FILENAME).resolve()
+        return candidate
+    return None
+
+
+def get_config_path_for_session(session_id: str) -> Path:
+    """Return the config path honoring workspace/absolute overrides."""
+    custom = resolve_custom_session_path(session_id)
+    if custom:
+        custom.parent.mkdir(parents=True, exist_ok=True)
+        return custom
+    return get_session_triggers_path(session_id)
 
 
 def get_session_env_path(session_id: str) -> Path:
@@ -258,10 +287,14 @@ __all__ = [
     "CONFIG_FILENAME",
     "SESSION_TRIGGERS_FILENAME",
     "CODEX_HOME",
+    "WORKSPACE_ROOT",
+    "WORKSPACE_TRIGGER_PATH",
     "TriggerRecord",
     "get_session_dir",
     "get_session_triggers_path",
     "get_session_env_path",
+    "get_config_path_for_session",
+    "resolve_custom_session_path",
     "load_config",
     "save_config",
     "list_trigger_records",
@@ -271,4 +304,3 @@ __all__ = [
     "generate_trigger_id",
     "render_template",
 ]
-

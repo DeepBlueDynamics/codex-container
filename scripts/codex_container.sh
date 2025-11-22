@@ -34,6 +34,7 @@ WATCH_STATE_FILE=""
 WATCH_ONCE=false
 WATCH_DEBOUNCE=""
 MONITOR_PROMPT_FILE="MONITOR.md"
+DEFAULT_SYSTEM_PROMPT_FILE="PROMPT.md"
 NEW_SESSION=false
 SESSION_ID=""
 TRANSCRIPTION_SERVICE_URL="http://host.docker.internal:8765"
@@ -453,6 +454,40 @@ resolve_workspace() {
 }
 
 WORKSPACE_PATH="$(resolve_workspace "$WORKSPACE_OVERRIDE")"
+has_system_prompt_flag() {
+  local token
+  for token in "$@"; do
+    case "$token" in
+      --system|--system=*|--system-file|--system-file=*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+maybe_inject_default_prompt() {
+  if [[ "${CODEX_DISABLE_DEFAULT_PROMPT:-}" =~ ^(1|true|on)$ ]]; then
+    return
+  fi
+  if [[ -n "$SESSION_ID" ]]; then
+    return
+  fi
+  if [[ "$ACTION" != "serve" ]]; then
+    return
+  fi
+  local host_prompt="${WORKSPACE_PATH}/${DEFAULT_SYSTEM_PROMPT_FILE}"
+  if [[ ! -f "$host_prompt" ]]; then
+    return
+  fi
+  local container_prompt="/workspace/${DEFAULT_SYSTEM_PROMPT_FILE}"
+  if has_system_prompt_flag "${CODEX_ARGS[@]}"; then
+    return
+  fi
+  CODEX_ARGS+=("--system-file" "$container_prompt")
+}
+
+maybe_inject_default_prompt
 
 if [[ "$ACTION" == "watch" && -z "$WATCH_PATH" ]]; then
   WATCH_PATH="$WORKSPACE_PATH"

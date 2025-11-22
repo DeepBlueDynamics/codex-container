@@ -108,6 +108,11 @@ async def _paginate(
 
 @mcp.tool()
 async def github_status() -> Dict[str, Any]:
+    """Report GitHub API connectivity and authentication state.
+
+    Returns dict with `api_base`, `token_present`, and optional `login` if the
+    token can hit `/user`. Includes status info on errors.
+    """
     token = _get_token()
     base = _get_api_base()
     out: Dict[str, Any] = {"success": True, "api_base": base, "token_present": bool(token)}
@@ -128,6 +133,7 @@ async def github_status() -> Dict[str, Any]:
 # -------------------- Issues --------------------
 @mcp.tool()
 async def github_get_issue(owner: str, repo: str, issue_number: int) -> Dict[str, Any]:
+    """Fetch a single issue with metadata such as labels and assignees."""
     return await _api_request("GET", f"/repos/{owner}/{repo}/issues/{issue_number}")
 
 
@@ -144,6 +150,10 @@ async def github_list_issues(
     page: int = 1,
     max_pages: int = 1,
 ) -> Dict[str, Any]:
+    """List repository issues using standard filters and pagination.
+
+    Returns `issues` plus `count`, and `pages` when multi-page fetches occur.
+    """
     base_params: Dict[str, Any] = {"state": state}
     if labels:
         base_params["labels"] = labels
@@ -176,6 +186,7 @@ async def github_create_issue(
     labels: Optional[List[str]] = None,
     assignees: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
+    """Create a new issue with optional body, labels, and assignees."""
     payload: Dict[str, Any] = {"title": title, "body": body}
     if labels is not None:
         payload["labels"] = labels
@@ -195,6 +206,7 @@ async def github_update_issue(
     labels: Optional[List[str]] = None,
     assignees: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
+    """Update mutable issue fields; omit params to leave them unchanged."""
     payload: Dict[str, Any] = {}
     if title is not None:
         payload["title"] = title
@@ -211,6 +223,7 @@ async def github_update_issue(
 
 @mcp.tool()
 async def github_add_comment(owner: str, repo: str, issue_number: int, body: str) -> Dict[str, Any]:
+    """Add a comment to an issue or pull request thread."""
     return await _api_request(
         "POST", f"/repos/{owner}/{repo}/issues/{issue_number}/comments", json={"body": body}
     )
@@ -228,6 +241,7 @@ async def github_list_prs(
     page: int = 1,
     max_pages: int = 1,
 ) -> Dict[str, Any]:
+    """List pull requests filtered by state/base/head with pagination."""
     params: Dict[str, Any] = {"state": state}
     if base:
         params["base"] = base
@@ -249,6 +263,7 @@ async def github_list_prs(
 
 @mcp.tool()
 async def github_get_pr(owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
+    """Return metadata for a single pull request."""
     return await _api_request("GET", f"/repos/{owner}/{repo}/pulls/{pr_number}")
 
 
@@ -263,6 +278,7 @@ async def github_create_pr(
     draft: bool = False,
     maintainer_can_modify: bool = True,
 ) -> Dict[str, Any]:
+    """Open a pull request; supports draft flag and maintainer override."""
     payload = {
         "title": title,
         "head": head,
@@ -284,6 +300,7 @@ async def github_update_pr(
     state: Optional[str] = None,
     base: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """Update PR fields such as title/body/state/base."""
     payload: Dict[str, Any] = {}
     if title is not None:
         payload["title"] = title
@@ -307,6 +324,7 @@ async def github_merge_pr(
     sha: Optional[str] = None,
     admin_merge: bool = False,
 ) -> Dict[str, Any]:
+    """Merge a PR using merge/squash/rebase with optional commit overrides."""
     payload: Dict[str, Any] = {"merge_method": merge_method}
     if commit_title is not None:
         payload["commit_title"] = commit_title
@@ -324,6 +342,7 @@ async def github_merge_pr(
 async def github_list_labels(
     owner: str, repo: str, per_page: int = 100, page: int = 1, max_pages: int = 1
 ) -> Dict[str, Any]:
+    """List repository labels, handling pagination for large sets."""
     if max_pages <= 1 and page > 1:
         resp = await _api_request(
             "GET", f"/repos/{owner}/{repo}/labels", params={"per_page": min(per_page, 100), "page": page}
@@ -337,6 +356,7 @@ async def github_list_labels(
 
 @mcp.tool()
 async def github_add_labels(owner: str, repo: str, issue_number: int, labels: List[str]) -> Dict[str, Any]:
+    """Attach existing labels to an issue or pull request."""
     return await _api_request(
         "POST", f"/repos/{owner}/{repo}/issues/{issue_number}/labels", json={"labels": labels}
     )
@@ -346,6 +366,7 @@ async def github_add_labels(owner: str, repo: str, issue_number: int, labels: Li
 async def github_create_label(
     owner: str, repo: str, name: str, color: str = "ededed", description: Optional[str] = None
 ) -> Dict[str, Any]:
+    """Create a new label with optional description."""
     payload: Dict[str, Any] = {"name": name, "color": color}
     if description is not None:
         payload["description"] = description
@@ -354,4 +375,3 @@ async def github_create_label(
 
 if __name__ == "__main__":
     mcp.run()
-

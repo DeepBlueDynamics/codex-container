@@ -6,6 +6,7 @@ codex-home/
 
 # Python virtual environments
 .venv/
+.openmeteo-venv/
 venv/
 env/
 ENV/

@@ -14,6 +14,7 @@ const DEFAULT_TIMEOUT_MS = parseInt(process.env.CODEX_GATEWAY_TIMEOUT_MS || '120
 const DEFAULT_IDLE_TIMEOUT_MS = parseInt(process.env.CODEX_GATEWAY_IDLE_TIMEOUT_MS || '900000', 10);
 const MAX_TIMEOUT_MS = parseInt(process.env.CODEX_GATEWAY_MAX_TIMEOUT_MS || '1800000', 10); // 30 minutes
 const DEFAULT_MODEL = process.env.CODEX_GATEWAY_DEFAULT_MODEL || '';
+const CODEX_JSON_FLAG = process.env.CODEX_GATEWAY_JSON_FLAG || '--experimental-json';
 const EXTRA_ARGS = (process.env.CODEX_GATEWAY_EXTRA_ARGS || '')
   .split(/\s+/)
   .filter(Boolean);
@@ -154,6 +155,22 @@ function parseBoolean(value) {
   }
   return false;
 }
+
+const DEFAULT_TRIGGER_FILE = process.env.CODEX_GATEWAY_TRIGGER_FILE
+  || path.join(process.cwd(), '.codex-monitor-triggers.json');
+const DISABLE_TRIGGER_SCHEDULER = parseBoolean(process.env.CODEX_GATEWAY_DISABLE_TRIGGERS);
+const TRIGGER_WATCH_DEBOUNCE_MS = parseInt(process.env.CODEX_GATEWAY_TRIGGER_DEBOUNCE_MS || '750', 10);
+const MIN_TRIGGER_DELAY_MS = 250;
+const CODEX_HOME_PATH = process.env.CODEX_GATEWAY_CODEX_HOME
+  || process.env.CODEX_HOME
+  || process.env.HOME
+  || '/opt/codex-home';
+const SESSION_TRIGGER_ROOT = path.join(CODEX_HOME_PATH, 'sessions');
+const EXTRA_TRIGGER_FILES = (process.env.CODEX_GATEWAY_TRIGGER_FILES || '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter(Boolean)
+  .map((entry) => path.resolve(entry));
 
 class SessionStore {
   constructor(rootDir) {
@@ -554,13 +571,18 @@ class SessionWorker extends EventEmitter {
   }
 
   buildArgs(meta) {
-    const args = ['shell', '--json', '--color=never', '--skip-git-repo-check'];
+    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
+    if (CODEX_JSON_FLAG && CODEX_JSON_FLAG.trim().length > 0) {
+      args.push(CODEX_JSON_FLAG.trim());
+    }
+    args.push('--color=never', '--skip-git-repo-check');
     if (meta && meta.model) {
       args.push('--model', meta.model);
     }
-    if (meta && meta.codex_session_id) {
-      args.push('resume', meta.codex_session_id);
+    if (Array.isArray(EXTRA_ARGS) && EXTRA_ARGS.length > 0) {
+      args.push(...EXTRA_ARGS);
     }
+    args.push('-');
     return args;
   }
 
@@ -604,8 +626,15 @@ class SessionWorker extends EventEmitter {
       stdio: ['pipe', 'pipe', 'pipe'],
     };
     this.startOptions = spawnOptions;
+    const args = this.buildArgs(meta || {});
+    console.log('[codex-gateway] launching worker', JSON.stringify({
+      session_id: this.sessionId,
+      argv: ['codex', ...args],
+      cwd: spawnOptions.cwd,
+      env_keys: this.options.env ? Object.keys(this.options.env) : [],
+      resume_codex_session_id: meta?.codex_session_id || null,
+    }));
     this.starting = new Promise((resolve, reject) => {
-      const args = this.buildArgs(meta || {});
       const child = spawn('codex', args, spawnOptions);
       this.proc = child;
       this.store.setWorkerState(this.sessionId, 'starting', { worker_pid: child.pid });
@@ -729,6 +758,7 @@ class SessionWorker extends EventEmitter {
       try {
         const payload = input.endsWith('\n') ? input : `${input}\n`;
         this.proc.stdin.write(`${payload}\n`);
+        this.proc.stdin.end();
       } catch (error) {
         if (timer) {
           clearTimeout(timer);
@@ -824,7 +854,11 @@ function buildRunOptions(payload, meta) {
 
 function runCodex(prompt, model, options = {}) {
   return new Promise((resolve, reject) => {
-    const args = ['exec', '--json', '--color=never', '--skip-git-repo-check'];
+    const args = ['exec'];
+    if (CODEX_JSON_FLAG && CODEX_JSON_FLAG.trim().length > 0) {
+      args.push(CODEX_JSON_FLAG.trim());
+    }
+    args.push('--color=never', '--skip-git-repo-check');
     if (model) {
       args.push('--model', model);
     }
@@ -844,6 +878,11 @@ function runCodex(prompt, model, options = {}) {
         env[key] = value;
       }
     }
+
+    console.log('[codex-gateway] spawning codex', JSON.stringify({
+      argv: ['codex', ...args],
+      cwd,
+    }));
 
     const proc = spawn('codex', args, {
       cwd,
@@ -888,6 +927,7 @@ function runCodex(prompt, model, options = {}) {
     });
 
     proc.on('error', (error) => {
+      console.error('[codex-gateway] codex spawn error:', error);
       if (!finished) {
         finished = true;
         clearTimeout(timer);
@@ -896,6 +936,7 @@ function runCodex(prompt, model, options = {}) {
     });
 
     proc.on('close', (code) => {
+      console.log('[codex-gateway] codex exited', code);
       if (finished) {
         return;
       }
@@ -1035,54 +1076,629 @@ async function runPromptWithWorker({ payload, messages, systemPrompt, sessionId 
   await sessionStore.ready;
   const promptPreview = extractPromptPreview(messages, systemPrompt);
   const runOptions = buildRunOptions({ ...payload, prompt_preview: promptPreview }, { prompt_preview: promptPreview });
-  const beginResult = await sessionStore.beginRun({
-    sessionId,
-    metadata: {
-      prompt_preview: promptPreview,
-      timeout_ms: runOptions.timeoutMs,
-      objective: runOptions.objective,
-      model: runOptions.model,
-      nudge_prompt: runOptions.nudge_prompt,
-      nudge_interval_ms: runOptions.nudge_interval_ms,
-      idle_timeout_ms: runOptions.idle_timeout_ms,
-    },
+
+  const resolvedSessionId = sessionId ? sessionStore.resolveSessionId(sessionId) : null;
+  const existingMeta = resolvedSessionId ? await sessionStore.getMeta(resolvedSessionId) : null;
+  const resumeCodexSessionId = existingMeta?.codex_session_id || null;
+
+  const result = await executeSessionRun({
+    payload: { ...payload, prompt_preview: promptPreview },
+    messages,
+    systemPrompt,
+    sessionId: resolvedSessionId || undefined,
+    resumeSessionId: resumeCodexSessionId,
   });
 
-  const resolvedSessionId = beginResult.sessionId;
-  const meta = await sessionStore.getMeta(resolvedSessionId);
-  const worker = await ensureSessionWorker(resolvedSessionId, {
-    cwd: runOptions.cwd,
-    env: runOptions.env || undefined,
-    idleTimeoutMs: meta?.idle_timeout_ms || runOptions.idle_timeout_ms,
-  });
+  return {
+    gateway_session_id: result.session_id,
+    codex_session_id: result.codex_session_id,
+    status: result.status,
+    content: result.content,
+    tool_calls: result.tool_calls,
+    events: result.events,
+  };
+}
 
+function parseIsoDate(value, contextLabel) {
+  if (!value) {
+    throw new Error(`${contextLabel || 'timestamp'} missing`);
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Invalid ISO timestamp '${value}'`);
+  }
+  return parsed;
+}
+
+function parseHhMm(value, contextLabel) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${contextLabel || 'time'} missing`);
+  }
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) {
+    throw new Error(`Invalid time '${value}' (expected HH:MM)`);
+  }
+  const hour = parseInt(match[1], 10);
+  const minute = parseInt(match[2], 10);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    throw new Error(`Time '${value}' outside 24h range`);
+  }
+  return { hour, minute };
+}
+
+const TIMEZONE_FORMATTERS = new Map();
+
+function getTimeZoneFormatter(tzName) {
+  const key = tzName || 'UTC';
+  if (TIMEZONE_FORMATTERS.has(key)) {
+    return TIMEZONE_FORMATTERS.get(key);
+  }
+  let formatter;
   try {
-    const result = await worker.sendPrompt({
-      messages,
-      systemPrompt,
-      timeoutMs: runOptions.timeoutMs,
-      promptPreview,
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: key,
+      calendar: 'iso8601',
+      numberingSystem: 'latn',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
     });
-    await sessionStore.finishRun(resolvedSessionId, beginResult.runId, {
-      status: result.status,
-      codexSessionId: result.codex_session_id,
-      content: result.content,
-      events: result.events,
-    });
-    return {
-      gateway_session_id: resolvedSessionId,
-      codex_session_id: result.codex_session_id,
-      status: result.status,
-      content: result.content,
-      tool_calls: result.tool_calls,
-      events: result.events,
-    };
   } catch (error) {
-    await sessionStore.finishRun(resolvedSessionId, beginResult.runId, {
-      status: 'error',
-      error: error.message,
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'UTC',
+      calendar: 'iso8601',
+      numberingSystem: 'latn',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
     });
-    throw error;
+  }
+  TIMEZONE_FORMATTERS.set(key, formatter);
+  return formatter;
+}
+
+function getTimeZoneParts(date, tzName) {
+  const formatter = getTimeZoneFormatter(tzName);
+  const parts = formatter.formatToParts(date);
+  const result = {};
+  for (const part of parts) {
+    if (part.type === 'literal') {
+      continue;
+    }
+    result[part.type] = parseInt(part.value, 10);
+  }
+  return result;
+}
+
+function getTimeZoneOffsetMs(tzName, date) {
+  try {
+    const parts = getTimeZoneParts(date, tzName);
+    const asUtc = Date.UTC(
+      parts.year,
+      (parts.month || 1) - 1,
+      parts.day || 1,
+      parts.hour || 0,
+      parts.minute || 0,
+      parts.second || 0,
+    );
+    return asUtc - date.getTime();
+  } catch (error) {
+    return 0;
+  }
+}
+
+function convertLocalPartsToUtc(tzName, parts) {
+  const guess = Date.UTC(
+    parts.year,
+    (parts.month || 1) - 1,
+    parts.day || 1,
+    parts.hour || 0,
+    parts.minute || 0,
+    parts.second || 0,
+  );
+  let actual = guess;
+  for (let i = 0; i < 3; i += 1) {
+    const offset = getTimeZoneOffsetMs(tzName, new Date(actual));
+    const candidate = guess - offset;
+    if (Math.abs(candidate - actual) < 500) {
+      actual = candidate;
+      break;
+    }
+    actual = candidate;
+  }
+  return new Date(actual);
+}
+
+function buildDailyCandidate(tzName, hour, minute, reference) {
+  const parts = getTimeZoneParts(reference, tzName);
+  return convertLocalPartsToUtc(tzName, {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour,
+    minute,
+    second: 0,
+  });
+}
+
+function computeNextTriggerFire(record, referenceDate) {
+  if (!record.enabled) {
+    return null;
+  }
+  const schedule = record.schedule || {};
+  const modeRaw = typeof schedule.mode === 'string' ? schedule.mode.toLowerCase() : null;
+  const inferredMode = modeRaw
+    || (schedule.interval_minutes || schedule.minutes ? 'interval'
+      : schedule.time ? 'daily'
+        : 'once');
+  const now = referenceDate || new Date();
+
+  if (inferredMode === 'once') {
+    const targetIso = schedule.at || schedule.time || record.created_at;
+    const target = parseIsoDate(targetIso, 'schedule.at');
+    if (target <= now) {
+      return null;
+    }
+    return target;
+  }
+
+  if (inferredMode === 'daily') {
+    const tzName = schedule.timezone || schedule.tz || 'UTC';
+    const { hour, minute } = parseHhMm(schedule.time || schedule.at || '00:00', 'schedule.time');
+    let candidate = buildDailyCandidate(tzName, hour, minute, now);
+    if (candidate <= now) {
+      const future = new Date(now.getTime() + 25 * 60 * 60 * 1000);
+      candidate = buildDailyCandidate(tzName, hour, minute, future);
+    }
+    return candidate;
+  }
+
+  if (inferredMode === 'interval') {
+    const minutes = parseFloat(schedule.interval_minutes || schedule.minutes);
+    if (!minutes || minutes <= 0) {
+      throw new Error(`Trigger ${record.id} interval must be greater than zero`);
+    }
+    const stepMs = minutes * 60 * 1000;
+    let base = record.last_fired ? parseIsoDate(record.last_fired, 'last_fired') : parseIsoDate(record.created_at, 'created_at');
+    let candidate = new Date(base.getTime() + stepMs);
+    const ceiling = now.getTime() + stepMs * 1000; // guard runaway loops
+    while (candidate <= now && candidate.getTime() < ceiling) {
+      base = candidate;
+      candidate = new Date(candidate.getTime() + stepMs);
+    }
+    if (candidate <= now) {
+      candidate = new Date(now.getTime() + stepMs);
+    }
+    return candidate;
+  }
+
+  throw new Error(`Unknown trigger schedule mode '${JSON.stringify(schedule.mode || schedule)}'`);
+}
+
+async function discoverSessionTriggerFiles() {
+  const files = [];
+  try {
+    const entries = await fsp.readdir(SESSION_TRIGGER_ROOT, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const triggerPath = path.join(SESSION_TRIGGER_ROOT, entry.name, 'triggers.json');
+      files.push(triggerPath);
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.error('[codex-gateway] failed to enumerate session triggers:', error.message);
+    }
+  }
+  return files;
+}
+
+function dedupeTriggerFiles(files) {
+  const result = [];
+  const seen = new Set();
+  for (const candidate of files) {
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    result.push(resolved);
+  }
+  return result;
+}
+
+class TriggerScheduler extends EventEmitter {
+  constructor(options = {}) {
+    super();
+    this.triggerFile = path.resolve(options.triggerFile || DEFAULT_TRIGGER_FILE);
+    this.dispatchPrompt = options.dispatchPrompt;
+    this.jobs = new Map();
+    this.triggers = new Map();
+    this.started = false;
+    this.debounceTimer = null;
+    this.watcher = null;
+  }
+
+  async start() {
+    if (this.started) {
+      return;
+    }
+    this.started = true;
+    await this.reload();
+    this.startWatcher();
+    console.log(`[codex-gateway] trigger scheduler watching ${this.triggerFile}`);
+  }
+
+  stop() {
+    this.started = false;
+    if (this.watcher) {
+      this.watcher.close();
+      this.watcher = null;
+    }
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+    this.clearAllJobs();
+  }
+
+  async reload() {
+    if (!this.started) {
+      return;
+    }
+    let config;
+    try {
+      const raw = await fsp.readFile(this.triggerFile, 'utf8');
+      config = JSON.parse(raw);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        this.clearAllJobs();
+        this.triggers.clear();
+        return;
+      }
+      console.error('[codex-gateway] trigger config parse error:', error.message);
+      return;
+    }
+    const entries = Array.isArray(config.triggers) ? config.triggers : [];
+    const seen = new Set();
+    console.log(`[codex-gateway] reloading ${entries.length} trigger(s) from ${this.triggerFile}`);
+    for (const entry of entries) {
+      try {
+        const normalized = this.normalize(entry);
+        seen.add(normalized.id);
+        this.schedule(normalized);
+      } catch (error) {
+        console.error('[codex-gateway] skipping trigger:', error.message);
+      }
+    }
+    for (const key of Array.from(this.jobs.keys())) {
+      if (!seen.has(key)) {
+        this.cancel(key);
+      }
+    }
+  }
+
+  normalize(entry) {
+    const id = String(entry.id || entry.trigger_id || crypto.randomUUID());
+    const promptText = typeof entry.prompt_text === 'string' && entry.prompt_text.trim().length > 0
+      ? entry.prompt_text
+      : typeof entry.prompt === 'string'
+        ? entry.prompt
+        : '';
+    if (promptText.trim().length === 0) {
+      throw new Error(`Trigger ${id} missing prompt_text`);
+    }
+    const schedule = entry.schedule && typeof entry.schedule === 'object'
+      ? entry.schedule
+      : {};
+    const normalized = {
+      id,
+      title: typeof entry.title === 'string' && entry.title.trim().length > 0 ? entry.title.trim() : id,
+      description: typeof entry.description === 'string' ? entry.description : '',
+      schedule,
+      prompt_text: promptText,
+      created_at: entry.created_at || new Date().toISOString(),
+      enabled: entry.enabled !== false,
+      tags: Array.isArray(entry.tags) ? entry.tags : [],
+      last_fired: entry.last_fired || null,
+      gateway_session_id: entry.gateway_session_id || null,
+      system_prompt: typeof entry.system_prompt === 'string' ? entry.system_prompt : '',
+      env: entry.env && typeof entry.env === 'object' ? entry.env : null,
+      cwd: typeof entry.cwd === 'string' && entry.cwd.trim().length > 0 ? entry.cwd.trim() : null,
+      timeout_ms: entry.timeout_ms || entry.max_duration_ms || null,
+      idle_timeout_ms: entry.idle_timeout_ms || null,
+    };
+    this.triggers.set(id, normalized);
+    return normalized;
+  }
+
+  schedule(record) {
+    this.cancel(record.id);
+    let nextFire = null;
+    try {
+      nextFire = computeNextTriggerFire(record, new Date());
+    } catch (error) {
+      console.error(`[codex-gateway] trigger ${record.id} scheduling error:`, error.message);
+    }
+    record.next_fire = nextFire ? nextFire.toISOString() : null;
+    this.triggers.set(record.id, record);
+    if (!nextFire) {
+      return;
+    }
+    console.log(`[codex-gateway] trigger '${record.title}' scheduled for ${nextFire.toISOString()} (${this.triggerFile})`);
+    const delay = Math.max(nextFire.getTime() - Date.now(), MIN_TRIGGER_DELAY_MS);
+    const timer = setTimeout(() => {
+      this.execute(record.id).catch((error) => {
+        console.error(`[codex-gateway] trigger ${record.id} execution error:`, error.message);
+      });
+    }, delay);
+    this.jobs.set(record.id, timer);
+  }
+
+  cancel(triggerId) {
+    const timer = this.jobs.get(triggerId);
+    if (timer) {
+      clearTimeout(timer);
+      this.jobs.delete(triggerId);
+    }
+  }
+
+  clearAllJobs() {
+    for (const timer of this.jobs.values()) {
+      clearTimeout(timer);
+    }
+    this.jobs.clear();
+  }
+
+  async execute(triggerId) {
+    this.cancel(triggerId);
+    const record = this.triggers.get(triggerId);
+    if (!record) {
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const promptPayload = {
+      payload: {
+        timeout_ms: record.timeout_ms || undefined,
+        idle_timeout_ms: record.idle_timeout_ms || undefined,
+        env: record.env || undefined,
+        cwd: record.cwd || undefined,
+        persistent: true,
+      },
+      messages: [{ role: 'user', content: record.prompt_text }],
+      systemPrompt: record.system_prompt || '',
+      sessionId: record.gateway_session_id || undefined,
+      triggerId,
+      triggerTitle: record.title,
+    };
+    console.log('[codex-gateway] trigger dispatch', JSON.stringify({
+      trigger_id: triggerId,
+      title: record.title,
+      payload: {
+        timeout_ms: promptPayload.payload.timeout_ms || DEFAULT_TIMEOUT_MS,
+        idle_timeout_ms: promptPayload.payload.idle_timeout_ms || DEFAULT_IDLE_TIMEOUT_MS,
+        env_keys: promptPayload.payload.env ? Object.keys(promptPayload.payload.env) : [],
+        cwd: promptPayload.payload.cwd,
+        persistent: promptPayload.payload.persistent,
+        session_id: promptPayload.sessionId || null,
+      },
+    }));
+    let runSucceeded = false;
+    try {
+      const result = await this.dispatchPrompt(promptPayload);
+      runSucceeded = Boolean(result && result.status !== 'error');
+      const gatewaySessionId = result && result.gateway_session_id
+        ? result.gateway_session_id
+        : record.gateway_session_id;
+      await this.updateTriggerRecord(record.id, {
+        last_fired: nowIso,
+        gateway_session_id: gatewaySessionId || null,
+      });
+      record.last_fired = nowIso;
+      record.gateway_session_id = gatewaySessionId || null;
+    } catch (error) {
+      console.error(`[codex-gateway] trigger ${record.id} run failed:`, error.message);
+    } finally {
+      if (runSucceeded && this.isOneShot(record)) {
+        console.log(`[codex-gateway] removing completed one-shot trigger ${record.id}`);
+        await this.removeTriggerRecord(record.id);
+        this.triggers.delete(record.id);
+        this.jobs.delete(record.id);
+      } else {
+        this.schedule(record);
+      }
+    }
+  }
+
+  async updateTriggerRecord(triggerId, patch) {
+    try {
+      const raw = await fsp.readFile(this.triggerFile, 'utf8');
+      const config = JSON.parse(raw);
+      const triggers = Array.isArray(config.triggers) ? config.triggers : [];
+      let changed = false;
+      const updated = triggers.map((entry) => {
+        const entryId = String(entry.id || entry.trigger_id || '');
+        if (entryId === triggerId) {
+          changed = true;
+          return { ...entry, ...patch };
+        }
+        return entry;
+      });
+      if (changed) {
+        config.triggers = updated;
+        config.updated_at = new Date().toISOString();
+        await fsp.writeFile(this.triggerFile, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.error('[codex-gateway] failed to persist trigger metadata:', error.message);
+      }
+    }
+  }
+
+  async removeTriggerRecord(triggerId) {
+    try {
+      const raw = await fsp.readFile(this.triggerFile, 'utf8');
+      const config = JSON.parse(raw);
+      const triggers = Array.isArray(config.triggers) ? config.triggers : [];
+      const filtered = triggers.filter((entry) => String(entry.id || entry.trigger_id || '') !== triggerId);
+      if (filtered.length === triggers.length) {
+        return;
+      }
+      config.triggers = filtered;
+      config.updated_at = new Date().toISOString();
+      await fsp.writeFile(this.triggerFile, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.error('[codex-gateway] failed to remove trigger:', error.message);
+      }
+    }
+  }
+
+  isOneShot(record) {
+    const mode = record?.schedule?.mode;
+    return typeof mode === 'string' && mode.toLowerCase() === 'once';
+  }
+
+  startWatcher() {
+    const directory = path.dirname(this.triggerFile);
+    try {
+      this.watcher = fs.watch(directory, (eventType, filename) => {
+        if (!filename) {
+          return;
+        }
+        if (path.basename(filename.toString()) !== path.basename(this.triggerFile)) {
+          return;
+        }
+        if (eventType !== 'change' && eventType !== 'rename') {
+          return;
+        }
+        console.log(`[codex-gateway] detected change in ${this.triggerFile} (${eventType})`);
+        this.scheduleReload();
+      });
+    } catch (error) {
+      console.error('[codex-gateway] unable to watch trigger file:', error.message);
+    }
+  }
+
+  scheduleReload() {
+    if (this.debounceTimer) {
+      return;
+    }
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = null;
+      this.reload().catch((error) => {
+        console.error('[codex-gateway] trigger reload failure:', error.message);
+      });
+    }, Math.max(TRIGGER_WATCH_DEBOUNCE_MS, 250));
+  }
+}
+
+class TriggerSchedulerManager {
+  constructor(options = {}) {
+    this.dispatchPrompt = options.dispatchPrompt;
+    this.defaultFile = options.defaultFile ? path.resolve(options.defaultFile) : null;
+    this.extraFiles = Array.isArray(options.extraFiles) ? options.extraFiles.map((file) => path.resolve(file)) : [];
+    this.includeSessionTriggers = options.includeSessionTriggers !== false;
+    this.schedulers = new Map();
+    this.refreshTimer = null;
+    this.sessionWatcher = null;
+  }
+
+  async start() {
+    await this.refreshSchedulers();
+    this.startSessionWatcher();
+  }
+
+  stop() {
+    if (this.sessionWatcher) {
+      this.sessionWatcher.close();
+      this.sessionWatcher = null;
+    }
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+    for (const scheduler of this.schedulers.values()) {
+      scheduler.stop();
+    }
+    this.schedulers.clear();
+  }
+
+  async refreshSchedulers() {
+    const files = [];
+    if (this.defaultFile) {
+      files.push(this.defaultFile);
+    }
+    files.push(...this.extraFiles);
+    if (this.includeSessionTriggers) {
+      const discovered = await discoverSessionTriggerFiles();
+      files.push(...discovered);
+    }
+    const uniqueFiles = dedupeTriggerFiles(files);
+    const keep = new Set(uniqueFiles);
+    for (const filePath of uniqueFiles) {
+      await this.ensureScheduler(filePath);
+    }
+    for (const [filePath, scheduler] of Array.from(this.schedulers.entries())) {
+      if (!keep.has(filePath)) {
+        scheduler.stop();
+        this.schedulers.delete(filePath);
+      }
+    }
+  }
+
+  async ensureScheduler(filePath) {
+    if (this.schedulers.has(filePath)) {
+      return;
+    }
+    const scheduler = new TriggerScheduler({
+      triggerFile: filePath,
+      dispatchPrompt: this.dispatchPrompt,
+    });
+    this.schedulers.set(filePath, scheduler);
+    try {
+      await scheduler.start();
+      console.log(`[codex-gateway] trigger scheduler watching ${filePath}`);
+    } catch (error) {
+      console.error(`[codex-gateway] failed to start scheduler for ${filePath}:`, error.message);
+    }
+  }
+
+  startSessionWatcher() {
+    if (!this.includeSessionTriggers) {
+      return;
+    }
+    try {
+      this.sessionWatcher = fs.watch(SESSION_TRIGGER_ROOT, () => {
+        this.scheduleRefresh();
+      });
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.error('[codex-gateway] unable to watch session triggers:', error.message);
+      }
+    }
+  }
+
+  scheduleRefresh() {
+    if (this.refreshTimer) {
+      return;
+    }
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      this.refreshSchedulers().catch((error) => {
+        console.error('[codex-gateway] trigger refresh failure:', error.message);
+      });
+    }, Math.max(TRIGGER_WATCH_DEBOUNCE_MS, 250));
   }
 }
 
@@ -1357,6 +1973,21 @@ async function handleSessionNudge(req, res, sessionIdentifier) {
   }
 }
 
+let triggerSchedulerManager = null;
+if (!DISABLE_TRIGGER_SCHEDULER) {
+  triggerSchedulerManager = new TriggerSchedulerManager({
+    defaultFile: DEFAULT_TRIGGER_FILE,
+    extraFiles: EXTRA_TRIGGER_FILES,
+    includeSessionTriggers: true,
+    dispatchPrompt: async (options) => runPromptWithWorker(options),
+  });
+  triggerSchedulerManager.start().catch((error) => {
+    console.error('[codex-gateway] failed to start trigger schedulers:', error.message);
+  });
+} else {
+  console.log('[codex-gateway] trigger scheduler disabled by configuration');
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const normalizedPath = url.pathname.endsWith('/') && url.pathname.length > 1
@@ -1437,6 +2068,9 @@ server.listen(DEFAULT_PORT, DEFAULT_HOST, () => {
 
 const shutdown = () => {
   console.log('[codex-gateway] shutting down');
+  if (triggerSchedulerManager) {
+    triggerSchedulerManager.stop();
+  }
   server.close(() => {
     process.exit(0);
   });

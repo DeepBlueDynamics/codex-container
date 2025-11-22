@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
 
 import sys
+from zoneinfo import ZoneInfo
 
 HELPER_PATHS = [
     Path(__file__).resolve().parent.parent / "monitor_scheduler.py",
@@ -30,9 +31,10 @@ for candidate in HELPER_PATHS:
 
 from monitor_scheduler import (
     CONFIG_FILENAME,
+    WORKSPACE_TRIGGER_PATH,
     TriggerRecord,
     generate_trigger_id,
-    get_session_triggers_path,
+    get_config_path_for_session,
     list_trigger_records,
     load_config,
     load_trigger,
@@ -65,9 +67,30 @@ def _config_path(watch_path: str) -> Path:
     return root / CONFIG_FILENAME
 
 
+def _resolve_custom_session_path(session_id: str) -> Optional[Path]:
+    if not session_id:
+        return None
+    normalized = session_id.strip()
+    if not normalized:
+        return None
+    lowered = normalized.lower()
+    if lowered in {"workspace", "project", "cwd"}:
+        return WORKSPACE_TRIGGER_PATH
+    if normalized.startswith(("~", "/", ".")):
+        candidate = Path(normalized).expanduser().resolve()
+        if candidate.is_dir():
+            return (candidate / CONFIG_FILENAME).resolve()
+        return candidate
+    return None
+
+
 def _session_config_path(session_id: str) -> Path:
     """Get config path for a session ID."""
-    return get_session_triggers_path(session_id)
+    custom = _resolve_custom_session_path(session_id)
+    if custom:
+        custom.parent.mkdir(parents=True, exist_ok=True)
+        return custom
+    return get_config_path_for_session(session_id)
 
 
 def _record_to_payload(record: TriggerRecord) -> Dict[str, Any]:
@@ -130,13 +153,21 @@ async def create_trigger(
     timezone_name: str = "UTC",
     schedule_time: Optional[str] = None,
     once_at: Optional[str] = None,
+    minutes_from_now: Optional[float] = None,
     interval_minutes: Optional[float] = None,
     created_by_id: Optional[str] = None,
     created_by_name: Optional[str] = None,
     tags: Optional[List[str]] = None,
     enabled: bool = True,
 ) -> Dict[str, Any]:
-    """Create a new monitor trigger."""
+    """Create a new monitor trigger.
+
+    schedule_mode options:
+    - daily: provide HH:MM via schedule_time
+    - once: pass an ISO timestamp in once_at or a relative offset via minutes_from_now
+      (e.g., minutes_from_now=5 schedules a one-off run ~5 minutes from now)
+    - interval: run every interval_minutes minutes
+    """
 
     config_path = _session_config_path(session_id)
 
@@ -148,9 +179,16 @@ async def create_trigger(
             return {"success": False, "error": "schedule_time (HH:MM) required for daily mode"}
         schedule = {"mode": "daily", "time": schedule_time, "timezone": timezone_name}
     elif schedule_mode == "once":
-        if not once_at:
+        computed_once_at = once_at
+        if not computed_once_at and minutes_from_now is not None:
+            try:
+                delta = timedelta(minutes=float(minutes_from_now))
+            except (TypeError, ValueError):
+                return {"success": False, "error": "minutes_from_now must be numeric"}
+            computed_once_at = (datetime.now(timezone.utc) + delta).isoformat()
+        if not computed_once_at:
             return {"success": False, "error": "once_at (ISO timestamp) required for once mode"}
-        schedule = {"mode": "once", "at": once_at, "timezone": timezone_name}
+        schedule = {"mode": "once", "at": computed_once_at, "timezone": timezone_name}
     elif schedule_mode == "interval":
         if not interval_minutes or interval_minutes <= 0:
             return {"success": False, "error": "interval_minutes must be positive for interval mode"}
@@ -273,6 +311,57 @@ async def record_fire_result(
     upsert_trigger(config_path, record)
     logger.info("Recorded fire for %s at %s", trigger_id, fired_at_iso)
     return {"success": True, "trigger": _record_to_payload(record)}
+
+
+@mcp.tool()
+async def clock_now(timezone_name: str = "UTC") -> Dict[str, Any]:
+    """Return the current timestamp."""
+
+    try:
+        tz = ZoneInfo(timezone_name)
+    except Exception as exc:
+        return {"success": False, "error": f"Invalid timezone '{timezone_name}': {exc}"}
+
+    now = datetime.now(tz)
+    return {
+        "success": True,
+        "timezone": timezone_name,
+        "iso": now.isoformat(),
+        "epoch": now.timestamp(),
+    }
+
+
+@mcp.tool()
+async def clock_add(
+    base_iso: Optional[str] = None,
+    days: float = 0,
+    hours: float = 0,
+    minutes: float = 0,
+    seconds: float = 0,
+    timezone_name: str = "UTC",
+) -> Dict[str, Any]:
+    """Add a delta to a base timestamp (default: now in UTC)."""
+
+    try:
+        tz = ZoneInfo(timezone_name)
+    except Exception as exc:
+        return {"success": False, "error": f"Invalid timezone '{timezone_name}': {exc}"}
+
+    base = datetime.now(tz) if not base_iso else datetime.fromisoformat(base_iso).astimezone(tz)
+    try:
+        delta = timedelta(days=float(days), hours=float(hours), minutes=float(minutes), seconds=float(seconds))
+    except ValueError as exc:
+        return {"success": False, "error": f"Invalid delta: {exc}"}
+
+    target = base + delta
+    return {
+        "success": True,
+        "timezone": timezone_name,
+        "base_iso": base.isoformat(),
+        "delta": {"days": days, "hours": hours, "minutes": minutes, "seconds": seconds},
+        "iso": target.isoformat(),
+        "epoch": target.timestamp(),
+    }
 
 
 if __name__ == "__main__":
