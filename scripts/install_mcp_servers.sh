@@ -1,16 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-# This script runs inside the container during build to install MCP servers
-# It copies MCP Python files from /opt/mcp-source to /opt/codex-home/mcp
-# and updates the Codex config.toml accordingly.
+# This script runs inside the container during build to prepare MCP servers
+# It copies MCP Python files from /opt/mcp-source to /opt/mcp-installed
+# These files will be selectively copied to /opt/codex-home/mcp at runtime based on .codex-mcp.config
 
 MCP_SOURCE="/opt/mcp-source"
-MCP_DEST="/opt/codex-home/mcp"
-MCP_PYTHON="/opt/mcp-venv/bin/python3"
-CONFIG_DIR="/opt/codex-home/.codex"
-CONFIG_PATH="${CONFIG_DIR}/config.toml"
-HELPER_SCRIPT="${CONFIG_DIR}/update_mcp_config.py"
+MCP_DEST="/opt/mcp-installed"
+MCP_CONFIG="${MCP_SOURCE}/.codex-mcp.config"
 
 log() {
   echo "[install_mcp] $*" >&2
@@ -54,12 +51,10 @@ for src in "${SORTED[@]}"; do
   log "  - ${src}"
 done
 
-# Create all necessary directories
+# Create destination directory
 mkdir -p "$MCP_DEST"
-mkdir -p "$CONFIG_DIR"
 
-# Copy files and collect basenames
-BASENAMES=()
+# Copy all MCP files
 COPIED=0
 for src in "${SORTED[@]}"; do
   base="$(basename "$src")"
@@ -72,20 +67,22 @@ for src in "${SORTED[@]}"; do
     log "Error: Failed to chmod ${base}"
     exit 1
   }
-  BASENAMES+=("$base")
   COPIED=$((COPIED + 1))
   log "Successfully copied ${base}"
 done
 
-# Check if helper script exists
-if [[ ! -f "$HELPER_SCRIPT" ]]; then
-  log "Error: helper script missing at ${HELPER_SCRIPT}"
-  exit 1
+# Copy .codex-mcp.config if it exists (defines which tools to activate)
+if [[ -f "$MCP_CONFIG" ]]; then
+  log "Copying .codex-mcp.config to ${MCP_DEST}"
+  cp "$MCP_CONFIG" "${MCP_DEST}/.codex-mcp.config" || {
+    log "Error: Failed to copy .codex-mcp.config"
+    exit 1
+  }
+  chmod 0644 "${MCP_DEST}/.codex-mcp.config"
+else
+  log "Warning: No .codex-mcp.config found in ${MCP_SOURCE}"
+  log "All MCP servers will be available but none will be activated by default"
 fi
 
-log "Updating Codex config with ${COPIED} MCP server(s): ${BASENAMES[*]}"
-
-# Update config.toml with MCP servers
-"$MCP_PYTHON" "$HELPER_SCRIPT" "$CONFIG_PATH" "$MCP_PYTHON" "${BASENAMES[@]}"
-
-log "Successfully installed ${COPIED} MCP server(s) into ${MCP_DEST}"
+log "Successfully prepared ${COPIED} MCP server(s) in ${MCP_DEST}"
+log "Tools will be selectively installed based on .codex-mcp.config at container startup"

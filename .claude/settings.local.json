@@ -1,9 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(rm -rf /Users/kord/Code/deepbluedynamics/codex-container/scripts/.codex_container.sh_versions /Users/kord/Code/deepbluedynamics/codex-container/scripts/.codex_container.ps1_versions)",
-      "Bash(chmod +x /Users/kord/Code/deepbluedynamics/codex-container/scripts/install_mcp_servers.sh)",
-      "Read(//Users/kord/.codex-service/logs/**)"
+      "Bash(find MCP -maxdepth 1 -name \"*.py\" -type f ! -name \"_*.py\" ! -name \"*_pre_patch_*.py\" ! -name \"*_2025*.py\" -exec sh -c 'count=$(grep -c \"\"\"\"@mcp\\.tool()\"\"\"\" \"\"\"\"$1\"\"\"\"); echo \"\"\"\"$(basename \"\"\"\"$1\"\"\"\"): $count\"\"\"\"' _ {})"
     ],
     "deny": [],
     "ask": []

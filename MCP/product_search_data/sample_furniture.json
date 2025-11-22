@@ -1,0 +1,302 @@
+[
+  {
+    "id": "4306",
+    "name": "Porter 80\" Velvet Rolled Arm Chesterfield Sofa",
+    "description": "Luxurious velvet chesterfield sofa with tufted back and rolled arms. Deep button tufting creates dramatic visual appeal. Perfect for elegant living rooms.",
+    "price": 1899.99,
+    "category": "sofa",
+    "brand": "Porter",
+    "color": "burgundy",
+    "style": "chesterfield"
+  },
+  {
+    "id": "28854",
+    "name": "Rolled Arm Chesterfield Sofa",
+    "description": "Classic chesterfield design with deep button tufting and nailhead trim. Timeless elegance meets modern comfort.",
+    "price": 1699.99,
+    "category": "sofa",
+    "brand": "Classic Home",
+    "color": "brown",
+    "style": "chesterfield"
+  },
+  {
+    "id": "17093",
+    "name": "Quitaque 88\" Rolled Arm Chesterfield Sofa",
+    "description": "Extra-long chesterfield sofa with dramatic rolled arms and deep tufting. Statement piece for large living spaces.",
+    "price": 2199.99,
+    "category": "sofa",
+    "brand": "Quitaque",
+    "color": "navy",
+    "style": "chesterfield"
+  },
+  {
+    "id": "29613",
+    "name": "85\" Velvet Tuxedo Arm Sofa",
+    "description": "Elegant velvet sofa with tuxedo arms and nailhead trim. Sophisticated design with plush cushioning.",
+    "price": 1599.99,
+    "category": "sofa",
+    "brand": "Luxe Living",
+    "color": "emerald",
+    "style": "tuxedo"
+  },
+  {
+    "id": "40049",
+    "name": "Camren 72\" Velvet Round Arm Sofa",
+    "description": "Soft velvet upholstery with gentle round arms. Contemporary style with comfortable seating.",
+    "price": 1399.99,
+    "category": "sofa",
+    "brand": "Camren",
+    "color": "blush",
+    "style": "modern"
+  },
+  {
+    "id": "27546",
+    "name": "112\" Wide Velvet Sofa & Chaise",
+    "description": "Oversized sectional with built-in chaise. Sumptuous velvet fabric perfect for lounging.",
+    "price": 2499.99,
+    "category": "sofa",
+    "brand": "Grand Living",
+    "color": "charcoal",
+    "style": "sectional"
+  },
+  {
+    "id": "40626",
+    "name": "Rosemead Velvet Chaise Lounge",
+    "description": "Elegant chaise lounge in rich velvet. Perfect for reading nooks or bedroom corners. Victorian-inspired design.",
+    "price": 899.99,
+    "category": "chaise",
+    "brand": "Rosemead",
+    "color": "deep purple",
+    "style": "victorian"
+  },
+  {
+    "id": "6452",
+    "name": "Avondale Velvet Chaise Lounge",
+    "description": "Dramatic fainting couch style chaise with tufted details. Ideal for adding gothic elegance to any room.",
+    "price": 1099.99,
+    "category": "chaise",
+    "brand": "Avondale",
+    "color": "black",
+    "style": "gothic"
+  },
+  {
+    "id": "6392",
+    "name": "Brighouse Chaise Lounge",
+    "description": "Contemporary chaise with clean lines and velvet upholstery. Modern comfort with classic materials.",
+    "price": 799.99,
+    "category": "chaise",
+    "brand": "Brighouse",
+    "color": "slate blue",
+    "style": "modern"
+  },
+  {
+    "id": "18643",
+    "name": "Tilstone Chaise Lounge",
+    "description": "Velvet chaise with silver nailhead accents. Sophisticated design with luxurious detailing.",
+    "price": 1199.99,
+    "category": "chaise",
+    "brand": "Tilstone",
+    "color": "midnight blue",
+    "style": "glam"
+  },
+  {
+    "id": "18587",
+    "name": "Zebra Arm Chair",
+    "description": "Bold zebra print upholstery makes this accent chair a true statement piece. Not for the faint of heart.",
+    "price": 499.99,
+    "category": "chair",
+    "brand": "Wild Style",
+    "color": "zebra print",
+    "style": "eclectic"
+  },
+  {
+    "id": "5002",
+    "name": "Toby Cow Print Task Chair",
+    "description": "Office chair with full cow print upholstery. Swivel base with adjustable height. Udderly unique.",
+    "price": 349.99,
+    "category": "chair",
+    "brand": "Toby",
+    "color": "cow print",
+    "style": "novelty"
+  },
+  {
+    "id": "8921",
+    "name": "Gaudy 47\" Wide Chenille Armchair",
+    "description": "Over-the-top armchair with bright chenille fabric and ornate details. The name says it all - deliberately excessive design.",
+    "price": 699.99,
+    "category": "chair",
+    "brand": "Gaudy",
+    "color": "hot pink",
+    "style": "maximalist"
+  },
+  {
+    "id": "36608",
+    "name": "The Abbey Gothic Revival 19\" Wide Side Chair",
+    "description": "Ornately carved wooden chair with gothic architectural details. Cathedral-inspired design with pointed arches.",
+    "price": 599.99,
+    "category": "chair",
+    "brand": "The Abbey",
+    "color": "dark walnut",
+    "style": "gothic"
+  },
+  {
+    "id": "12456",
+    "name": "Minimal Scandinavian Dining Chair",
+    "description": "Clean lines, natural wood, simple cushion. Understated Nordic design philosophy.",
+    "price": 199.99,
+    "category": "chair",
+    "brand": "Nordic Home",
+    "color": "natural oak",
+    "style": "scandinavian"
+  },
+  {
+    "id": "23789",
+    "name": "Industrial Metal Bar Stool",
+    "description": "Raw steel frame with distressed leather seat. Factory-inspired design with adjustable height.",
+    "price": 179.99,
+    "category": "chair",
+    "brand": "Factory Direct",
+    "color": "gunmetal",
+    "style": "industrial"
+  },
+  {
+    "id": "34521",
+    "name": "Rustic Farmhouse Dining Table",
+    "description": "Solid reclaimed wood table with natural grain patterns. Seats 8 comfortably. Sturdy trestle base.",
+    "price": 1299.99,
+    "category": "table",
+    "brand": "Country Living",
+    "color": "weathered oak",
+    "style": "farmhouse"
+  },
+  {
+    "id": "45678",
+    "name": "Glass Top Modern Coffee Table",
+    "description": "Tempered glass top with chrome base. Minimalist design perfect for contemporary spaces.",
+    "price": 399.99,
+    "category": "table",
+    "brand": "Urban Chic",
+    "color": "clear glass",
+    "style": "modern"
+  },
+  {
+    "id": "56789",
+    "name": "Victorian Marble Side Table",
+    "description": "Ornate carved legs with genuine marble top. Antique reproduction with gold leaf accents.",
+    "price": 899.99,
+    "category": "table",
+    "brand": "Heritage House",
+    "color": "white marble",
+    "style": "victorian"
+  },
+  {
+    "id": "67890",
+    "name": "Mid-Century Walnut Console Table",
+    "description": "Tapered legs, warm walnut finish, subtle curves. Classic 1960s design aesthetics.",
+    "price": 699.99,
+    "category": "table",
+    "brand": "Retro Revival",
+    "color": "walnut",
+    "style": "mid-century"
+  },
+  {
+    "id": "78901",
+    "name": "Baroque Gold Accent Chair",
+    "description": "Heavily gilded frame with intricate carvings. Brocade upholstery. Fit for royalty or dramatic interiors.",
+    "price": 1499.99,
+    "category": "chair",
+    "brand": "Royal Furnishings",
+    "color": "gold",
+    "style": "baroque"
+  },
+  {
+    "id": "89012",
+    "name": "Neon Pink Velvet Pouffe",
+    "description": "Bold, bright, impossible to ignore. Cylindrical ottoman in shocking pink velvet. Makes a statement.",
+    "price": 249.99,
+    "category": "ottoman",
+    "brand": "Pop Art Home",
+    "color": "neon pink",
+    "style": "contemporary"
+  },
+  {
+    "id": "90123",
+    "name": "Tufted Leather Wingback Chair",
+    "description": "Traditional wingback design with button tufting. Rich leather upholstery. Library-worthy elegance.",
+    "price": 1299.99,
+    "category": "chair",
+    "brand": "English Manor",
+    "color": "cognac",
+    "style": "traditional"
+  },
+  {
+    "id": "11234",
+    "name": "Bohemian Macrame Hanging Chair",
+    "description": "Woven macrame seat suspended from ceiling. Boho-chic relaxation spot. Includes hanging hardware.",
+    "price": 349.99,
+    "category": "chair",
+    "brand": "Free Spirit",
+    "color": "natural",
+    "style": "bohemian"
+  },
+  {
+    "id": "22345",
+    "name": "Art Deco Mirrored Vanity Table",
+    "description": "Geometric lines, mirrored surfaces, chrome accents. 1920s glamour meets modern functionality.",
+    "price": 1599.99,
+    "category": "table",
+    "brand": "Gatsby Glam",
+    "color": "silver",
+    "style": "art deco"
+  },
+  {
+    "id": "33456",
+    "name": "Oversized Bean Bag Chair",
+    "description": "Giant microsuede bean bag. Swallows you whole in comfort. Perfect for gaming or lounging.",
+    "price": 299.99,
+    "category": "chair",
+    "brand": "Cozy Corner",
+    "color": "charcoal",
+    "style": "casual"
+  },
+  {
+    "id": "44567",
+    "name": "Rattan Peacock Chair",
+    "description": "Iconic fan-back design in natural rattan. Bohemian classic from the 1970s. Statement seating.",
+    "price": 549.99,
+    "category": "chair",
+    "brand": "Tropical Living",
+    "color": "natural",
+    "style": "bohemian"
+  },
+  {
+    "id": "55678",
+    "name": "Chrome Tulip Side Table",
+    "description": "Space-age design with single pedestal base. White lacquer top. Inspired by mid-century modernism.",
+    "price": 449.99,
+    "category": "table",
+    "brand": "Future Home",
+    "color": "white",
+    "style": "space age"
+  },
+  {
+    "id": "66789",
+    "name": "Distressed Leather Sofa",
+    "description": "Aged leather with visible wear patterns. Industrial loft aesthetic. Comfortable and characterful.",
+    "price": 1799.99,
+    "category": "sofa",
+    "brand": "Urban Loft",
+    "color": "brown",
+    "style": "industrial"
+  },
+  {
+    "id": "77890",
+    "name": "Patchwork Quilted Kids Chair",
+    "description": "Colorful patchwork fabric in child-sized proportions. Fun, whimsical design for playrooms.",
+    "price": 149.99,
+    "category": "chair",
+    "brand": "Little Ones",
+    "color": "multicolor",
+    "style": "kids"
+  }
+]

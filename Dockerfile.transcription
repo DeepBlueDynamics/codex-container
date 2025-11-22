@@ -1,0 +1,57 @@
+# GPU-enabled transcription service with cached Whisper model
+FROM nvidia/cuda:12.1.0-base-ubuntu22.04
+
+# Install Python and system dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment for Python dependencies
+ENV VENV_PATH=/opt/transcription-venv
+RUN python3 -m venv $VENV_PATH
+ENV PATH="$VENV_PATH/bin:$PATH"
+
+# Upgrade pip and install Python packages
+# Install PyTorch with CUDA support first, then whisper and aiohttp
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
+    pip install --no-cache-dir \
+    openai-whisper \
+    aiohttp
+
+# Create directory for Whisper model cache
+ENV HF_HOME=/opt/whisper-models
+RUN mkdir -p $HF_HOME
+
+# Pre-download Whisper large-v3 model
+# This runs a Python script that forces model download at build time
+RUN python3 << 'EOF'
+import whisper
+
+print("Downloading Whisper large-v3 model...")
+model = whisper.load_model("large-v3")
+print("Model download complete!")
+EOF
+
+# Copy transcription service daemon
+COPY scripts/transcription_service_daemon.py /app/transcription_service.py
+RUN chmod 555 /app/transcription_service.py
+
+# Create directory for job storage
+RUN mkdir -p /app/jobs
+
+WORKDIR /app
+
+# Expose service port
+EXPOSE 8765
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')" || exit 1
+
+# Run the transcription service
+CMD ["python3", "/app/transcription_service.py"]

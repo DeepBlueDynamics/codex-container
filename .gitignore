@@ -1,9 +1,65 @@
 # Legacy Codex runtime artifacts (pre user-scoped home)
 codex-home/
 
+# vars
+*.env
+
+# Python virtual environments
+.venv/
+.openmeteo-venv/
+venv/
+env/
+ENV/
+.virtualenv/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Python distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.pytest_cache/
+
 # Node package caches or build outputs (if present in workspace)
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Logs
 *.log
+logs/
 
 # Docker build outputs
 *.tgz
@@ -11,3 +67,48 @@ node_modules/
 # Version snapshot directories/files
 *_versions/
 *_versions
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Google OAuth credentials and tokens
+.gcal.env
+.gmail.env
+.gdrive.env
+.gcal-tokens.json
+.gmail-tokens.json
+.gdrive-tokens.json
+*credentials*.json
+credentials/
+
+# API keys and secrets
+.elevenlabs.env
+.wraithenv
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+.codex-gateway-sessions/
+
+# Monitor session state files
+.codex-monitor-session
+.codex-monitor
+.codex-monitor-triggers.json
+*-triggers.json

@@ -11,6 +11,11 @@ JSON_MODE="none"
 CODEX_HOME_OVERRIDE=""
 USE_OSS=false
 OSS_MODEL=""
+CODEX_MODEL="${CODEX_DEFAULT_MODEL:-${CODEX_CLOUD_MODEL:-}}"
+OSS_SERVER_URL_OVERRIDE=""
+OLLAMA_HOST_OVERRIDE=""
+RESOLVED_OSS_SERVER_URL=""
+RESOLVED_OLLAMA_HOST=""
 NO_CACHE=false
 declare -a CODEX_ARGS=()
 declare -a EXEC_ARGS=()
@@ -19,10 +24,25 @@ GATEWAY_PORT_OVERRIDE=""
 GATEWAY_HOST_OVERRIDE=""
 declare -a DOCKER_RUN_EXTRA_ARGS=()
 declare -a DOCKER_RUN_EXTRA_ENVS=()
+WATCH_PATH=""
+declare -a WATCH_PATTERNS=()
+WATCH_INTERVAL=""
+WATCH_TEMPLATE=""
+WATCH_INCLUDE_CONTENT=false
+WATCH_CONTENT_BYTES=""
+WATCH_STATE_FILE=""
+WATCH_ONCE=false
+WATCH_DEBOUNCE=""
+MONITOR_PROMPT_FILE="MONITOR.md"
+DEFAULT_SYSTEM_PROMPT_FILE="PROMPT.md"
+NEW_SESSION=false
+SESSION_ID=""
+TRANSCRIPTION_SERVICE_URL="http://host.docker.internal:8765"
+DANGER_MODE=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --install)
+    -I|-i|--install|-install|-Install)
       if [[ -n "$ACTION" && "$ACTION" != "install" ]]; then
         echo "Error: multiple actions specified" >&2
         exit 1
@@ -70,8 +90,44 @@ while [[ $# -gt 0 ]]; do
       ACTION="serve"
       shift
       ;;
+    --watch)
+      if [[ -n "$ACTION" && "$ACTION" != "watch" ]]; then
+        echo "Error: multiple actions specified" >&2
+        exit 1
+      fi
+      ACTION="watch"
+      shift
+      ;;
+    --monitor)
+      if [[ -n "$ACTION" && "$ACTION" != "monitor" ]]; then
+        echo "Error: multiple actions specified" >&2
+        exit 1
+      fi
+      ACTION="monitor"
+      shift
+      ;;
+    --new-session)
+      NEW_SESSION=true
+      shift
+      ;;
+    --list-sessions)
+      if [[ -n "$ACTION" && "$ACTION" != "list-sessions" ]]; then
+        echo "Error: multiple actions specified" >&2
+        exit 1
+      fi
+      ACTION="list-sessions"
+      shift
+      ;;
     --push)
       PUSH_IMAGE=true
+      shift
+      ;;
+    --danger)
+      DANGER_MODE=1
+      shift
+      ;;
+    --safe|--no-danger)
+      DANGER_MODE=0
       shift
       ;;
     --tag)
@@ -169,6 +225,104 @@ while [[ $# -gt 0 ]]; do
       GATEWAY_HOST_OVERRIDE="$1"
       shift
       ;;
+    --watch-path)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-path requires a value" >&2
+        exit 1
+      fi
+      WATCH_PATH="$1"
+      shift
+      ;;
+    --watch-pattern)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-pattern requires a value" >&2
+        exit 1
+      fi
+      WATCH_PATTERNS+=("$1")
+      shift
+      ;;
+    --watch-interval)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-interval requires a value" >&2
+        exit 1
+      fi
+      WATCH_INTERVAL="$1"
+      shift
+      ;;
+    --watch-template)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-template requires a value" >&2
+        exit 1
+      fi
+      WATCH_TEMPLATE="$1"
+      shift
+      ;;
+    --watch-include-content)
+      WATCH_INCLUDE_CONTENT=true
+      shift
+      ;;
+    --watch-content-bytes)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-content-bytes requires a value" >&2
+        exit 1
+      fi
+      WATCH_CONTENT_BYTES="$1"
+      shift
+      ;;
+    --watch-state-file)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-state-file requires a value" >&2
+        exit 1
+      fi
+      WATCH_STATE_FILE="$1"
+      shift
+      ;;
+    --watch-once)
+      WATCH_ONCE=true
+      shift
+      ;;
+    --watch-debounce)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --watch-debounce requires a value" >&2
+        exit 1
+      fi
+      WATCH_DEBOUNCE="$1"
+      shift
+      ;;
+    --monitor-prompt)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --monitor-prompt requires a value" >&2
+        exit 1
+      fi
+      MONITOR_PROMPT_FILE="$1"
+      shift
+      ;;
+    --session-id)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --session-id requires a value" >&2
+        exit 1
+      fi
+      SESSION_ID="$1"
+      shift
+      ;;
+    --transcription-service-url)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --transcription-service-url requires a value" >&2
+        exit 1
+      fi
+      TRANSCRIPTION_SERVICE_URL="$1"
+      shift
+      ;;
     --model)
       shift
       if [[ $# -eq 0 ]]; then
@@ -177,6 +331,35 @@ while [[ $# -gt 0 ]]; do
       fi
       USE_OSS=true
       OSS_MODEL="$1"
+      shift
+      ;;
+    --codex-model)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --codex-model requires a value" >&2
+        exit 1
+      fi
+      CODEX_MODEL="$1"
+      shift
+      ;;
+    --oss-server-url)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --oss-server-url requires a value" >&2
+        exit 1
+      fi
+      OSS_SERVER_URL_OVERRIDE="$1"
+      USE_OSS=true
+      shift
+      ;;
+    --ollama-host)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --ollama-host requires a value" >&2
+        exit 1
+      fi
+      OLLAMA_HOST_OVERRIDE="$1"
+      USE_OSS=true
       shift
       ;;
     --)
@@ -271,6 +454,47 @@ resolve_workspace() {
 }
 
 WORKSPACE_PATH="$(resolve_workspace "$WORKSPACE_OVERRIDE")"
+has_system_prompt_flag() {
+  local token
+  for token in "$@"; do
+    case "$token" in
+      --system|--system=*|--system-file|--system-file=*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
+maybe_inject_default_prompt() {
+  if [[ "${CODEX_DISABLE_DEFAULT_PROMPT:-}" =~ ^(1|true|on)$ ]]; then
+    return
+  fi
+  if [[ -n "$SESSION_ID" ]]; then
+    return
+  fi
+  if [[ "$ACTION" != "serve" ]]; then
+    return
+  fi
+  local host_prompt="${WORKSPACE_PATH}/${DEFAULT_SYSTEM_PROMPT_FILE}"
+  if [[ ! -f "$host_prompt" ]]; then
+    return
+  fi
+  local container_prompt="/workspace/${DEFAULT_SYSTEM_PROMPT_FILE}"
+  if has_system_prompt_flag "${CODEX_ARGS[@]}"; then
+    return
+  fi
+  CODEX_ARGS+=("--system-file" "$container_prompt")
+}
+
+maybe_inject_default_prompt
+
+if [[ "$ACTION" == "watch" && -z "$WATCH_PATH" ]]; then
+  WATCH_PATH="$WORKSPACE_PATH"
+fi
+if [[ "$ACTION" == "monitor" && -z "$WATCH_PATH" ]]; then
+  WATCH_PATH="$WORKSPACE_PATH"
+fi
 
 if [[ -z "$CODEX_HOME_OVERRIDE" && -n "${CODEX_CONTAINER_HOME:-}" ]]; then
   CODEX_HOME_OVERRIDE="$CODEX_CONTAINER_HOME"
@@ -297,6 +521,18 @@ if [[ -z "$CODEX_HOME" ]]; then
 fi
 
 mkdir -p "$CODEX_HOME"
+
+if [[ -n "$OSS_SERVER_URL_OVERRIDE" ]]; then
+  RESOLVED_OSS_SERVER_URL="$OSS_SERVER_URL_OVERRIDE"
+elif [[ -n "${OSS_SERVER_URL:-}" ]]; then
+  RESOLVED_OSS_SERVER_URL="${OSS_SERVER_URL}"
+fi
+
+if [[ -n "$OLLAMA_HOST_OVERRIDE" ]]; then
+  RESOLVED_OLLAMA_HOST="$OLLAMA_HOST_OVERRIDE"
+elif [[ -n "${OLLAMA_HOST:-}" ]]; then
+  RESOLVED_OLLAMA_HOST="${OLLAMA_HOST}"
+fi
 
 if [[ ! -f "${CODEX_ROOT}/Dockerfile" ]]; then
   echo "Error: Dockerfile not found in ${CODEX_ROOT}" >&2
@@ -329,6 +565,99 @@ if [[ "$ACTION" != "install" ]]; then
   fi
 fi
 
+show_recent_sessions() {
+  local sessions_base="${CODEX_HOME}/.codex/sessions"
+  if [[ ! -d "$sessions_base" ]]; then
+    echo "No sessions found." >&2
+    return
+  fi
+
+  echo "" >&2
+  echo "Recent Sessions:" >&2
+  echo "───────────────────────────────────────────────────────────────────" >&2
+  echo "" >&2
+
+  # Find all rollout-*.jsonl files sorted by modification time (newest first)
+  local -a session_files=()
+  while IFS= read -r -d '' file; do
+    session_files+=("$file")
+  done < <(find "$sessions_base" -type f -name 'rollout-*.jsonl' -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null)
+
+  if [[ ${#session_files[@]} -eq 0 ]]; then
+    echo "No recent sessions found." >&2
+    return
+  fi
+
+  local count=0
+  local max_sessions=5
+
+  for session_file in "${session_files[@]}"; do
+    if [[ $count -ge $max_sessions ]]; then
+      break
+    fi
+
+    local basename
+    basename=$(basename "$session_file")
+
+    # Extract UUID from filename: rollout-<timestamp>-<uuid>.jsonl
+    local uuid=""
+    if [[ "$basename" =~ ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) ]]; then
+      uuid="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ -z "$uuid" ]]; then
+      continue
+    fi
+
+    # Get short ID (last 5 chars)
+    local short_id="${uuid: -5}"
+
+    # Calculate age
+    local mtime
+    mtime=$(stat -c %Y "$session_file" 2>/dev/null || stat -f %m "$session_file" 2>/dev/null)
+    local now
+    now=$(date +%s)
+    local age_seconds=$((now - mtime))
+    local age_str=""
+
+    if [[ $age_seconds -lt 60 ]]; then
+      age_str="${age_seconds}s ago"
+    elif [[ $age_seconds -lt 3600 ]]; then
+      age_str="$((age_seconds / 60))m ago"
+    elif [[ $age_seconds -lt 86400 ]]; then
+      age_str="$((age_seconds / 3600))h ago"
+    else
+      age_str="$((age_seconds / 86400))d ago"
+    fi
+
+    # Extract first user message preview
+    local preview=""
+    if [[ -f "$session_file" ]]; then
+      # Find first line with "role":"user" and extract text
+      preview=$(grep -m 1 '"role":"user"' "$session_file" 2>/dev/null | \
+                sed 's/.*"text":"\([^"]*\)".*/\1/' | \
+                head -c 60)
+      if [[ ${#preview} -eq 60 ]]; then
+        preview="${preview}..."
+      fi
+    fi
+
+    echo "  ${short_id}  (${age_str})" >&2
+    if [[ -n "$preview" ]]; then
+      echo "    → ${preview}" >&2
+    fi
+    echo "    ./codex_container.sh --session-id ${short_id}" >&2
+    echo "" >&2
+
+    count=$((count + 1))
+  done
+
+  if [[ $count -eq 0 ]]; then
+    echo "No sessions found." >&2
+  fi
+  echo "" >&2
+}
+
 docker_run() {
   local quiet=0
   local expose_login_port=0
@@ -348,6 +677,12 @@ docker_run() {
     esac
   done
 
+  # Ensure codex-network exists
+  if ! docker network inspect codex-network >/dev/null 2>&1; then
+    echo "Creating codex-network for inter-container communication..." >&2
+    docker network create codex-network >/dev/null 2>&1 || true
+  fi
+
   local -a args=(run --rm)
   if [[ $quiet -eq 1 ]]; then
     args+=(-i)
@@ -357,7 +692,7 @@ docker_run() {
   if [[ $expose_login_port -eq 1 ]]; then
     args+=(-p 1455:1455)
   fi
-  args+=(--user 0:0 --add-host host.docker.internal:host-gateway -v "${CODEX_HOME}:/opt/codex-home" -e HOME=/opt/codex-home -e XDG_CONFIG_HOME=/opt/codex-home)
+  args+=(--user 0:0 --network codex-network --add-host host.docker.internal:host-gateway -v "${CODEX_HOME}:/opt/codex-home" -e HOME=/opt/codex-home -e XDG_CONFIG_HOME=/opt/codex-home)
   if [[ -n "$WORKSPACE_PATH" ]]; then
     local mount_source="${WORKSPACE_PATH//\\//}"
     if [[ "$mount_source" =~ ^[A-Za-z]:$ ]]; then
@@ -367,17 +702,71 @@ docker_run() {
   fi
   args+=(-v "${CODEX_ROOT}/scripts:/opt/codex-support:ro")
   if [[ "$USE_OSS" == true ]]; then
-    args+=(-e OLLAMA_HOST=http://host.docker.internal:11434 -e OSS_SERVER_URL=http://host.docker.internal:11434 -e ENABLE_OSS_BRIDGE=1)
+    local oss_target="$RESOLVED_OSS_SERVER_URL"
+    local ollama_target="$RESOLVED_OLLAMA_HOST"
+    local enable_bridge=0
+
+    if [[ -z "$oss_target" && -z "$ollama_target" ]]; then
+      oss_target="http://host.docker.internal:11434"
+      ollama_target="$oss_target"
+      enable_bridge=1
+    elif [[ -z "$oss_target" ]]; then
+      oss_target="$ollama_target"
+    elif [[ -z "$ollama_target" ]]; then
+      ollama_target="$oss_target"
+    fi
+
+    if [[ -n "$ollama_target" ]]; then
+      args+=(-e "OLLAMA_HOST=$ollama_target")
+    fi
+    if [[ -n "$oss_target" ]]; then
+      args+=(-e "OSS_SERVER_URL=$oss_target")
+    fi
+    if [[ $enable_bridge -eq 1 ]]; then
+      args+=(-e ENABLE_OSS_BRIDGE=1)
+    fi
+    if [[ -n "${OSS_API_KEY:-}" ]]; then
+      args+=(-e "OSS_API_KEY=${OSS_API_KEY}")
+    fi
+    if [[ -n "${OSS_DISABLE_BRIDGE:-}" ]]; then
+      args+=(-e "OSS_DISABLE_BRIDGE=${OSS_DISABLE_BRIDGE}")
+    fi
+  fi
+  if [[ -n "$TRANSCRIPTION_SERVICE_URL" ]]; then
+    args+=(-e TRANSCRIPTION_SERVICE_URL="$TRANSCRIPTION_SERVICE_URL")
   fi
   if [[ ${#DOCKER_RUN_EXTRA_ENVS[@]} -gt 0 ]]; then
     for env_kv in "${DOCKER_RUN_EXTRA_ENVS[@]}"; do
       args+=(-e "$env_kv")
     done
   fi
+  # Pass Anthropic API key through to the container if present (parity with PowerShell runner)
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    if [[ $quiet -eq 0 ]]; then
+      echo "Passing ANTHROPIC_API_KEY to container (${#ANTHROPIC_API_KEY} chars)" >&2
+    fi
+    args+=(-e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}")
+  fi
+  # Pass GitHub tokens if present (GITHUB_TOKEN or GH_TOKEN)
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    if [[ $quiet -eq 0 ]]; then
+      echo "Passing GITHUB_TOKEN to container (${#GITHUB_TOKEN} chars)" >&2
+    fi
+    args+=(-e "GITHUB_TOKEN=${GITHUB_TOKEN}")
+  fi
+  if [[ -n "${GH_TOKEN:-}" ]]; then
+    if [[ $quiet -eq 0 ]]; then
+      echo "Passing GH_TOKEN to container (${#GH_TOKEN} chars)" >&2
+    fi
+    args+=(-e "GH_TOKEN=${GH_TOKEN}")
+  fi
   if [[ ${#DOCKER_RUN_EXTRA_ARGS[@]} -gt 0 ]]; then
     args+=("${DOCKER_RUN_EXTRA_ARGS[@]}")
   fi
   args+=("${TAG}" /usr/local/bin/codex_entry.sh)
+  if [[ $DANGER_MODE -eq 1 ]]; then
+    args+=('--dangerously-bypass-approvals-and-sandbox')
+  fi
   args+=("$@")
   if [[ -n "${CODEX_CONTAINER_TRACE:-}" ]]; then
     printf 'docker'
@@ -425,6 +814,16 @@ EOF
   else
     echo "Runner installed to ${dest} and available on PATH." >&2
   fi
+}
+
+model_flag_present() {
+  local token
+  for token in "$@"; do
+    if [[ "$token" == "--model" || "$token" == --model=* ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 
@@ -507,6 +906,59 @@ invoke_codex_run() {
   ensure_codex_cli 0 "$silent"
   local -a cmd=(codex)
   local -a args=()
+
+  # Handle session ID resolution
+  if [[ -n "$SESSION_ID" ]]; then
+    local sessions_base="${CODEX_HOME}/.codex/sessions"
+    if [[ ! -d "$sessions_base" ]]; then
+      echo "Error: No sessions directory found at ${sessions_base}" >&2
+      exit 1
+    fi
+
+    # Find all rollout-*.jsonl files
+    local -a matching_sessions=()
+    local -a all_uuids=()
+
+    while IFS= read -r -d '' file; do
+      local basename
+      basename=$(basename "$file")
+
+      # Extract UUID from filename
+      if [[ "$basename" =~ ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) ]]; then
+        local uuid="${BASH_REMATCH[1]}"
+        all_uuids+=("$uuid")
+
+        # Check if this UUID matches the session ID (full or partial)
+        if [[ "$uuid" == "$SESSION_ID" ]] || [[ "$uuid" == *"$SESSION_ID" ]]; then
+          matching_sessions+=("$uuid")
+        fi
+      fi
+    done < <(find "$sessions_base" -type f -name 'rollout-*.jsonl' -print0)
+
+    if [[ ${#matching_sessions[@]} -eq 0 ]]; then
+      echo "Error: No session found matching '${SESSION_ID}'" >&2
+      echo "" >&2
+      echo "Available sessions:" >&2
+      for uuid in "${all_uuids[@]:0:5}"; do
+        local short="${uuid: -5}"
+        echo "  ${short} (${uuid})" >&2
+      done
+      exit 1
+    elif [[ ${#matching_sessions[@]} -gt 1 ]]; then
+      echo "Error: Session ID '${SESSION_ID}' is ambiguous. Matches:" >&2
+      for uuid in "${matching_sessions[@]}"; do
+        local short="${uuid: -5}"
+        echo "  ${short} (${uuid})" >&2
+      done
+      echo "" >&2
+      echo "Please provide more characters to uniquely identify the session." >&2
+      exit 1
+    fi
+
+    # Exactly one match - use it
+    local resolved_uuid="${matching_sessions[0]}"
+    args+=("resume" "$resolved_uuid")
+  fi
   if [[ "$USE_OSS" == true ]]; then
     local has_oss=0
     local has_model=0
@@ -523,6 +975,17 @@ invoke_codex_run() {
     fi
     if [[ -n "$OSS_MODEL" && $has_model -eq 0 ]]; then
       args+=("--model" "$OSS_MODEL")
+    fi
+  fi
+  if [[ -n "$CODEX_MODEL" ]]; then
+    local has_model=0
+    if model_flag_present "${args[@]}"; then
+      has_model=1
+    elif [[ ${#CODEX_ARGS[@]} -gt 0 ]] && model_flag_present "${CODEX_ARGS[@]}"; then
+      has_model=1
+    fi
+    if [[ $has_model -eq 0 ]]; then
+      args+=("--model" "$CODEX_MODEL")
     fi
   fi
   if [[ ${#CODEX_ARGS[@]} -gt 0 ]]; then
@@ -606,6 +1069,15 @@ invoke_codex_exec() {
     exec_args=("${new_exec_args[@]}")
   fi
 
+  if [[ -n "$CODEX_MODEL" ]] && ! model_flag_present "${exec_args[@]}"; then
+    local first_token="${exec_args[0]}"
+    local -a remainder=()
+    if [[ ${#exec_args[@]} -gt 1 ]]; then
+      remainder=("${exec_args[@]:1}")
+    fi
+    exec_args=("$first_token" "--model" "$CODEX_MODEL" "${remainder[@]}")
+  fi
+
   local -a cmd=(codex "${exec_args[@]}")
   if [[ $silent -eq 1 ]]; then
     docker_run --quiet "${cmd[@]}"
@@ -624,8 +1096,8 @@ invoke_codex_server() {
     exit 1
   fi
 
-  local -a prev_extra_args=("${DOCKER_RUN_EXTRA_ARGS[@]}")
-  local -a prev_extra_envs=("${DOCKER_RUN_EXTRA_ENVS[@]}")
+  local -a prev_extra_args=("${DOCKER_RUN_EXTRA_ARGS[@]+"${DOCKER_RUN_EXTRA_ARGS[@]}"}")
+  local -a prev_extra_envs=("${DOCKER_RUN_EXTRA_ENVS[@]+"${DOCKER_RUN_EXTRA_ENVS[@]}"}")
 
   DOCKER_RUN_EXTRA_ARGS=(-p "${host}:${port}:${port}")
   DOCKER_RUN_EXTRA_ENVS=("CODEX_GATEWAY_PORT=${port}" "CODEX_GATEWAY_BIND=0.0.0.0")
@@ -641,13 +1113,152 @@ invoke_codex_server() {
 
   docker_run node /usr/local/bin/codex_gateway.js
 
-  DOCKER_RUN_EXTRA_ARGS=("${prev_extra_args[@]}")
-  DOCKER_RUN_EXTRA_ENVS=("${prev_extra_envs[@]}")
+  DOCKER_RUN_EXTRA_ARGS=("${prev_extra_args[@]+"${prev_extra_args[@]}"}")
+  DOCKER_RUN_EXTRA_ENVS=("${prev_extra_envs[@]+"${prev_extra_envs[@]}"}")
 }
 
 invoke_codex_shell() {
   ensure_codex_cli
   docker_run /bin/bash
+}
+
+invoke_codex_watch() {
+  ensure_codex_cli 0 0
+  local watcher="${CODEX_ROOT}/scripts/watch_directory.py"
+  local python_bin=""
+  if command -v python3 >/dev/null 2>&1; then
+    python_bin=$(command -v python3)
+  elif command -v python >/dev/null 2>&1; then
+    python_bin=$(command -v python)
+  else
+    echo "Error: python3 or python is required for --watch." >&2
+    exit 1
+  fi
+  if [[ ! -f "$watcher" ]]; then
+    echo "Error: watcher script not found at $watcher" >&2
+    exit 1
+  fi
+  if [[ -z "$WATCH_PATH" ]]; then
+    echo "Error: --watch requires --watch-path or a workspace" >&2
+    exit 1
+  fi
+  local -a cmd=("$python_bin" "$watcher" --path "$WATCH_PATH" --codex-script "${SCRIPT_DIR}/codex_container.sh" --workspace "$WORKSPACE_PATH" --json-mode "$JSON_MODE")
+  if [[ ${#WATCH_PATTERNS[@]} -gt 0 ]]; then
+    for pattern in "${WATCH_PATTERNS[@]}"; do
+      cmd+=(--pattern "$pattern")
+    done
+  fi
+  if [[ -n "$WATCH_INTERVAL" ]]; then
+    cmd+=(--interval "$WATCH_INTERVAL")
+  fi
+  if [[ -n "$WATCH_TEMPLATE" ]]; then
+    cmd+=(--template "$WATCH_TEMPLATE")
+  fi
+  if [[ "$WATCH_INCLUDE_CONTENT" == true ]]; then
+    cmd+=(--include-content)
+  fi
+  if [[ -n "$WATCH_CONTENT_BYTES" ]]; then
+    cmd+=(--content-bytes "$WATCH_CONTENT_BYTES")
+  fi
+  if [[ -n "$WATCH_STATE_FILE" ]]; then
+    cmd+=(--state-file "$WATCH_STATE_FILE")
+  fi
+  if [[ "$WATCH_ONCE" == true ]]; then
+    cmd+=(--once)
+  fi
+  if [[ -n "$WATCH_DEBOUNCE" ]]; then
+    cmd+=(--debounce "$WATCH_DEBOUNCE")
+  fi
+  if [[ ${#CODEX_ARGS[@]} -gt 0 ]]; then
+    for arg in "${CODEX_ARGS[@]}"; do
+      cmd+=(--codex-arg "$arg")
+    done
+  fi
+  if [[ ${#EXEC_ARGS[@]} -gt 0 ]]; then
+    for arg in "${EXEC_ARGS[@]}"; do
+      cmd+=(--exec-arg "$arg")
+    done
+  fi
+  exec "${cmd[@]}"
+}
+
+get_monitor_session() {
+  local session_file="$1"
+  if [[ -f "$session_file" ]]; then
+    cat "$session_file" 2>/dev/null | tr -d '\n'
+  fi
+}
+
+set_monitor_session() {
+  local session_file="$1"
+  local session_id="$2"
+  if [[ -n "$session_id" ]]; then
+    echo -n "$session_id" > "$session_file"
+  fi
+}
+
+invoke_codex_monitor() {
+  ensure_codex_cli 0 0
+  local monitor_dir="${WATCH_PATH}"
+  if [[ -z "$monitor_dir" ]]; then
+    echo "Error: --monitor requires --watch-path or a workspace." >&2
+    exit 1
+  fi
+  local prompt_path="${monitor_dir}/${MONITOR_PROMPT_FILE}"
+  if [[ ! -f "$prompt_path" ]]; then
+    echo "Error: Monitor prompt file '$prompt_path' not found." >&2
+    exit 1
+  fi
+
+  # Use Python-based monitor for better portability
+  local monitor_script="${SCRIPT_DIR}/monitor.py"
+  if [[ ! -f "$monitor_script" ]]; then
+    echo "Error: Monitor script not found at $monitor_script" >&2
+    exit 1
+  fi
+
+  # Find Python
+  local python_bin=""
+  if command -v python3 >/dev/null 2>&1; then
+    python_bin=$(command -v python3)
+  elif command -v python >/dev/null 2>&1; then
+    python_bin=$(command -v python)
+  else
+    echo "Error: python3 or python is required for monitor mode" >&2
+    exit 1
+  fi
+
+  # Build monitor command
+  local -a monitor_cmd=("$python_bin" "$monitor_script")
+  monitor_cmd+=(--watch-path "$monitor_dir")
+  monitor_cmd+=(--workspace "$WORKSPACE_PATH")
+  monitor_cmd+=(--codex-script "$0")
+  monitor_cmd+=(--monitor-prompt-file "$MONITOR_PROMPT_FILE")
+
+  if [[ "$NEW_SESSION" == "true" ]]; then
+    monitor_cmd+=(--new-session)
+  fi
+
+  if [[ "$JSON_MODE" == "legacy" ]]; then
+    monitor_cmd+=(--json-mode legacy)
+  elif [[ "$JSON_MODE" == "experimental" ]]; then
+    monitor_cmd+=(--json-mode experimental)
+  fi
+
+  if [[ ${#CODEX_ARGS[@]} -gt 0 ]]; then
+    for arg in "${CODEX_ARGS[@]}"; do
+      monitor_cmd+=(--codex-arg "$arg")
+    done
+  fi
+
+  if [[ ${#EXEC_ARGS[@]} -gt 0 ]]; then
+    for arg in "${EXEC_ARGS[@]}"; do
+      monitor_cmd+=(--exec-arg "$arg")
+    done
+  fi
+
+  # Execute Python monitor
+  exec "${monitor_cmd[@]}"
 }
 
 docker_build_image() {
@@ -713,7 +1324,22 @@ case "$ACTION" in
     ensure_codex_auth 0
     invoke_codex_server
     ;;
+  watch)
+    ensure_codex_auth "$JSON_OUTPUT"
+    invoke_codex_watch
+    ;;
+  monitor)
+    ensure_codex_auth "$JSON_OUTPUT"
+    invoke_codex_monitor
+    ;;
+  list-sessions)
+    show_recent_sessions
+    ;;
   run|*)
+    # Show recent sessions if no arguments and no session ID
+    if [[ ${#CODEX_ARGS[@]} -eq 0 && -z "$SESSION_ID" ]]; then
+      show_recent_sessions
+    fi
     ensure_codex_auth "$JSON_OUTPUT"
     invoke_codex_run "$JSON_OUTPUT"
     ;;

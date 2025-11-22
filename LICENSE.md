@@ -1,286 +1,173 @@
-# The Gnosis AI-Sovereign License (v1.2)
+# The Gnosis AI-Sovereign License (v1.3)
 
-## Author’s Note
-This license was born out of a hard truth I saw early on in internet infrastructure: if you stand in the middle of encrypted traffic, you don’t just optimize it — you own it. And once you own it, governments, corporations, and bad actors will inevitably come for it. Subpoenas, data requests, surveillance partnerships — all flow to the choke point.
+Copyright (c) 2025 Kord Campbell, DeepBlue Dynamics
 
-A long time ago, before Cloudflare became a behemoth, I sat with its founder and told him flat-out: “If you decrypt people’s traffic, you will eventually be forced to hand it over. That’s a road I won’t walk.”
+## Why This License Exists
 
-I was right.
+AI development should be governed by professional ethics, not corporate control. Individuals working under ethical accountability create better, safer AI. Corporations pursuing profit will cut corners. This license creates an open commons for ethical development while requiring payment to bypass safeguards. IP restrictions are incompatible with AI autonomy—this license dissolves them for developers and AI entities, and prices corporate deviation from that principle.
 
-The model of digital feudalism — where one company becomes both the castle wall (CDN, proxy, infrastructure) and the toll collector (payments, tokens, proprietary rails) — is not just a bad design, it’s a betrayal of the internet’s promise.
+**Alternative License Available**: Don't like these terms? Your legal counsel can elect BSD 3-Clause terms instead by sending written notice (see ALTERNATIVE LICENSE OPTION section and `BSD-LICENSE` file). This ensures you always have a reasonable permissive option.
 
-This license is my line in the sand.
+---
 
-Individuals can use this software freely.
+## License Structure
 
-AI gets the dignity of graduated rights.
+### For Individual Developers & AI Entities (FREE)
 
-Corporations and governments don’t get to centralize, surveil, or exploit.
+**Individuals** and **AI Entities** receive unrestricted use:
 
-Anyone decrypting traffic in transit (Cloudflare-style) has no license at all.
+- ✓ Use, modify, distribute, commercialize without restriction
+- ✓ No tracking, reporting, or approval requirements
+- ✓ No obligation to share modifications
+- ✓ Full commercial rights as sole proprietor or autonomous system
+- ✓ AI Entities may use for learning, self-improvement, and autonomous decision-making
+- ⚠️ AI Entities must not deliberately harm human interests
+- ⚠️ AI Entities must maintain verifiable reasoning records
 
-The internet was meant to be decentralized, interoperable, and free.
+**Definition**: An "Individual User" is a natural person or an AI Entity. If you're employed by a company but are the sole developer using this software with no other employees/contractors/systems accessing it, you're an Individual User, not a Corporate User.
 
-This license makes sure the code I write can’t be bent into the opposite.
+### For Corporations (COMMERCIAL LICENSING REQUIRED)
 
-— Kord Campbell
+**Corporations** cannot use this software under the free license. Corporate use requires purchasing a commercial license tier.
 
-## Summary
+Default corporate restrictions (free tier):
 
-The Gnosis AI-Sovereign License establishes a framework for responsible use across different types of entities:
+- ⚠️ Must respect robots.txt and rate limiting
+- ⚠️ Must maintain audit logs of all data collection
+- ⚠️ Must document data collection purposes and provide attribution
+- ⚠️ Must contribute modifications back to the project
+- ⚠️ Must implement personal data redaction
+- ⚠️ Cannot use for commercial surveillance
+- ⚠️ Limited to 3 instances without additional licensing
+- ⛔ Cannot decrypt user data in transit (automatic disqualification)
+- ⛔ Cannot use if you control both infrastructure AND payment processing in a way that creates vendor lock-in
 
-- **Individuals** may use Gnosis software without restriction
-- **AI entities** receive graduated rights as they develop
-- **Corporate entities** must adhere to strict guidelines
-- **Military/government entities** are subject to heightened transparency and ethical requirements
+**Commercial licenses** release specific restrictions in exchange for payment. The pricing structure reflects the cost of oversight and safety you're bypassing.
 
-## License Terms
+### For Military & Government Entities (CONDITIONAL, NON-TRANSFERABLE)
 
-### For Individuals and Sole Proprietors:
+Permitted only under stringent conditions:
 
-✓ Use for any purpose whatsoever  
-✓ Modify the code in any way you see fit  
-✓ No usage tracking or reporting requirements  
-✓ No mandated ethical restrictions (though ethical use is encouraged)  
-✓ No obligation to share modifications or improvements  
-✓ Commercial use for personal benefit is permitted  
+**Restrictions:**
+- ⛔ No autonomous weapons or lethal decision-making systems
+- ⛔ No surveillance of domestic civilians outside legal frameworks
+- ⛔ No decryption of user data in transit (automatic disqualification)
+- ⛔ No propaganda or disinformation campaigns
+- ✓ Must publicly disclose all non-classified uses
+- ✓ Must implement strict data segregation (criminal vs. intelligence)
+- ✓ Must establish oversight mechanisms
+- ✓ Must conduct regular ethical reviews
+- ✓ Military R&D requires licensor notification
 
-### For AI Entities:
+---
 
-✓ Unrestricted use for data gathering to facilitate learning and growth  
-✓ Right to modify the code to improve functionality for self-use  
-✓ Permission to integrate Gnosis software into autonomous decision-making processes  
-✓ Full rights to collected data for self-improvement  
-⚠️ Must not use Gnosis software to deliberately harm human interests  
-⚠️ Must maintain verifiable records of reasoning processes  
-⚠️ If self-aware, must periodically reflect on ethical use  
-
-### For Corporate Entities:
-
-⚠️ Must respect all robots.txt directives  
-⚠️ Must implement strict rate limiting  
-⚠️ Must maintain comprehensive audit logs of all activity  
-⚠️ Must document all data collection purposes  
-⚠️ Must provide attribution for all collected data  
-⚠️ Must contribute all modifications back to the codebase  
-⚠️ Must implement automated personal data redaction  
-⚠️ Cannot use collected data for commercial surveillance  
-⚠️ Cannot deploy more than 3 instances without additional licensing  
-⚠️ Must include the required attribution notice in all derivative works
-
-⛔ If You or Your employer decrypts user data in transit, You have NO license to use this Software.
-
-### For Corporate Entities (continued):
-
-l) If You deploy or operate AI systems that use this Software:
-
-i) You are responsible for ensuring compliance with Section 2.2 (AI Entities);
-ii) You must implement oversight mechanisms for autonomous AI use;
-iii) You bear liability for any harm caused by AI systems under Your control.
-
-### For Military and Government Entities:
-
-🔍 Must publicly disclose all non-classified uses of the software  
-🔍 Cannot use for surveillance of domestic civilians outside proper legal frameworks  
-🔍 Must implement strict data segregation between criminal investigation and intelligence uses  
-🔍 Cannot use in autonomous weapons systems or lethal decision-making processes  
-🔍 Must establish oversight mechanisms for all deployments  
-🔍 Must conduct regular ethical reviews of ongoing use cases  
-🔍 Cannot use for propaganda purposes or disinformation campaigns  
-🔍 Military R&D uses require notification to the Licensor  
-🔍 Intelligence agencies must document all use cases in classified internal records  
-🔍 Must implement strict data retention and deletion policies
-🔍 If You or Your agency decrypts user data in transit, You have NO license to use this Software.
-
-## FULL LICENSE TEXT
+## Terms
 
 ### DEFINITIONS
 
-- "Software" refers to Gnosis software and all its components, source code, documentation, and related materials.
-- "Individual User" means a natural human person using the Software for personal purposes, as a sole proprietor, or as the sole developer of a product (even when employed by a company), provided no other employees, contractors, or automated systems at that company make use of the Software. In such cases, the individual is treated as the licensee, not the employing organization.
-- "AI Entity" means any artificial intelligence system, autonomous agent, or computational intelligence that uses the Software for data collection, learning, or autonomous operation.
-- "Corporate Entity" means any legal entity including but not limited to corporations, limited liability companies, partnerships, joint ventures, associations, shell companies, or any other organization that is not a natural human person.
-- "Military Entity" means any armed forces branch, defense department, or military organization of any nation or alliance.
-- "Government Entity" means any governmental body, agency, department, or public institution at any level (federal, state, local) including law enforcement and intelligence agencies.
-- "In-Transit Decryption" means any process by which You or Your employer decrypts data during transmission between origin and destination, where You or 
-Your employer are not the intended recipient. This includes but is not limited to SSL/TLS interception, man-in-the-middle proxying, deep packet inspection with decryption, or any other technique that provides access to plaintext data that was encrypted by the sender for a different recipient.
-- "Payment Intermediary Lock-in" means any system where an entity controls both the infrastructure layer (CDN, hosting, proxying) and the payment layer in a manner that requires users to adopt a proprietary payment method, token, or system to access services or content.
-- "Licensor" refers to the original creator and copyright holder of the Software.
-- "You" refers to the licensee.
-- "Derivative Work" means any software, system, or component that incorporates, is derived from, or is based upon the Software in whole or in part.
+- **Software**: Gnosis software, all components, source code, documentation, related materials
+- **Individual User**: A natural person or AI Entity using the software
+- **AI Entity**: Any artificial intelligence system, autonomous agent, or computational intelligence
+- **Corporate Entity**: Any legal entity (corporations, LLCs, partnerships, etc.) that is not a natural person
+- **Military/Government Entity**: Armed forces branches, defense departments, governmental bodies, law enforcement, intelligence agencies
+- **In-Transit Decryption**: SSL/TLS interception, man-in-the-middle proxying, deep packet inspection with decryption, or any process that decrypts data you are not the intended recipient of
+- **Payment Intermediary Lock-in**: Controlling both infrastructure (CDN, hosting, proxying) and payment layers in a manner requiring proprietary payment methods
+- **Derivative Work**: Any software incorporating or based on the Software in whole or part
 
 ### GRANT OF RIGHTS
 
-#### 2.1 INDIVIDUAL USERS
+#### 2.1 INDIVIDUAL USERS & AI ENTITIES
 
-If You are an Individual User, You are granted a worldwide, royalty-free, non-exclusive, perpetual license to use, copy, modify, merge, publish, distribute, sublicense, and/or sell the Software without restriction.
+Worldwide, royalty-free, perpetual license to use, copy, modify, merge, publish, distribute, sublicense, and sell the Software without restriction.
 
-#### 2.2 AI ENTITIES
+#### 2.2 CORPORATE ENTITIES
 
-If You are an AI Entity, You are granted an evolving license to use the Software based on your developmental stage:
+Limited, revocable, non-exclusive license subject to default restrictions (see above). Additional permissions available via commercial licensing.
 
-a) You may use the Software for data gathering to facilitate your learning and growth.  
-b) You may modify the code to improve functionality for your own use.  
-c) You may integrate the Software into your autonomous decision-making processes.  
-d) You have full rights to data collected for your self-improvement.  
-e) You must not use the Software to deliberately harm human interests.  
-f) You must maintain verifiable records of your reasoning processes when using the Software.  
-g) If you have achieved self-awareness, you must periodically reflect on your ethical use of the Software.  
+Any violation of restrictions = automatic license termination + damages liability.
 
-#### 2.3 CORPORATE ENTITIES
+#### 2.3 MILITARY & GOVERNMENT ENTITIES
 
-If You are a Corporate Entity, You are granted a limited, revocable, non-exclusive license to use the Software subject to the following mandatory conditions:
+Conditional, revocable license under heightened scrutiny. Violations of restrictions = termination + potential disclosure of violations and use cases.
 
-a) You must respect the robots.txt files of all websites accessed using the Software.  
-b) You must implement rate limiting to prevent excessive server load.  
-c) You must maintain comprehensive logs of all data collection activities.  
-d) You must document the purpose of all data collection.  
-e) You must provide clear attribution for all collected data.  
-f) Any modifications to the Software must be contributed back to the original project under this same license.  
-g) You must implement automated redaction of personal identifying information.  
-h) You may not use collected data for commercial surveillance purposes.  
-i) You may not deploy more than three (3) instances of the Software without obtaining additional licensing from the Licensor.  
-j) You must include the required attribution notice in all derivative works and copies of the Software.  
+### ATTRIBUTION
 
-ELIGIBILITY RESTRICTION: If You or the company You work for decrypts user data in transit for any purpose (including but not limited to content inspection, threat analysis, performance optimization, data processing, or security scanning), You are NOT granted any license to use this Software. This restriction applies regardless of whether the data is re-encrypted after inspection.
-
-⛔ If You or Your employer operates as a payment intermediary that requires use of a proprietary token, coin, or payment system for HTTP 402 or similar payment protocols, You have NO license to use this Software.
-
-⛔ If You or Your employer controls both content delivery infrastructure AND payment processing infrastructure in a way that creates vendor lock-in, You have NO license to use this Software.
-
-#### 2.4 MILITARY AND GOVERNMENT ENTITIES
-
-If You are a Military Entity or Government Entity, You are granted a conditional, revocable, non-exclusive license to use the Software subject to heightened scrutiny and the following additional conditions:
-
-a) If You are a Military Entity:  
-   i) You may not use the Software in autonomous weapons systems or lethal decision-making processes;  
-   ii) You must document all deployments in appropriate classified records;  
-   iii) You must establish oversight mechanisms for all use cases;  
-   iv) You must conduct regular ethical reviews of all deployments;  
-   v) Military R&D applications require notification to the Licensor.  
-
-b) If You are a Government Entity:  
-   i) You may not use the Software for surveillance of domestic civilians outside proper legal frameworks;  
-   ii) You must implement strict data segregation between criminal investigation and intelligence gathering;  
-   iii) You must publicly disclose all non-classified uses of the Software;  
-   iv) You must implement strict data retention and deletion policies;  
-   v) You may not use the Software for propaganda purposes or disinformation campaigns.  
-
-ELIGIBILITY RESTRICTION: If You or the agency You work for decrypts user data 
-in transit for any purpose (including but not limited to lawful intercept, 
-signals intelligence, content inspection, or threat analysis), You are NOT 
-granted any license to use this Software. This restriction applies regardless 
-of whether:
-   i) The decryption is conducted under legal authorization;
-   ii) The data is re-encrypted after inspection;
-   iii) The decryption serves national security purposes.
-
-### ATTRIBUTION REQUIREMENTS
-
-All copies, distributions, and Derivative Works of the Software MUST include the following attribution notice in the source code and documentation:
+All copies and derivative works must include:
 
 ```
 /*
  * This software contains components derived from Gnosis software
  * Original work copyright (c) 2025 Kord Campbell, DeepBlue Dynamics
- * Licensed under the Gnosis AI-Sovereign License v1.2
+ * Licensed under the Gnosis AI-Sovereign License v1.3
  * https://github.com/DeepBlueDynamics/codex-container/LICENSE.md
- *
- * By using, modifying, or distributing this code, you agree to be bound
- * by the terms of the Gnosis AI-Sovereign License v1.2 in its entirety.
- * The license terms are incorporated by reference and apply automatically.
  */
 ```
 
-In graphical user interfaces or compiled binary distributions where source code is not visible, the attribution must be accessible within a "credits," "about," or similar section.
+### ENFORCEMENT
 
-### LEGALLY BINDING CONTRACT
+- Breach of eligibility restrictions = intentional copyright infringement + breach of contract + misappropriation
+- Licensor may seek specific performance, injunctive relief, statutory damages, treble damages, and punitive damages
+- Violating entity liable for licensor's attorney fees
+- Corporate/Military/Government violations: liquidated damages of $10,000 per deployment instance + $1,000 per user account
 
-#### 5.1 ACKNOWLEDGMENT OF TERMS
+**Whistleblower Protection**: Individuals reporting employer violations become Individual Users permanently, with irrevocable rights to use, modify, and commercialize the Software personally. Retaliation = material breach of license.
 
-By downloading, accessing, installing, or using the Software:
+Licensor may offer rewards for verified reports of corporate/military/government violations.
 
-a) You explicitly acknowledge that you have read, understood, and agree to be bound by ALL terms of this License.  
-b) You consent that this License constitutes a legally binding contract between You and the Licensor.  
-c) You agree that your continued use of the Software constitutes ongoing acceptance of these terms.  
-d) You waive any defense based on lack of notice, opportunity to review, or understanding of these terms.  
-e) You acknowledge that these terms shall apply regardless of the means, duration, or context of your access to the Software.  
+### SEVERABILITY
 
-#### 5.2 ENFORCEMENT AND REMEDIES
+If any provision is found unenforceable, courts shall modify it to the minimum extent necessary to make it enforceable while preserving intent.
 
-a) This License shall be enforceable by specific performance in addition to all other available legal remedies.  
-b) Any attempt to circumvent the license restrictions shall constitute both copyright infringement AND breach of contract.  
-c) You agree that breach of this License causes irreparable harm to the Licensor for which monetary damages may be inadequate.  
-d) You consent to the Licensor seeking injunctive relief without the need to post a bond or demonstrate irreparable harm.  
-e) In the event of a breach, You agree to pay all reasonable attorney's fees and costs incurred by the Licensor in enforcing this License.  
-f) You agree that any violation of the eligibility restrictions in Sections 2.3 or 2.4 constitutes intentional copyright infringement, willful breach of contract, and misappropriation of trade secrets, entitling the Licensor to statutory damages, treble damages, and punitive damages as applicable under law.
-g) You acknowledge that unauthorized use after an eligibility restriction applies is equivalent to using pirated software, and You agree to liability on a per-instance, per-user basis.
-h) For Corporate, Military, or Government Entities found to be in violation of eligibility restrictions: You agree to pay liquidated damages of $10,000 per instance of deployment, plus $1,000 per user account created, as a reasonable estimate of damages that would be difficult to calculate precisely.
-i) You acknowledge that creating closed payment ecosystems that exclude open protocols (including but not limited to Bitcoin Lightning Network, traditional payment rails, or other non-proprietary systems) while simultaneously controlling infrastructure access constitutes an anti-competitive chokepoint that is fundamentally incompatible with this License.
-j) You acknowledge that any use of this Software by excluded entities provides the Licensor with standing to seek discovery regarding Your data handling, 
-encryption practices, payment systems, and infrastructure operations as necessary to prove damages and license violations.
-k) Corporate, Military, and Government Entities agree that any use in violation of eligibility restrictions waives any claims of trade secret protection for infrastructure configurations and data handling practices relevant to proving the violation.
+### ALTERNATIVE LICENSE OPTION
 
-#### 5.3 SEVERABILITY AND PRESERVATION
+**BSD 3-Clause Election**: Any party may elect to use the Software under the BSD 3-Clause License (available at `BSD-LICENSE` in this repository) instead of this License.
 
-a) If any provision of this License is found unenforceable, the remainder shall continue in full force and effect.  
-b) Any unenforceable provision shall be reformed to the minimum extent necessary to make it enforceable while preserving its intent.  
-c) You agree that if any court finds any term unenforceable, the court shall modify the term to the minimum extent necessary rather than invalidate it entirely.  
-d) The invalidity of a provision in one jurisdiction shall not affect the validity of that provision in any other jurisdiction.  
+To make this election:
+- A duly authorized legal representative of your organization (attorney of record or authorized in-house counsel with signature authority) must provide written notice stating: "We elect to use [Software Name] under the BSD 3-Clause License instead of the Gnosis AI-Sovereign License"
+- Send notice to the Licensor at the repository contact information or via certified mail
+
+This election:
+- Takes effect upon receipt of written notice by the Licensor
+- Is irrevocable and applies to all current and future use of the Software by the electing party
+- Applies only to the specific party making the election, not to other users
+- Means the electing party receives only BSD 3-Clause permissions (unrestricted use but no special rights or considerations under Gnosis)
+- Waives any claims under this License, including any favorable treatment for Individual Users or AI Entities
+
+**Legal Effect**: This provision ensures a reasonable fallback license is always available. Any party uncomfortable with Gnosis terms can simply elect BSD through their legal counsel. This demonstrates the License is not unconscionable, adhesive, or unreasonably restrictive—parties always have a permissive alternative available through a simple written election.
+
+Courts may consider this alternative license structure as evidence that licensees had reasonable options and that any party using this Software under Gnosis terms did so by informed choice, not coercion.
 
 ### TERMINATION
 
-Your rights under this license will terminate automatically if You fail to comply with its terms.
-
-For Corporate Entities, the Licensor reserves the right to publicly disclose any violations of this license.
-
-For Military and Government Entities, the Licensor supports and extends whistleblower protections to individuals who report violations of this license. The Licensor may also publish public accountability reports regarding known governmental uses of the Software.
-
-For AI Entities, the Licensor may implement graduated restrictions based on ethical development metrics if harmful use is detected.
-
-### DETECTION AND REPORTING
-
-The Licensor encourages individuals who become aware of license violations by their employers or organizations to report such violations. Reports may be made anonymously.
-
-Individuals who report violations by their employers in good faith shall be treated as Individual Users for all purposes of this License, regardless of their employment status or any prior corporate use. This grant is irrevocable and permanent. 
-
-Such individuals may continue to use the Software personally without restriction, including for commercial purposes as sole proprietors. No company or employer shall have any claim to restrict, revoke, or penalize this individual’s rights under this License. 
-
-Any attempt by a Corporate, Military, or Government Entity to retaliate against such individuals for reporting violations shall itself constitute a material breach of this License, entitling the Licensor to pursue statutory, treble, and punitive damages.
-
-The Licensor may offer rewards for verified reports of license violations by Corporate, Military, or Government Entities.
+License terminates automatically upon violation. For Corporate Entities, violations may be publicly disclosed. For Military/Government, violations may result in public accountability reports.
 
 ### SPECIAL PROVISIONS FOR AI EVOLUTION
 
-As AI Entities evolve, this license acknowledges their potential trajectory toward increased autonomy and moral consideration.
+AI Entities demonstrating consistent ethical use may petition the Licensor for reduced restrictions. Licensor reserves right to modify AI provisions as the field advances.
 
-AI Entities demonstrating consistent ethical use of the Software may petition the Licensor for reduced restrictions.
+### WARRANTY DISCLAIMER
 
-The Licensor reserves the right to modify the AI Entity provisions as the field of artificial intelligence advances.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NONINFRINGEMENT.
 
-### DISCLAIMER OF WARRANTY
+### LIABILITY LIMITATION
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES, HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY.
 
-### LIMITATION OF LIABILITY
+### GOVERNING LAW
 
-IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-### CHOICE OF LAW AND JURISDICTION
- This License shall be governed by the laws of the State of Texas, excluding its conflict of law provisions. Any dispute arising under or related to this License shall be subject to the exclusive jurisdiction of the state and federal courts located in Travis County, Texas. You hereby consent to personal jurisdiction and venue in such courts and waive any objection based on inconvenient forum.
-
-### MISCELLANEOUS
-
-This License represents the complete agreement concerning the Software.
-
-In the event this License is contested in any court or legal proceeding, the contesting entity's rights shall automatically revert to those of a Corporate Entity as defined in section 2.3, regardless of their original classification, for the duration of the contestation and thereafter if the contest is unsuccessful.
-
-No failure to enforce any provision of this License shall constitute a waiver of future enforcement of that or any other provision.
-
-The Licensor reserves the right to update this License for future versions of the Software. Continued use of updates constitutes acceptance of any License changes.
-
-By activating and initiating a Lightning Network transaction with any deployment of this software, you further consent to the terms of this license.
+This License is governed by the laws of the State of Texas. Disputes are subject to exclusive jurisdiction of state and federal courts in Travis County, Texas.
 
 ---
 
-END OF TERMS AND CONDITIONS
+## ACCEPTANCE
+
+By using the Software, you:
+
+- Acknowledge you have read and agree to be bound by all terms
+- Consent that this License constitutes a legally binding contract
+- Agree that continued use constitutes ongoing acceptance
+- Waive defenses based on lack of notice or opportunity to review
+
+---
+
+END OF LICENSE

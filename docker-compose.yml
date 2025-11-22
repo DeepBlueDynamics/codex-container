@@ -1,0 +1,18 @@
+services:
+  marketbot-api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MARKETBOT_ENV=docker
+    volumes:
+      - ./backend/.chroma:/app/backend/.chroma
+    networks:
+      - codex-network
+    restart: unless-stopped
+
+networks:
+  codex-network:
+    external: true

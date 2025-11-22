@@ -1,34 +1,181 @@
+<#
+.SYNOPSIS
+    Codex container helper - run OpenAI Codex CLI in Docker
+
+.DESCRIPTION
+    Launches Codex inside a reproducible Docker container with persistent home,
+    workspace mounting, session management, and MCP server support.
+
+.PARAMETER Install
+    Build Docker image and install runner on PATH
+
+.PARAMETER Login
+    Authenticate with Codex (auto-triggered when needed)
+
+.PARAMETER Run
+    Start interactive Codex session (default action)
+
+.PARAMETER Exec
+    Non-interactive execution. Pass prompt as string or array.
+    Example: -Exec "list python files"
+
+.PARAMETER Shell
+    Open bash shell inside container
+
+.PARAMETER Serve
+    Start HTTP gateway on port 4000 (or -GatewayPort)
+
+.PARAMETER Monitor
+    Watch directory for file changes and trigger Codex with MONITOR.md template
+
+.PARAMETER UseWatchdog
+    Use Python watchdog for event-driven monitoring (faster, more efficient than default FileSystemWatcher)
+
+.PARAMETER ListSessions
+    Show recent sessions with copyable resume commands, then exit
+
+.PARAMETER SessionId
+    Resume previous session using full UUID or last 5 characters
+    Example: -SessionId b0b57
+
+.PARAMETER Workspace
+    Mount different directory (default: current directory)
+
+.PARAMETER CodexHome
+    Use different Codex home directory (default: ~/.codex-service)
+
+.PARAMETER Tag
+    Docker image tag (default: gnosis/codex-service:dev)
+
+.PARAMETER Json
+    Enable legacy JSON output mode
+
+.PARAMETER JsonE
+    Enable experimental JSON output mode
+
+.PARAMETER Oss
+    Use local Ollama instead of OpenAI
+
+.PARAMETER OssModel
+    Specify Ollama model (implies -Oss)
+
+.PARAMETER OssServerUrl
+    Override the OSS endpoint Codex should call when -Oss is set (set this to your hosted GPT-OSS cloud URL to avoid the localhost bridge)
+
+.PARAMETER OllamaHost
+    Convenience alias for Ollama host override; defaults to the same value as -OssServerUrl when only one is provided
+
+.PARAMETER CodexModel
+    Forward a cloud model ID to Codex without implying -Oss. Useful for providers like gpt-oss:120b-cloud.
+
+.PARAMETER SkipUpdate
+    Don't update Codex CLI from npm
+
+.PARAMETER NoAutoLogin
+    Don't automatically trigger login if not authenticated
+
+.EXAMPLE
+    codex-container -Install
+    Build image and install runner
+
+.EXAMPLE
+    codex-container -ListSessions
+    Show recent sessions
+
+.EXAMPLE
+    codex-container -SessionId b0b57
+    Resume session b0b57
+
+.EXAMPLE
+    codex-container -Exec "list python files"
+    Run non-interactive command
+
+.EXAMPLE
+    codex-container -Monitor -WatchPath vhf_monitor
+    Monitor directory for changes
+
+.EXAMPLE
+    codex-container -Monitor -WatchPath vhf_monitor -UseWatchdog
+    Monitor directory using Python watchdog (event-driven, more efficient)
+
+.LINK
+    https://github.com/DeepBlueDynamics/codex-container
+#>
 [CmdletBinding(DefaultParameterSetName = 'Run')]
 param(
     [switch]$Install,
+    [Alias('Build')]
+    [switch]$Rebuild,
+    [switch]$NoCache,
     [switch]$Login,
     [switch]$Run,
     [switch]$Serve,
+    [switch]$Watch,
+    [string]$WatchPath,
+    [switch]$Monitor,
+    [string]$MonitorPrompt = 'MONITOR.md',
+    [switch]$UseWatchdog,
+    [switch]$NewSession,
     [string[]]$Exec,
     [switch]$Shell,
     [switch]$Push,
     [string]$Tag = 'gnosis/codex-service:dev',
-[string]$Workspace,
-[string]$CodexHome,
-[string[]]$CodexArgs,
+    [string]$Workspace,
+    [string]$CodexHome,
+    [Parameter(ValueFromRemainingArguments=$true)]
+    [string[]]$CodexArgs,
+    [string]$OssServerUrl,
+    [string]$OllamaHost,
+    [string]$CodexModel,
     [switch]$SkipUpdate,
     [switch]$NoAutoLogin,
     [switch]$Json,
     [switch]$JsonE,
     [switch]$Oss,
     [string]$OssModel,
+    [switch]$Speaker,
+    [int]$SpeakerPort = 8777,
+    [switch]$Danger,
     [int]$GatewayPort,
     [string]$GatewayHost,
     [int]$GatewayTimeoutMs,
     [string]$GatewayDefaultModel,
-    [string[]]$GatewayExtraArgs
+    [string[]]$GatewayExtraArgs,
+    [string]$TranscriptionServiceUrl = 'http://host.docker.internal:8765',
+    [string]$SessionId,
+    [switch]$ListSessions,
+[switch]$Privileged
 )
 
 $ErrorActionPreference = 'Stop'
 
+if (-not $PSBoundParameters.ContainsKey('Danger')) {
+    $Danger = $true
+}
+
 if ($OssModel) {
     $Oss = $true
 }
+
+if (-not $CodexModel) {
+    if ($env:CODEX_CLOUD_MODEL) {
+        $CodexModel = $env:CODEX_CLOUD_MODEL
+    } elseif ($env:CODEX_DEFAULT_MODEL) {
+        $CodexModel = $env:CODEX_DEFAULT_MODEL
+    }
+}
+
+if (-not $OssServerUrl -and $env:OSS_SERVER_URL) {
+    $OssServerUrl = $env:OSS_SERVER_URL
+}
+
+if (-not $OllamaHost -and $env:OLLAMA_HOST) {
+    $OllamaHost = $env:OLLAMA_HOST
+}
+
+$script:ResolvedOssServerUrl = $OssServerUrl
+$script:ResolvedOllamaHost = $OllamaHost
+$DefaultSystemPromptFile = 'PROMPT.md'
 
 function Resolve-WorkspacePath {
     param(
@@ -92,12 +239,226 @@ function Resolve-CodexHomePath {
     }
 }
 
+function Add-DefaultSystemPrompt {
+    param(
+        [string]$Action,
+        [string]$WorkspacePath
+    )
+
+    if ($SessionId) {
+        return
+    }
+    if ($Action -ne 'Serve') {
+        return
+    }
+    if ($env:CODEX_DISABLE_DEFAULT_PROMPT -match '^(1|true|on)$') {
+        return
+    }
+    if (-not $WorkspacePath) {
+        return
+    }
+
+    $promptPath = Join-Path $WorkspacePath $DefaultSystemPromptFile
+    if (-not (Test-Path $promptPath)) {
+        return
+    }
+
+    if ($CodexArgs -and ($CodexArgs | Where-Object { $_ -like '--system*' })) {
+        return
+    }
+
+    $containerPrompt = "/workspace/$DefaultSystemPromptFile"
+    $script:CodexArgs += @('--system-file', $containerPrompt)
+}
+
+function Test-HasModelFlag {
+    param(
+        [string[]]$Args
+    )
+
+    if (-not $Args) {
+        return $false
+    }
+
+    for ($i = 0; $i -lt $Args.Count; $i++) {
+        $arg = $Args[$i]
+        if ($arg -eq '--model' -or $arg -like '--model=*') {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-PythonInvocation {
+    if ($env:PYTHON) {
+        return [PSCustomObject]@{ FilePath = $env:PYTHON; Prefix = @() }
+    }
+
+    foreach ($candidate in @('python3', 'python')) {
+        if (Get-Command $candidate -ErrorAction SilentlyContinue) {
+            return [PSCustomObject]@{ FilePath = $candidate; Prefix = @() }
+        }
+    }
+
+    if (Get-Command 'py' -ErrorAction SilentlyContinue) {
+        return [PSCustomObject]@{ FilePath = 'py'; Prefix = @('-3') }
+    }
+
+    throw 'Unable to locate a Python interpreter on the host. Install Python or set $env:PYTHON.'
+}
+
+function Resolve-SpeakerPaths {
+    param(
+        [string]$CodexHome
+    )
+
+    $speakerRoot = Join-Path $CodexHome 'speaker'
+    $voiceOutbox = Join-Path $CodexHome 'voice-outbox'
+    $scriptTarget = Join-Path $speakerRoot 'speaker_service.py'
+    $logPath = Join-Path $speakerRoot 'speaker.log'
+    $pidPath = Join-Path $speakerRoot 'speaker.pid'
+
+    return [PSCustomObject]@{
+        SpeakerRoot   = $speakerRoot
+        VoiceOutbox   = $voiceOutbox
+        ScriptPath    = $scriptTarget
+        LogPath       = $logPath
+        PidPath       = $pidPath
+    }
+}
+
+function Stop-SpeakerService {
+    param(
+        $Config
+    )
+
+    if (-not $Config) {
+        return
+    }
+
+    if ($Config.Process -and -not $Config.Process.HasExited) {
+        try {
+            Stop-Process -Id $Config.Process.Id -ErrorAction SilentlyContinue
+        } catch {
+            # Ignore
+        }
+    }
+
+    if ($Config.PidPath -and (Test-Path $Config.PidPath)) {
+        try {
+            $pidValue = Get-Content -Path $Config.PidPath -ErrorAction SilentlyContinue
+            if ($pidValue) {
+                $parsedPid = $pidValue -as [int]
+                if ($parsedPid) {
+                    try {
+                        Stop-Process -Id $parsedPid -ErrorAction SilentlyContinue
+                    } catch {
+                        # Ignore
+                    }
+                }
+            }
+        } catch {
+            # ignore
+        }
+
+        try {
+            Remove-Item -Path $Config.PidPath -Force -ErrorAction SilentlyContinue
+        } catch {
+            # ignore
+        }
+    }
+}
+
+function Wait-SpeakerHealth {
+    param(
+        [int]$Port,
+        [int]$TimeoutSeconds = 10
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $healthUrl = "http://127.0.0.1:$Port/health"
+    while ((Get-Date) -lt $deadline) {
+        try {
+            Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 2 | Out-Null
+            return $true
+        } catch {
+            Start-Sleep -Milliseconds 200
+        }
+    }
+
+    return $false
+}
+
+function Start-SpeakerService {
+    param(
+        $Context,
+        [int]$Port
+    )
+
+    $paths = Resolve-SpeakerPaths -CodexHome $Context.CodexHome
+    foreach ($dir in @($paths.SpeakerRoot, $paths.VoiceOutbox)) {
+        if (-not (Test-Path $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+    }
+
+    $sourceScript = Join-Path $Context.CodexRoot 'scripts/speaker_service.py'
+    if (-not (Test-Path $sourceScript)) {
+        throw "speaker_service.py not found at $sourceScript"
+    }
+    Copy-Item -Path $sourceScript -Destination $paths.ScriptPath -Force
+
+    if (Test-Path $paths.PidPath) {
+        Stop-SpeakerService -Config @{ PidPath = $paths.PidPath }
+    }
+
+    $python = Get-PythonInvocation
+    $bindAddress = if ($env:SPEAKER_BIND) { $env:SPEAKER_BIND } else { '0.0.0.0' }
+
+    $argumentList = @()
+    if ($python.Prefix) {
+        $argumentList += $python.Prefix
+    }
+    $argumentList += @(
+        $paths.ScriptPath,
+        "--port=$Port",
+        "--outbox=$($paths.VoiceOutbox)",
+        "--log=$($paths.LogPath)",
+        "--bind=$bindAddress"
+    )
+    if ($env:SPEAKER_EXTRA_ARGS) {
+        $argumentList += $env:SPEAKER_EXTRA_ARGS.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)
+    }
+
+    $process = Start-Process -FilePath $python.FilePath -ArgumentList $argumentList -PassThru -WindowStyle Hidden
+
+    if (-not (Wait-SpeakerHealth -Port $Port -TimeoutSeconds 10)) {
+        try { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue } catch {}
+        throw "Speaker service failed to start on port $Port"
+    }
+
+    Set-Content -Path $paths.PidPath -Value $process.Id
+
+    $hostUrl = "http://host.docker.internal:$Port/play"
+    return [PSCustomObject]@{
+        Process      = $process
+        PidPath      = $paths.PidPath
+        Port         = $Port
+        VoiceOutbox  = $paths.VoiceOutbox
+        ContainerOutbox = '/workspace/voice-outbox'
+        SpeakerUrl   = $hostUrl
+        LogPath      = $paths.LogPath
+    }
+}
+
 function New-CodexContext {
     param(
         [string]$Tag,
         [string]$Workspace,
         [string]$ScriptRoot,
-        [string]$CodexHomeOverride
+        [string]$CodexHomeOverride,
+        [switch]$Privileged
     )
 
     $scriptDir = if ($ScriptRoot) { $ScriptRoot } else { throw "ScriptRoot is required" }
@@ -120,16 +481,33 @@ function New-CodexContext {
         New-Item -ItemType Directory -Path $codexHome -Force | Out-Null
     }
 
+    # Create whisper cache directory in codex home
+    $whisperCache = Join-Path $codexHome 'whisper-cache'
+    if (-not (Test-Path $whisperCache)) {
+        New-Item -ItemType Directory -Path $whisperCache -Force | Out-Null
+    }
+
     $runArgs = @(
         'run',
         '--rm',
         '-it',
         '--user', '0:0',
+        '--network', 'codex-network',
         '--add-host', 'host.docker.internal:host-gateway',
         '-v', ("${codexHome}:/opt/codex-home"),
+        '-v', ("${whisperCache}:/opt/whisper-cache"),
         '-e', 'HOME=/opt/codex-home',
-        '-e', 'XDG_CONFIG_HOME=/opt/codex-home'
+        '-e', 'XDG_CONFIG_HOME=/opt/codex-home',
+        '-e', 'HF_HOME=/opt/whisper-cache'
     )
+
+    # Pass ANTHROPIC_API_KEY if set in host environment
+    if ($env:ANTHROPIC_API_KEY) {
+        Write-Host "  Passing ANTHROPIC_API_KEY to container ($($env:ANTHROPIC_API_KEY.Length) chars)" -ForegroundColor DarkGray
+        $runArgs += @('-e', "ANTHROPIC_API_KEY=$($env:ANTHROPIC_API_KEY)")
+    } else {
+        Write-Host "  ANTHROPIC_API_KEY not set in PowerShell environment" -ForegroundColor DarkGray
+    }
 
     if ($workspacePath) {
         # Docker's --mount parser on Windows prefers forward slashes. Convert drive roots like I:\\ to I:/.
@@ -141,6 +519,11 @@ function New-CodexContext {
         $runArgs += @('-v', ("${normalized}:/workspace"), '-w', '/workspace')
     }
 
+    if ($Privileged) {
+        Write-Host "  Docker run will use --privileged" -ForegroundColor DarkGray
+        $runArgs += '--privileged'
+    }
+
     return [PSCustomObject]@{
         Tag = $Tag
         CodexRoot = $codexRoot
@@ -148,6 +531,7 @@ function New-CodexContext {
         WorkspacePath = $workspacePath
         CurrentLocation = $currentLocation.ProviderPath
         RunArgs = $runArgs
+        NewSession = $false  # Will be set by caller if needed
     }
 }
 
@@ -174,14 +558,19 @@ function Invoke-DockerBuild {
         New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     }
     $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $logFile = Join-Path $logDir "build-$timestamp.log"
+$logFile = Join-Path $logDir "build-$timestamp.log"
     if (-not (Test-Path $logFile)) {
         New-Item -ItemType File -Path $logFile -Force | Out-Null
     }
     Write-Host "  Log file:   $logFile" -ForegroundColor DarkGray
 
     $buildArgs = @(
-        'build',
+        'build'
+    )
+    if ($NoCache) {
+        $buildArgs += '--no-cache'
+    }
+    $buildArgs += @(
         '-f', (Resolve-Path $dockerfilePath),
         '-t', $Context.Tag,
         (Resolve-Path $Context.CodexRoot)
@@ -246,7 +635,8 @@ function New-DockerRunArgs {
         $Context,
         [switch]$ExposeLoginPort,
         [string[]]$AdditionalArgs,
-        [string[]]$AdditionalEnv
+        [string[]]$AdditionalEnv,
+        [switch]$Danger
     )
 
     $args = @()
@@ -255,11 +645,38 @@ function New-DockerRunArgs {
         $args += @('-p', '1455:1455')
     }
     if ($Oss) {
-        $args += @(
-            '-e', 'OLLAMA_HOST=http://host.docker.internal:11434',
-            '-e', 'OSS_SERVER_URL=http://host.docker.internal:11434',
-            '-e', 'ENABLE_OSS_BRIDGE=1'
-        )
+        $resolvedOss = $script:ResolvedOssServerUrl
+        $resolvedOllama = $script:ResolvedOllamaHost
+        $enableBridge = $false
+
+        if (-not $resolvedOss -and -not $resolvedOllama) {
+            $resolvedOss = 'http://host.docker.internal:11434'
+            $resolvedOllama = $resolvedOss
+            $enableBridge = $true
+        } elseif (-not $resolvedOss -and $resolvedOllama) {
+            $resolvedOss = $resolvedOllama
+        } elseif (-not $resolvedOllama -and $resolvedOss) {
+            $resolvedOllama = $resolvedOss
+        }
+
+        if ($resolvedOllama) {
+            $args += @('-e', "OLLAMA_HOST=$resolvedOllama")
+        }
+        if ($resolvedOss) {
+            $args += @('-e', "OSS_SERVER_URL=$resolvedOss")
+        }
+        if ($enableBridge) {
+            $args += @('-e', 'ENABLE_OSS_BRIDGE=1')
+        }
+        if ($env:OSS_API_KEY) {
+            $args += @('-e', "OSS_API_KEY=$($env:OSS_API_KEY)")
+        }
+        if ($env:OSS_DISABLE_BRIDGE) {
+            $args += @('-e', "OSS_DISABLE_BRIDGE=$($env:OSS_DISABLE_BRIDGE)")
+        }
+    }
+    if ($TranscriptionServiceUrl) {
+        $args += @('-e', "TRANSCRIPTION_SERVICE_URL=$TranscriptionServiceUrl")
     }
     if ($AdditionalEnv) {
         foreach ($envPair in $AdditionalEnv) {
@@ -271,7 +688,71 @@ function New-DockerRunArgs {
     }
     $args += $Context.Tag
     $args += '/usr/local/bin/codex_entry.sh'
+    if ($Danger) {
+        $args += '--dangerously-bypass-approvals-and-sandbox'
+    }
+
+    # VALIDATION: Ensure no empty strings or null values in arguments
+    $nullCount = 0
+    $emptyCount = 0
+    foreach ($arg in $args) {
+        if ($arg -eq $null) { $nullCount++ }
+        elseif ($arg -eq '') { $emptyCount++ }
+    }
+
+    if ($nullCount -gt 0 -or $emptyCount -gt 0) {
+        Write-Host "WARNING in New-DockerRunArgs: Found $nullCount nulls, $emptyCount empty strings" -ForegroundColor Yellow
+    }
+
     return $args
+}
+
+function Test-CodexEnvironment {
+    param(
+        $Context
+    )
+
+    $issues = @()
+    $warnings = @()
+
+    # Warn about missing API key (non-blocking)
+    if (-not $env:ANTHROPIC_API_KEY) {
+        $warnings += "ANTHROPIC_API_KEY not set - Codex tools won't work until configured"
+    }
+
+    # Check Docker daemon is running (blocking)
+    try {
+        $dockerVersion = docker version --format '{{.Server.Version}}' 2>$null
+        if (-not $dockerVersion) {
+            $issues += "Docker daemon is not running or not accessible"
+        }
+    } catch {
+        $issues += "Docker check failed: $_"
+    }
+
+    # Check if image exists (blocking)
+    if (-not (Ensure-DockerImage -Tag $Context.Tag)) {
+        $issues += "Docker image $($Context.Tag) is not available"
+    }
+
+    # Show warnings
+    if ($warnings.Count -gt 0) {
+        Write-Host "Warnings:" -ForegroundColor Yellow
+        foreach ($warning in $warnings) {
+            Write-Host "  - $warning" -ForegroundColor Yellow
+        }
+    }
+
+    # Show blocking issues
+    if ($issues.Count -gt 0) {
+        Write-Host "Environment Issues Found:" -ForegroundColor Red
+        foreach ($issue in $issues) {
+            Write-Host "  - $issue" -ForegroundColor Red
+        }
+        return $false
+    }
+
+    return $true
 }
 
 function Invoke-CodexContainer {
@@ -283,18 +764,51 @@ function Invoke-CodexContainer {
         [string[]]$AdditionalEnv
     )
 
-    $runArgs = New-DockerRunArgs -Context $Context -ExposeLoginPort:$ExposeLoginPort -AdditionalArgs $AdditionalArgs -AdditionalEnv $AdditionalEnv
+    $runArgs = New-DockerRunArgs -Context $Context -ExposeLoginPort:$ExposeLoginPort -AdditionalArgs $AdditionalArgs -AdditionalEnv $AdditionalEnv -Danger:$Danger
     if ($CommandArgs) {
         $runArgs += $CommandArgs
     }
 
-    if ($env:CODEX_CONTAINER_TRACE) {
-        Write-Host "docker $($runArgs -join ' ')" -ForegroundColor DarkGray
+    Write-Host "DEBUG Invoke-CodexContainer: runArgs count = $($runArgs.Count)" -ForegroundColor Magenta
+    $codexStartIdx = $runArgs.IndexOf('codex')
+    if ($codexStartIdx -ge 0) {
+        Write-Host "DEBUG: codex command starts at index $codexStartIdx" -ForegroundColor Magenta
+        for ($i = $codexStartIdx; $i -lt [Math]::Min($codexStartIdx + 5, $runArgs.Count); $i++) {
+            Write-Host "DEBUG: runArgs[$i] = '$($runArgs[$i])'" -ForegroundColor Magenta
+        }
     }
 
-    docker @runArgs
+    # CRITICAL FIX: Remove empty strings and null values that can cause docker command failure
+    $cleanArgs = @($runArgs | Where-Object { $_ -ne $null -and $_ -ne '' })
+
+    if ($cleanArgs.Count -ne $runArgs.Count) {
+        Write-Host "WARNING: Removed $($runArgs.Count - $cleanArgs.Count) empty/null arguments" -ForegroundColor Yellow
+    }
+
+    if ($env:CODEX_CONTAINER_TRACE) {
+        Write-Host "docker $($cleanArgs -join ' ')" -ForegroundColor DarkGray
+    }
+
+    # Enhanced error reporting
+    docker @cleanArgs
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
+        Write-Host "ERROR: docker run exited with code $exitCode" -ForegroundColor Red
+        Write-Host "Full docker command:" -ForegroundColor Red
+        Write-Host "docker $($cleanArgs -join ' ')" -ForegroundColor DarkGray
+
+        Write-Host "`nAll $($cleanArgs.Count) arguments:" -ForegroundColor Red
+        for ($i = 0; $i -lt $cleanArgs.Count; $i++) {
+            $arg = $cleanArgs[$i]
+            if ([string]::IsNullOrEmpty($arg)) {
+                Write-Host "  [$i] = <EMPTY>" -ForegroundColor Yellow
+            } elseif ($arg -eq '--') {
+                Write-Host "  [$i] = '--' (PROBLEM ARGUMENT)" -ForegroundColor Magenta
+            } else {
+                Write-Host "  [$i] = '$arg'" -ForegroundColor Gray
+            }
+        }
+
         throw "docker run exited with code $exitCode"
     }
 }
@@ -315,23 +829,14 @@ function Install-RunnerOnPath {
     $binDir = Join-Path $Context.CodexHome 'bin'
     New-Item -ItemType Directory -Path $binDir -Force | Out-Null
 
-    $runnerDest = Join-Path $binDir 'codex_container.ps1'
+    # Direct invocation - no wrapper needed when using -Command
     $repoScript = Join-Path $Context.CodexRoot 'scripts/codex_container.ps1'
     $escapedRepoScript = $repoScript.Replace("'", "''")
-    $runnerContent = @"
-param(
-    [Parameter(ValueFromRemainingArguments = `$true)]
-    [object[]]`$RemainingArgs
-)
-
-& '$escapedRepoScript' @RemainingArgs
-"@
-    Set-Content -Path $runnerDest -Value $runnerContent -Encoding ASCII
 
     $shimPath = Join-Path $binDir 'codex-container.cmd'
     $shimContent = @"
 @echo off
-PowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ""$runnerDest"" %*
+PowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "& '$escapedRepoScript' @args"
 "@
     Set-Content -Path $shimPath -Value $shimContent -Encoding ASCII
 
@@ -356,8 +861,8 @@ PowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ""$runnerDest"" %*
         $env:PATH = if ($env:PATH) { "$env:PATH;$binDir" } else { $binDir }
     }
 
-    Write-Host "Runner installed to $runnerDest" -ForegroundColor DarkGray
-    Write-Host "Launcher shim available at $shimPath" -ForegroundColor DarkGray
+    Write-Host "Launcher installed to $shimPath" -ForegroundColor DarkGray
+    Write-Host "Invokes: $repoScript" -ForegroundColor DarkGray
 }
 
 $script:CodexUpdateCompleted = $false
@@ -430,6 +935,17 @@ function Invoke-CodexRun {
             $cmd += @('--model', $OssModel)
         }
     }
+    if ($CodexModel) {
+        $hasModel = $false
+        if (Test-HasModelFlag -Args $cmd) {
+            $hasModel = $true
+        } elseif ($Arguments -and (Test-HasModelFlag -Args $Arguments)) {
+            $hasModel = $true
+        }
+        if (-not $hasModel) {
+            $cmd += @('--model', $CodexModel)
+        }
+    }
     if ($Arguments) {
         $cmd += $Arguments
     }
@@ -442,6 +958,11 @@ function Invoke-CodexExec {
         $Context,
         [string[]]$Arguments
     )
+
+    Write-Host "DEBUG Invoke-CodexExec: Received $($Arguments.Count) arguments" -ForegroundColor Cyan
+    for ($i = 0; $i -lt [Math]::Min($Arguments.Count, 3); $i++) {
+        Write-Host "DEBUG Invoke-CodexExec: Arguments[$i] = '$($Arguments[$i].Substring(0, [Math]::Min(50, $Arguments[$i].Length)))...'" -ForegroundColor Cyan
+    }
 
     if (-not $Arguments) {
         throw 'Exec requires at least one argument to forward to codex.'
@@ -489,6 +1010,15 @@ function Invoke-CodexExec {
             $rest = $cmdArguments[1..($cmdArguments.Length - 1)]
         }
         $cmdArguments = @($first) + $injectedFlags + $rest
+    }
+
+    if ($CodexModel -and -not (Test-HasModelFlag -Args $cmdArguments)) {
+        $first = $cmdArguments[0]
+        $rest = @()
+        if ($cmdArguments.Length -gt 1) {
+            $rest = $cmdArguments[1..($cmdArguments.Length - 1)]
+        }
+        $cmdArguments = @($first, '--model', $CodexModel) + $rest
     }
 
     Invoke-CodexRun -Context $Context -Arguments $cmdArguments -Silent:($Json -or $JsonE)
@@ -541,6 +1071,433 @@ function Invoke-CodexServe {
     Invoke-CodexContainer -Context $Context -CommandArgs @('node', '/usr/local/bin/codex_gateway.js') -AdditionalArgs @('-p', $publish) -AdditionalEnv $envVars
 }
 
+function Invoke-CodexMonitor {
+    param(
+        $Context,
+        [string]$WatchPath,
+        [string]$PromptFile,
+        [switch]$JsonOutput,
+        [string[]]$CodexArgs,
+        [switch]$UseWatchdog
+    )
+
+    Write-Host "DEBUG: Invoke-CodexMonitor called" -ForegroundColor Yellow
+    Write-Host "DEBUG: WatchPath = '$WatchPath'" -ForegroundColor Yellow
+    Write-Host "DEBUG: PromptFile = '$PromptFile'" -ForegroundColor Yellow
+    Write-Host "DEBUG: UseWatchdog = $UseWatchdog" -ForegroundColor Yellow
+
+    if (-not $WatchPath) {
+        $WatchPath = $Context.WorkspacePath
+    }
+
+    if (-not (Test-Path $WatchPath)) {
+        throw "Monitor watch path '$WatchPath' could not be resolved."
+    }
+
+    $resolvedWatch = (Resolve-Path -LiteralPath $WatchPath).ProviderPath
+
+    # Auto-detect prompt file if not specified
+    if (-not $PromptFile) {
+        # First check for MONITOR.md
+        $defaultPrompt = Join-Path $resolvedWatch 'MONITOR.md'
+        if (Test-Path $defaultPrompt) {
+            $PromptFile = 'MONITOR.md'
+        } else {
+            # Look for MONITOR_*.md pattern
+            $monitorFiles = Get-ChildItem -Path $resolvedWatch -Filter 'MONITOR_*.md' -File -ErrorAction SilentlyContinue
+            if ($monitorFiles -and $monitorFiles.Count -gt 0) {
+                $PromptFile = $monitorFiles[0].Name
+                Write-Host "Auto-detected prompt file: $PromptFile" -ForegroundColor Cyan
+            } else {
+                $PromptFile = 'MONITOR.md'  # Fallback, will error later if missing
+            }
+        }
+    }
+    $promptPath = Join-Path $resolvedWatch $PromptFile
+
+    # Use Python watchdog monitor running inside container
+    if ($UseWatchdog) {
+        Write-Host "🐍 Using Python watchdog monitor (event-driven, running in container)" -ForegroundColor Cyan
+
+        # Calculate relative path from workspace to watch directory
+        $watchRelative = $resolvedWatch.Substring($Context.WorkspacePath.Length).TrimStart('\', '/')
+        $containerWatchPath = if ($watchRelative) { "/workspace/$($watchRelative.Replace('\', '/'))" } else { "/workspace" }
+
+        Write-Host "   Watch path (host): $resolvedWatch" -ForegroundColor DarkGray
+        Write-Host "   Watch path (container): $containerWatchPath" -ForegroundColor DarkGray
+        Write-Host "   Prompt file: $PromptFile" -ForegroundColor DarkGray
+
+        # Build monitor command to run inside container
+        $monitorCmd = @(
+            "python3", "/opt/scripts/monitor.py",
+            "--watch-path", $containerWatchPath,
+            "--workspace", "/workspace",
+            "--codex-script", "codex",
+            "--monitor-prompt-file", $PromptFile
+        )
+
+        if ($Context.NewSession) {
+            $monitorCmd += "--new-session"
+        }
+
+        if ($JsonOutput) {
+            $jsonMode = if ($Context.JsonE) { "experimental" } else { "legacy" }
+            $monitorCmd += @("--json-mode", $jsonMode)
+        }
+
+        # Launch container with monitor running inside
+        Write-Host "Starting monitor in container..." -ForegroundColor Cyan
+        Invoke-CodexContainer -Context $Context -CommandArgs $monitorCmd
+        return
+    }
+
+    # Fall back to PowerShell FileSystemWatcher monitor
+    Write-Host "📁 Using PowerShell FileSystemWatcher monitor (polling-based)" -ForegroundColor Cyan
+
+    $logPath = Join-Path $resolvedWatch 'codex-monitor.log'
+    $sessionStatePath = Join-Path $resolvedWatch '.codex-monitor-session'
+
+    function Write-MonitorLog {
+        param([string]$Message)
+        $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        $line = "[$timestamp] $Message"
+        Add-Content -LiteralPath $logPath -Value $line
+    }
+
+    function Get-MonitorSession {
+        if (Test-Path $sessionStatePath) {
+            try {
+                $sessionId = Get-Content $sessionStatePath -Raw -ErrorAction SilentlyContinue
+                return $sessionId.Trim()
+            } catch {
+                return $null
+            }
+        }
+        return $null
+    }
+
+    function Set-MonitorSession {
+        param([string]$SessionId)
+        if ($SessionId) {
+            Set-Content -Path $sessionStatePath -Value $SessionId -NoNewline
+        }
+    }
+
+    function Get-MonitorRelativePath {
+        param([string]$BasePath, [string]$TargetPath)
+        if (-not $TargetPath) { return '' }
+        try {
+            $baseWithSlash = if ($BasePath.TrimEnd() -match '[\\/]$') { $BasePath } else { $BasePath + [System.IO.Path]::DirectorySeparatorChar }
+            $baseUri = New-Object System.Uri($baseWithSlash)
+            $targetUri = New-Object System.Uri($TargetPath)
+            if ($baseUri.Scheme -ne $targetUri.Scheme) {
+                return $TargetPath
+            }
+            $relativeUri = $baseUri.MakeRelativeUri($targetUri).ToString()
+            $relative = [System.Uri]::UnescapeDataString($relativeUri).Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+            if ([string]::IsNullOrEmpty($relative)) { return '.' }
+            return $relative
+        } catch {
+            return $TargetPath
+        }
+    }
+
+    function Format-MonitorPrompt {
+        param([string]$Template, [hashtable]$Values)
+        $result = $Template
+        foreach ($key in $Values.Keys) {
+            $token = "{{${key}}}"
+            $value = $Values[$key]
+            if ($null -eq $value) { $value = '' }
+            $result = $result.Replace($token, $value)
+        }
+        return $result
+    }
+
+    function Get-LatestSession {
+        param($Context)
+        $sessionsDir = Join-Path $Context.CodexHome ".codex/sessions"
+        if (-not (Test-Path $sessionsDir)) {
+            return $null
+        }
+
+        $allSessions = Get-ChildItem -Path $sessionsDir -Recurse -Filter "rollout-*.jsonl" -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+        if ($allSessions -and $allSessions.Name -match 'rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$') {
+            return $Matches[1]
+        }
+
+        return $null
+    }
+
+    Write-Host "Monitoring $resolvedWatch" -ForegroundColor Cyan
+    Write-Host "Prompt file: $promptPath" -ForegroundColor DarkGray
+    Write-Host "Log file:    $logPath" -ForegroundColor DarkGray
+    Write-Host 'Press Ctrl+C to stop.' -ForegroundColor DarkGray
+
+    # Check for existing monitor session (unless -NewSession specified)
+    $monitorSessionId = $null
+    if (-not $Context.NewSession) {
+        $monitorSessionId = Get-MonitorSession
+    }
+
+    if ($monitorSessionId) {
+        Write-Host "Monitor resuming session: $monitorSessionId" -ForegroundColor Cyan
+        Write-MonitorLog "Resuming session: $monitorSessionId"
+    } else {
+        if ($Context.NewSession) {
+            Write-Host "Monitor starting fresh session (forced by -NewSession)" -ForegroundColor Cyan
+            Write-MonitorLog "Starting fresh session (forced by -NewSession)"
+            # Clear any existing session file
+            if (Test-Path $sessionStatePath) {
+                Remove-Item $sessionStatePath -Force
+            }
+        } else {
+            Write-Host "Monitor starting new session" -ForegroundColor Cyan
+            Write-MonitorLog "Starting new session"
+        }
+    }
+
+    Write-MonitorLog "Started monitoring $resolvedWatch"
+
+    $ignored = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $ignored.Add([System.IO.Path]::GetFileName($promptPath)) | Out-Null
+    $ignored.Add('codex-monitor.log') | Out-Null
+
+    $fsw = New-Object System.IO.FileSystemWatcher $resolvedWatch
+    $fsw.IncludeSubdirectories = $false
+    $fsw.EnableRaisingEvents = $true
+    $fsw.NotifyFilter = [System.IO.NotifyFilters]::FileName -bor [System.IO.NotifyFilters]::LastWrite
+
+    $sourceIds = @('CodexMonitorChanged','CodexMonitorCreated','CodexMonitorRenamed')
+    Register-ObjectEvent -InputObject $fsw -EventName Changed -SourceIdentifier $sourceIds[0] | Out-Null
+    Register-ObjectEvent -InputObject $fsw -EventName Created -SourceIdentifier $sourceIds[1] | Out-Null
+    Register-ObjectEvent -InputObject $fsw -EventName Renamed -SourceIdentifier $sourceIds[2] | Out-Null
+
+    $lastProcessed = @{}
+    $lastWriteStamp = @{}
+
+    try {
+        while ($true) {
+            $event = Wait-Event -SourceIdentifier * -Timeout 1
+            if (-not $event) { continue }
+
+            if (-not ($sourceIds -contains $event.SourceIdentifier)) {
+                Remove-Event -EventIdentifier $event.EventIdentifier
+                continue
+            }
+
+            try {
+                $fullPath = $event.SourceEventArgs.FullPath
+            } catch {
+                Remove-Event -EventIdentifier $event.EventIdentifier
+                continue
+            }
+
+            Remove-Event -EventIdentifier $event.EventIdentifier
+
+            if (-not $fullPath) { continue }
+            if (-not (Test-Path $fullPath)) {
+                continue
+            }
+
+            $name = [System.IO.Path]::GetFileName($fullPath)
+            if ($ignored.Contains($name)) {
+                continue
+            }
+
+            try {
+                $attributes = [System.IO.File]::GetAttributes($fullPath)
+                if (($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
+                    continue
+                }
+            } catch {}
+
+            $now = Get-Date
+            $lastWrite = $null
+            try {
+                $lastWrite = [System.IO.File]::GetLastWriteTimeUtc($fullPath)
+            } catch {}
+
+            if ($lastProcessed.ContainsKey($fullPath)) {
+                $delta = $now - $lastProcessed[$fullPath]
+                if ($delta.TotalSeconds -lt 1) {
+                    continue
+                }
+            }
+
+            if ($lastWrite -ne $null) {
+                if ($lastWriteStamp.ContainsKey($fullPath) -and $lastWriteStamp[$fullPath] -eq $lastWrite) {
+                    continue
+                }
+                $lastWriteStamp[$fullPath] = $lastWrite
+            }
+
+            $lastProcessed[$fullPath] = $now
+
+            # Always read full prompt template - agent needs full instructions every time
+            if (-not (Test-Path $promptPath)) {
+                $msg = "Prompt file missing; skipping event for ${fullPath}"
+                Write-Host $msg -ForegroundColor Yellow
+                Write-MonitorLog $msg
+                continue
+            }
+
+            try {
+                $promptText = Get-Content -LiteralPath $promptPath -Raw -ErrorAction Stop
+            } catch {
+                $msg = "Failed reading prompt file ${promptPath}: $($_.Exception.Message)"
+                Write-Host $msg -ForegroundColor Red
+                Write-MonitorLog $msg
+                continue
+            }
+
+            $changeType = $event.SourceEventArgs.ChangeType.ToString()
+            $oldFullPath = $null
+            if ($event.SourceEventArgs -is [System.IO.RenamedEventArgs]) {
+                $oldFullPath = $event.SourceEventArgs.OldFullPath
+            }
+
+            # Calculate relative path from the WATCH directory (for display)
+            $relativePath = Get-MonitorRelativePath -BasePath $resolvedWatch -TargetPath $fullPath
+            if ([string]::IsNullOrEmpty($relativePath)) { $relativePath = '.' }
+            $directoryRelative = [System.IO.Path]::GetDirectoryName($relativePath)
+            if ([string]::IsNullOrEmpty($directoryRelative)) { $directoryRelative = '.' }
+
+            # Calculate relative path from the WORKSPACE root (for container paths)
+            $relativeFromWorkspace = Get-MonitorRelativePath -BasePath $Context.WorkspacePath -TargetPath $fullPath
+            if ([string]::IsNullOrEmpty($relativeFromWorkspace)) { $relativeFromWorkspace = '.' }
+            
+            $relativeForContainer = $relativeFromWorkspace.Replace([System.IO.Path]::DirectorySeparatorChar, '/')
+            if ($relativeForContainer -eq '.') {
+                $relativeForContainer = ''
+            }
+            $containerPath = if ($relativeForContainer) { "/workspace/$relativeForContainer" } else { '/workspace' }
+            $containerDir = if ($relativeForContainer) {
+                $dirPart = [System.IO.Path]::GetDirectoryName($relativeFromWorkspace)
+                if ([string]::IsNullOrEmpty($dirPart)) { '/workspace' } else { "/workspace/" + ($dirPart.Replace([System.IO.Path]::DirectorySeparatorChar, '/')) }
+            } else { '/workspace' }
+
+            $oldRelativePath = if ($oldFullPath) { Get-MonitorRelativePath -BasePath $resolvedWatch -TargetPath $oldFullPath } else { '' }
+            $oldDirectoryRelative = if ($oldRelativePath) { [System.IO.Path]::GetDirectoryName($oldRelativePath) } else { '' }
+            if ([string]::IsNullOrEmpty($oldDirectoryRelative) -and $oldRelativePath) { $oldDirectoryRelative = '.' }
+
+            $oldRelativeForContainer = $oldRelativePath.Replace([System.IO.Path]::DirectorySeparatorChar, '/')
+            if ($oldRelativeForContainer -eq '.') { $oldRelativeForContainer = '' }
+            $oldContainerPath = if ($oldRelativeForContainer) { "/workspace/$oldRelativeForContainer" } else { '' }
+            $oldContainerDir = if ($oldRelativeForContainer) {
+                $oldDirPart = [System.IO.Path]::GetDirectoryName($oldRelativePath)
+                if ([string]::IsNullOrEmpty($oldDirPart)) { '/workspace' } else { "/workspace/" + ($oldDirPart.Replace([System.IO.Path]::DirectorySeparatorChar, '/')) }
+            } else { '' }
+
+            $values = @{
+                'file' = [System.IO.Path]::GetFileName($fullPath)
+                'filename' = [System.IO.Path]::GetFileName($fullPath)
+                'directory' = $directoryRelative
+                'dir' = $directoryRelative
+                'full_path' = $fullPath
+                'relative_path' = $relativePath
+                'container_path' = $containerPath
+                'container_dir' = $containerDir
+                'extension' = [System.IO.Path]::GetExtension($fullPath)
+                'action' = $changeType
+                'timestamp' = (Get-Date).ToString('o')
+                'watch_root' = $resolvedWatch
+                'old_full_path' = $oldFullPath
+                'old_relative_path' = $oldRelativePath
+                'old_container_path' = $oldContainerPath
+                'old_container_dir' = $oldContainerDir
+                'old_file' = if ($oldFullPath) { [System.IO.Path]::GetFileName($oldFullPath) } else { '' }
+                'old_filename' = if ($oldFullPath) { [System.IO.Path]::GetFileName($oldFullPath) } else { '' }
+                'old_directory' = $oldDirectoryRelative
+                'old_dir' = $oldDirectoryRelative
+            }
+
+            # Build payload - ALWAYS send full template with substitution
+            # Agent needs the full instructions every time to remember to check for duplicates
+            $payload = Format-MonitorPrompt -Template $promptText.TrimEnd() -Values $values
+
+            # If monitoring a subdirectory, fix paths for correct container mapping
+            if ($resolvedWatch -ne $Context.WorkspacePath) {
+                # Calculate the relative path from workspace to watch directory
+                $watchRelative = $resolvedWatch.Substring($Context.WorkspacePath.Length).TrimStart('\', '/')
+                $watchRelativeForContainer = $watchRelative.Replace('\', '/')
+
+                # Replace absolute Windows paths with correct container paths
+                # Files in the watched subdir need the subdirectory in their container path
+                $payload = $payload -replace [regex]::Escape($resolvedWatch.Replace('\', '/')), "/workspace/$watchRelativeForContainer"
+                $payload = $payload -replace [regex]::Escape($resolvedWatch), "/workspace/$watchRelativeForContainer"
+            }
+
+            # Build command arguments array
+            # IMPORTANT: Ensure payload is added as a single string element, not word-split
+            $cmdArgs = @()
+            # Add session resume if we have a persisted session
+            if ($monitorSessionId) {
+                $cmdArgs += 'resume'
+                $cmdArgs += $monitorSessionId
+            }
+            if ($CodexArgs) {
+                $cmdArgs += $CodexArgs
+            }
+            # Add the prompt payload as a single element (cast to ensure it's treated as one string)
+            $cmdArgs += [string]$payload
+
+            $logMessage = "Dispatching Codex run for ${fullPath}"
+            Write-Host $logMessage -ForegroundColor DarkGray
+            Write-MonitorLog $logMessage
+
+            # Debug logging
+            Write-Host "DEBUG: cmdArgs count = $($cmdArgs.Count)" -ForegroundColor Yellow
+            Write-Host "DEBUG: cmdArgs[0] length = $($cmdArgs[0].Length)" -ForegroundColor Yellow
+            if ($cmdArgs.Count -gt 1) {
+                Write-Host "DEBUG: cmdArgs has multiple elements!" -ForegroundColor Red
+                for ($i = 0; $i -lt [Math]::Min($cmdArgs.Count, 5); $i++) {
+                    Write-Host "DEBUG: cmdArgs[$i] = '$($cmdArgs[$i])'" -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "DEBUG: cmdArgs[0] first 100 chars = $($cmdArgs[0].Substring(0, [Math]::Min(100, $cmdArgs[0].Length)))" -ForegroundColor Yellow
+            }
+
+            try {
+                Invoke-CodexExec -Context $Context -Arguments $cmdArgs
+
+                # Capture and persist session ID for continuity
+                if (-not $monitorSessionId) {
+                    $latestSession = Get-LatestSession -Context $Context
+                    if ($latestSession) {
+                        $monitorSessionId = $latestSession
+                        Set-MonitorSession -SessionId $monitorSessionId
+                        Write-Host "Monitor persisted session: $monitorSessionId" -ForegroundColor Cyan
+                        Write-MonitorLog "Persisted session: $monitorSessionId"
+                    }
+                }
+
+                # Only mark as processed after successful completion
+                $lastProcessed[$fullPath] = $now
+                if ($lastWrite -ne $null) {
+                    $lastWriteStamp[$fullPath] = $lastWrite
+                }
+                Write-MonitorLog "Codex run completed for ${fullPath}"
+            } catch {
+                $err = "Codex run failed for ${fullPath}: $($_.Exception.Message)"
+                Write-Host $err -ForegroundColor Red
+                Write-MonitorLog $err
+                # Don't update lastProcessed on failure - allow retry
+            }
+        }
+    } finally {
+        foreach ($id in $sourceIds) {
+            Unregister-Event -SourceIdentifier $id -ErrorAction SilentlyContinue
+            Remove-Event -SourceIdentifier $id -ErrorAction SilentlyContinue
+        }
+        $fsw.Dispose()
+        Write-MonitorLog "Stopped monitoring $resolvedWatch"
+    }
+}
+
 function Test-CodexAuthenticated {
     param(
         $Context
@@ -557,6 +1514,89 @@ function Test-CodexAuthenticated {
     } catch {
         return $false
     }
+}
+
+function Show-RecentSessions {
+    param(
+        $Context,
+        [int]$Limit = 5
+    )
+
+    $sessionsDir = Join-Path $Context.CodexHome ".codex/sessions"
+
+    if (-not (Test-Path $sessionsDir)) {
+        return
+    }
+
+    # Find all rollout-*.jsonl files (sessions are stored as: sessions/2025/10/20/rollout-*.jsonl)
+    $sessionFiles = Get-ChildItem -Path $sessionsDir -Recurse -Filter "rollout-*.jsonl" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First $Limit
+
+    if ($sessionFiles.Count -eq 0) {
+        return
+    }
+
+    Write-Host ""
+    Write-Host "Recent Codex sessions:" -ForegroundColor Cyan
+    Write-Host ""
+
+    # Platform-appropriate command base
+    $cmdBase = if ($IsWindows -or $env:OS -match "Windows") {
+        "codex-container"
+    } else {
+        "./codex_container.sh"
+    }
+
+    foreach ($file in $sessionFiles) {
+        # Extract session ID from filename: rollout-2025-10-20T14-58-30-019a0221-064c-7cd3-aad2-dffde6bbffba.jsonl
+        if ($file.Name -match 'rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$') {
+            $sessionId = $matches[1]
+        } else {
+            continue
+        }
+
+        # Get short ID (last 5 chars)
+        $shortId = $sessionId.Substring($sessionId.Length - 5)
+
+        $lastModified = $file.LastWriteTime
+        $age = (Get-Date) - $lastModified
+
+        # Format age nicely
+        $ageStr = if ($age.TotalHours -lt 1) {
+            "{0} min ago" -f [math]::Floor($age.TotalMinutes)
+        } elseif ($age.TotalDays -lt 1) {
+            "{0}h ago" -f [math]::Floor($age.TotalHours)
+        } else {
+            "{0}d ago" -f [math]::Floor($age.TotalDays)
+        }
+
+        # Try to get first user message from the jsonl file
+        $preview = ""
+        try {
+            $firstLine = Get-Content $file.FullName -First 1 -ErrorAction SilentlyContinue
+            if ($firstLine) {
+                $json = $firstLine | ConvertFrom-Json -ErrorAction SilentlyContinue
+                if ($json.role -eq "user" -and $json.content) {
+                    $preview = $json.content
+                    if ($preview.Length -gt 70) {
+                        $preview = $preview.Substring(0, 67) + "..."
+                    }
+                }
+            }
+        } catch {
+            # Ignore parse errors
+        }
+
+        Write-Host "  [$ageStr]" -ForegroundColor DarkGray -NoNewline
+        Write-Host " ...$shortId" -ForegroundColor Yellow
+        if ($preview) {
+            Write-Host "    $preview" -ForegroundColor Gray
+        }
+        Write-Host "    $cmdBase -SessionId $shortId" -ForegroundColor Cyan
+        Write-Host ""
+    }
+    Write-Host ""
 }
 
 function Ensure-CodexAuthentication {
@@ -587,18 +1627,21 @@ function Ensure-CodexAuthentication {
 
 $actions = @()
 if ($Install) { $actions += 'Install' }
+if ($Rebuild) { $actions += 'Install' }  # -Build/-Rebuild is alias for Install
 if ($Login) { $actions += 'Login' }
 if ($Shell) { $actions += 'Shell' }
 if ($Exec) { $actions += 'Exec' }
 if ($Run) { $actions += 'Run' }
 if ($Serve) { $actions += 'Serve' }
+if ($Monitor) { $actions += 'Monitor' }
+if ($ListSessions) { $actions += 'ListSessions' }
 
 if (-not $actions) {
     $actions = @('Run')
 }
 
 if ($actions.Count -gt 1) {
-    throw "Specify only one primary action (choose one of -Install, -Login, -Run, -Exec, -Shell, -Serve)."
+    throw "Specify only one primary action (choose one of -Install, -Build, -Login, -Run, -Exec, -Shell, -Serve, -Monitor, -ListSessions)."
 }
 
 $action = $actions[0]
@@ -612,22 +1655,49 @@ if ($jsonFlagsSpecified.Count -gt 1) {
     throw "Specify only one of $($jsonFlagsSpecified -join ', ')."
 }
 
-$context = New-CodexContext -Tag $Tag -Workspace $Workspace -ScriptRoot $PSScriptRoot -CodexHomeOverride $CodexHome
+$speakerConfig = $null
+try {
+    $context = New-CodexContext -Tag $Tag -Workspace $Workspace -ScriptRoot $PSScriptRoot -CodexHomeOverride $CodexHome -Privileged:$Privileged
 
-if (-not $jsonOutput) {
-    Write-Host "Codex container context" -ForegroundColor Cyan
-    Write-Host "  Image:      $Tag" -ForegroundColor DarkGray
-    Write-Host "  Codex home: $($context.CodexHome)" -ForegroundColor DarkGray
-    Write-Host "  Workspace:  $($context.WorkspacePath)" -ForegroundColor DarkGray
-}
-
-if ($action -ne 'Install') {
-    if (-not (Ensure-DockerImage -Tag $context.Tag)) {
-        return
+    if (-not $jsonOutput) {
+        Write-Host "Codex container context" -ForegroundColor Cyan
+        Write-Host "  Image:      $Tag" -ForegroundColor DarkGray
+        Write-Host "  Codex home: $($context.CodexHome)" -ForegroundColor DarkGray
+        Write-Host "  Workspace:  $($context.WorkspacePath)" -ForegroundColor DarkGray
     }
-}
 
-switch ($action) {
+    Add-DefaultSystemPrompt -Action $action -WorkspacePath $context.WorkspacePath
+
+    if ($action -ne 'Install') {
+        if (-not (Ensure-DockerImage -Tag $context.Tag)) {
+            return
+        }
+    }
+
+    if ($Speaker) {
+        if ($action -eq 'Install') {
+            Write-Warning "-Speaker has no effect during -Install."
+        } else {
+            $speakerConfig = Start-SpeakerService -Context $context -Port $SpeakerPort
+            $context.RunArgs += @('-v', ("$($speakerConfig.VoiceOutbox):$($speakerConfig.ContainerOutbox)"))
+            $context.RunArgs += @('-e', "VOICE_SPEAKER_URL=$($speakerConfig.SpeakerUrl)")
+            $context.RunArgs += @('-e', "VOICE_OUTBOX_CONTAINER_PATH=$($speakerConfig.ContainerOutbox)")
+            if (-not $jsonOutput) {
+                Write-Host ("  Speaker:    $($speakerConfig.SpeakerUrl) (outbox: $($speakerConfig.VoiceOutbox))") -ForegroundColor DarkGray
+            }
+        }
+    }
+
+    # Check environment for actions that will run containers
+    if ($action -in @('Shell', 'Exec', 'Serve', 'Monitor', 'Run')) {
+        if (-not (Test-CodexEnvironment -Context $context)) {
+            Write-Host "`nFix the above issues before proceeding." -ForegroundColor Red
+            Write-Host "Hint: Ensure Docker is running and ANTHROPIC_API_KEY is set" -ForegroundColor Yellow
+            return
+        }
+    }
+
+    switch ($action) {
     'Install' {
         Invoke-DockerBuild -Context $context -PushImage:$Push
         Ensure-CodexCli -Context $context -Force
@@ -647,8 +1717,70 @@ switch ($action) {
         Ensure-CodexAuthentication -Context $context
         Invoke-CodexServe -Context $context -Port $GatewayPort -BindHost $GatewayHost -TimeoutMs $GatewayTimeoutMs -DefaultModel $GatewayDefaultModel -ExtraArgs $GatewayExtraArgs
     }
+    'Monitor' {
+        $context.NewSession = $NewSession
+        Ensure-CodexAuthentication -Context $context -Silent:($Json -or $JsonE)
+        Invoke-CodexMonitor -Context $context -WatchPath $WatchPath -PromptFile $MonitorPrompt -JsonOutput:($Json -or $JsonE) -CodexArgs $CodexArgs -UseWatchdog:$UseWatchdog
+    }
+    'ListSessions' {
+        Show-RecentSessions -Context $context -Limit 10
+    }
     default { # Run
         Ensure-CodexAuthentication -Context $context -Silent:($Json -or $JsonE)
-        Invoke-CodexRun -Context $context -Arguments $CodexArgs -Silent:($Json -or $JsonE)
+
+        # Handle SessionId parameter - resolve partial matches
+        $resolvedSessionId = $null
+        if ($SessionId) {
+            $sessionsDir = Join-Path $context.CodexHome ".codex/sessions"
+            if (Test-Path $sessionsDir) {
+                $allSessions = Get-ChildItem -Path $sessionsDir -Recurse -Filter "rollout-*.jsonl" -File -ErrorAction SilentlyContinue
+                $matchedSessions = @()
+                foreach ($file in $allSessions) {
+                    if ($file.Name -match 'rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$') {
+                        $fullId = $Matches[1]
+                        if ($fullId -like "*$SessionId") {
+                            $matchedSessions += $fullId
+                        }
+                    }
+                }
+
+                if ($matchedSessions.Count -eq 0) {
+                    Write-Host "Error: No session found matching '$SessionId'" -ForegroundColor Red
+                    return
+                } elseif ($matchedSessions.Count -gt 1) {
+                    Write-Host "Error: Multiple sessions match '$SessionId':" -ForegroundColor Red
+                    foreach ($m in $matchedSessions) {
+                        Write-Host "  $m" -ForegroundColor Yellow
+                    }
+                    return
+                } else {
+                    $resolvedSessionId = $matchedSessions[0]
+                    if (-not ($Json -or $JsonE)) {
+                        Write-Host "Resuming session: $resolvedSessionId" -ForegroundColor Cyan
+                    }
+                }
+            }
+        }
+
+        if (-not ($Json -or $JsonE) -and -not $SessionId) {
+            Show-RecentSessions -Context $context -Limit 5
+        }
+
+        # Build arguments - add session ID if provided
+        $runArgs = @()
+        if ($resolvedSessionId) {
+            $runArgs = @('resume', $resolvedSessionId)
+        }
+        if ($CodexArgs) {
+            $runArgs += $CodexArgs
+        }
+
+        Invoke-CodexRun -Context $context -Arguments $runArgs -Silent:($Json -or $JsonE)
+    }
+}
+}
+finally {
+    if ($speakerConfig) {
+        Stop-SpeakerService -Config $speakerConfig
     }
 }

@@ -42,7 +42,9 @@ mcp = FastMCP("serpapi-search")
 SERPAPI_API_URL = "https://serpapi.com/search.json"
 SERPAPI_ENGINE = os.environ.get("SERPAPI_ENGINE", "google").strip() or "google"
 WRAITH_ENV_FILE = os.path.join(os.getcwd(), ".wraithenv")
-REMOTE_WRAITH = os.environ.get("GNOSIS_CRAWL_BASE_URL", "https://wraith.nuts.services").strip()
+# Default to local gnosis-crawl service on the codex network.
+# Local deployments should listen on 8080 inside codex-container.
+REMOTE_WRAITH = os.environ.get("GNOSIS_CRAWL_BASE_URL", "http://gnosis-crawl:8080").strip()
 SERPAPI_ENV_FILE = os.path.join(os.getcwd(), ".serpapi.env")
 
 

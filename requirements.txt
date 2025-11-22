@@ -1,0 +1,31 @@
+# Core MCP runtime
+aiohttp
+anthropic
+fastmcp
+tomlkit
+requests
+
+# Google APIs
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+
+# BAML and supporting libs
+baml-py
+pydantic
+
+# Audio / transcription
+faster-whisper
+elevenlabs
+
+# Google GenAI SDK (provides `google.genai`)
+google-genai
+
+# Dog bark detection (YAMNet-based MCP)
+tensorflow
+librosa
+numpy
+
+# File watching utilities
+watchdog
