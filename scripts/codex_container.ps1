@@ -425,7 +425,8 @@ function Start-SpeakerService {
         "--port=$Port",
         "--outbox=$($paths.VoiceOutbox)",
         "--log=$($paths.LogPath)",
-        "--bind=$bindAddress"
+        "--bind=$bindAddress",
+        "--startup-test"
     )
     if ($env:SPEAKER_EXTRA_ARGS) {
         $argumentList += $env:SPEAKER_EXTRA_ARGS.Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries)

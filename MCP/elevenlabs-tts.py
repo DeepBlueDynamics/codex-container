@@ -103,28 +103,18 @@ def _get_client():
     return ElevenLabs(api_key=config["api_key"])
 
 
-def _default_output_path(requested_path: Optional[str]) -> tuple[str, bool]:
+def _default_output_path(requested_path: Optional[str]) -> tuple[str, bool, str]:
     """Resolve the path where audio should be written."""
 
     if requested_path:
-        return requested_path, False
+        directory = os.path.dirname(os.path.realpath(requested_path)) or os.getcwd()
+        return requested_path, False, directory
 
-    outbox = os.environ.get("VOICE_OUTBOX_CONTAINER_PATH")
-    if outbox:
-        outbox = os.path.realpath(outbox)
-        os.makedirs(outbox, exist_ok=True)
-        filename = f"elevenlabs_{int(time.time())}.mp3"
-        return os.path.join(outbox, filename), False
-
-    tmp_file = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".mp3",
-        prefix="elevenlabs_",
-        dir="/workspace"
-    )
-    tmp_name = tmp_file.name
-    tmp_file.close()
-    return tmp_name, True
+    outbox = os.environ.get("VOICE_OUTBOX_CONTAINER_PATH") or os.path.join(os.getcwd(), "voice-outbox")
+    outbox = os.path.realpath(outbox)
+    os.makedirs(outbox, exist_ok=True)
+    filename = f"elevenlabs_{int(time.time())}.mp3"
+    return os.path.join(outbox, filename), False, outbox
 
 
 @mcp.tool()
@@ -318,7 +308,7 @@ async def elevenlabs_text_to_speech(
         audio_data = b"".join(audio_generator)
 
         # Always write audio to disk so callers can fetch it without inline blobs
-        saved_path, created_temp_file = _default_output_path(output_path)
+        saved_path, created_temp_file, outbox_root = _default_output_path(output_path)
 
         with open(saved_path, "wb") as f:
             f.write(audio_data)
@@ -332,18 +322,16 @@ async def elevenlabs_text_to_speech(
         }
 
         relative_path: Optional[str] = None
-        outbox_root = os.environ.get("VOICE_OUTBOX_CONTAINER_PATH")
-        if outbox_root:
-            try:
-                base_real = os.path.realpath(outbox_root)
-                saved_real = os.path.realpath(saved_path)
-                if os.path.commonpath([saved_real, base_real]) == base_real:
-                    relative_path = os.path.relpath(saved_real, base_real)
-            except Exception:  # pragma: no cover - defensive
-                relative_path = None
+        try:
+            base_real = os.path.realpath(outbox_root)
+            saved_real = os.path.realpath(saved_path)
+            relative_path = os.path.relpath(saved_real, base_real)
+        except Exception:
+            relative_path = None
 
         if relative_path:
-            response["relative_path"] = relative_path
+            response["relative_path"] = os.path.split(relative_path)[-1]
+            response["filename"] = response["relative_path"]
 
         if include_audio_base64:
             response["audio_base64"] = base64.b64encode(audio_data).decode('utf-8')

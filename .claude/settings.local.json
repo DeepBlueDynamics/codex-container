@@ -1,7 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(find MCP -maxdepth 1 -name \"*.py\" -type f ! -name \"_*.py\" ! -name \"*_pre_patch_*.py\" ! -name \"*_2025*.py\" -exec sh -c 'count=$(grep -c \"\"\"\"@mcp\\.tool()\"\"\"\" \"\"\"\"$1\"\"\"\"); echo \"\"\"\"$(basename \"\"\"\"$1\"\"\"\"): $count\"\"\"\"' _ {})"
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []

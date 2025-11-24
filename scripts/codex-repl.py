@@ -140,6 +140,16 @@ def main():
                     continue
                 result = post_completion(base, remainder, current_timeout_ms, session_id=current_session)
                 print(pretty(result))
+                gateway_session = result.get("gateway_session_id") or result.get("session_id")
+                if gateway_session:
+                    current_session = gateway_session
+                    print(f"→ gateway_session_id: {gateway_session}")
+                model_info = result.get("model")
+                usage_info = result.get("usage")
+                if model_info:
+                    print(f"→ model: {model_info}")
+                if usage_info is not None:
+                    print(f"→ usage: {usage_info}")
             elif cmd == "list":
                 result = get_sessions(base)
                 print(pretty(result))
@@ -151,6 +161,16 @@ def main():
                 include_events = flag.strip().lower() == "events"
                 result = get_session_detail(base, session_id, include_events=include_events)
                 print(pretty(result))
+                runs = result.get("runs") or []
+                for run in runs:
+                    usage = run.get("usage")
+                    if usage:
+                        print(
+                            f"→ run {run['run_id']} usage: "
+                            f"{usage.get('input_tokens')} in / "
+                            f"{usage.get('output_tokens')} out "
+                            f"(total {usage.get('total_tokens')})"
+                        )
             elif cmd == "search":
                 if not remainder:
                     print("Usage: search <session-id> <phrase> [--f]")
