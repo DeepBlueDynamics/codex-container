@@ -28,13 +28,33 @@ def _default_outbox() -> str:
     return os.environ.get("VOICE_OUTBOX_CONTAINER_PATH", "/workspace/voice-outbox")
 
 
+def _default_timeout() -> int:
+    # Allow longer host responses; overridable via VOICE_SPEAKER_TIMEOUT (seconds).
+    try:
+        return int(os.environ.get("VOICE_SPEAKER_TIMEOUT", "30"))
+    except ValueError:
+        return 30
+
+
 def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
     req = urlrequest.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
-    with urlrequest.urlopen(req, timeout=5) as resp:
+    with urlrequest.urlopen(req, timeout=_default_timeout()) as resp:
         resp_body = resp.read().decode("utf-8")
         status = resp.status
     return {"status": str(status), "body": resp_body}
+
+
+def _get_status() -> Dict[str, Any]:
+    """Best-effort fetch of playback status."""
+    url = _default_url().replace("/play", "/status")
+    try:
+        with urlrequest.urlopen(url, timeout=_default_timeout()) as resp:
+            resp_body = resp.read().decode("utf-8")
+            status = resp.status
+        return {"status": str(status), "body": resp_body}
+    except Exception as exc:  # pylint: disable=broad-except
+        return {"status": "error", "error": str(exc)}
 
 
 def _format_response(success: bool, **kwargs: Any) -> Dict[str, Any]:
@@ -65,11 +85,24 @@ async def speaker_play(relative_path: str) -> Dict[str, Any]:
     try:
         os.makedirs(outbox, exist_ok=True)
         rel = relative_path.lstrip("/\\")
+        print(f"[speaker-bridge] requesting playback for {rel}", file=sys.stderr)
         result = _post_json(_default_url(), {"relative_path": rel})
         result["path"] = os.path.join(outbox, rel)
         return _format_response(True, **result)
     except Exception as exc:  # pylint: disable=broad-except
         print(f"[speaker-bridge] playback failed: {exc}", file=sys.stderr)
+        return _format_response(False, error=str(exc))
+
+
+@mcp.tool()
+async def speaker_status() -> Dict[str, Any]:
+    """Return best-effort playback status from the speaker service."""
+
+    try:
+        status = _get_status()
+        return _format_response(True, **status)
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"[speaker-bridge] status failed: {exc}", file=sys.stderr)
         return _format_response(False, error=str(exc))
 
 

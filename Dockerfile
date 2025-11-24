@@ -48,6 +48,15 @@ RUN apt-get update \
     zsh \
   && rm -rf /var/lib/apt/lists/*
 
+ENV RUSTUP_HOME=/opt/codex-home/.rustup
+ENV CARGO_HOME=/opt/codex-home/.cargo
+RUN mkdir -p "$RUSTUP_HOME" "$CARGO_HOME" \
+  && chown -R root:root "$RUSTUP_HOME" "$CARGO_HOME"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+  && . "$CARGO_HOME/env" \
+  && rustup default stable
+ENV PATH="$CARGO_HOME/bin:${PATH}"
+
 # Ensure default node user has access to /usr/local/share
 RUN mkdir -p /usr/local/share/npm-global \
   && chown -R node:node /usr/local/share
@@ -56,7 +65,7 @@ RUN mkdir -p /usr/local/share/npm-global \
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH="${PATH}:/usr/local/share/npm-global/bin"
 
-ARG CODEX_CLI_VERSION=0.61.0
+ARG CODEX_CLI_VERSION=0.63.0
 ARG BAML_CLI_VERSION=0.211.2
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} \
   && npm cache clean --force \

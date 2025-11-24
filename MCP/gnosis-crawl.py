@@ -341,7 +341,7 @@ async def crawl_batch(
     endpoint = f"{base}/api/markdown"
 
     payload: Dict[str, Any] = {
-        "urls": urls,
+        "url": urls,
         "javascript_enabled": bool(javascript_enabled),
         "screenshot_mode": "full" if take_screenshot else None,
         "async": bool(async_mode),
@@ -440,4 +440,3 @@ async def raw_html(
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")
-

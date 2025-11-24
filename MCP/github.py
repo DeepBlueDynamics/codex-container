@@ -9,6 +9,7 @@ pagination helpers, and a broader set of operations.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 import aiohttp
@@ -17,13 +18,38 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("github")
 
+CONFIG_FILE = Path(__file__).resolve().parent.parent / ".github-discussion.env"
+DISCUSSIONS_TOKEN_KEY = "GITHUB_DISCUSSIONS_TOKEN"
+
+
+def _read_discussion_env() -> Dict[str, str]:
+    if not CONFIG_FILE.exists():
+        return {}
+    values: Dict[str, str] = {}
+    try:
+        for raw in CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip().strip('"').strip("'")
+    except Exception:
+        return {}
+    return values
+
 
 def _get_token() -> Optional[str]:
     """Get GitHub token from environment.
 
     Checks common variables in order: GITHUB_TOKEN, GH_TOKEN.
+    Falls back to the saved .github-discussion.env token so both
+    GitHub MCP tools share credentials.
     """
-    return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        return token
+    env_values = _read_discussion_env()
+    return env_values.get(DISCUSSIONS_TOKEN_KEY)
 
 
 def _get_api_base() -> str:

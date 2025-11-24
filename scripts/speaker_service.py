@@ -51,80 +51,77 @@ class AudioPlaybackError(RuntimeError):
 class AudioPlayer:
     """Simple best-effort audio playback wrapper."""
 
+    BACKEND_ORDER = ["ffplay", "cvlc", "vlc", "afplay", "powershell"]
+
     def __init__(self, logger: logging.Logger) -> None:
         self.logger = logger
-        self.ffplay = shutil.which("ffplay")
-        self.afplay = shutil.which("afplay")
-        self.cvlc = shutil.which("cvlc") or shutil.which("vlc")
-        self.powershell = shutil.which("powershell") or shutil.which("pwsh")
-        self.force_backend = os.environ.get("SPEAKER_FORCE_BACKEND")
+        try:
+            self.volume = float(os.environ.get("SPEAKER_VOLUME", "0.5"))
+        except ValueError:
+            self.volume = 0.5
 
+        self.backends = {
+            "ffplay": shutil.which("ffplay"),
+            "afplay": shutil.which("afplay"),
+            "cvlc": shutil.which("cvlc") or shutil.which("vlc"),
+            "vlc": shutil.which("vlc") or shutil.which("cvlc"),
+            "powershell": shutil.which("powershell") or shutil.which("pwsh"),
+        }
+        self.force_backend = os.environ.get("SPEAKER_FORCE_BACKEND")
         if self.force_backend:
             self.logger.info("Forcing backend: %s", self.force_backend)
             self._reorder_backends()
 
     def _reorder_backends(self) -> None:
-        backends = {
-            "ffplay": ("ffplay",),
-            "afplay": ("afplay",),
-            "vlc": ("cvlc", "vlc"),
-            "powershell": ("powershell", "pwsh"),
-        }
         desired = self.force_backend.lower()
-        if desired in backends:
-            for key, names in backends.items():
-                if key == "ffplay":
-                    self.ffplay = None
-                elif key == "afplay":
-                    self.afplay = None
-                elif key == "vlc":
-                    self.cvlc = None
-                elif key == "powershell":
-                    self.powershell = None
-            for name in backends[desired]:
-                found = shutil.which(name)
-                if desired == "ffplay":
-                    self.ffplay = found
-                elif desired == "afplay":
-                    self.afplay = found
-                elif desired == "vlc":
-                    self.cvlc = found
-                elif desired == "powershell":
-                    self.powershell = found
-        else:
+        if desired not in self.backends:
             self.logger.warning("Unknown SPEAKER_FORCE_BACKEND=%s", self.force_backend)
+            return
+        self.backends = {desired: self.backends[desired]}
 
     def play(self, path: pathlib.Path) -> None:
         path = path.resolve()
         self.logger.info("Playing %s", path)
-        if self.ffplay:
-            if self._run([self.ffplay, "-autoexit", "-nodisp", "-loglevel", "error", str(path)]):
-                self.logger.info("Using ffplay backend")
+        for backend in self.BACKEND_ORDER:
+            binary = self.backends.get(backend)
+            if not binary:
+                continue
+            cmd = self._build_command(backend, binary, path)
+            self.logger.info("Attempting backend %s -> %s", backend, cmd)
+            if self._run(cmd):
+                self.logger.info("Using %s backend", backend)
                 return
-        if self.afplay:
-            if self._run([self.afplay, str(path)]):
-                self.logger.info("Using afplay backend")
-                return
-        if self.cvlc:
-            if self._run([self.cvlc, "--play-and-exit", "--no-video", str(path)]):
-                self.logger.info("Using VLC backend")
-                return
-        if os.name == "nt" and self.powershell:
+        raise AudioPlaybackError("No audio backend succeeded; install ffmpeg/ffplay for best results.")
+
+    def _build_command(self, backend: str, binary: str, path: pathlib.Path) -> list[str]:
+        if backend == "ffplay":
+            return [
+                binary,
+                "-autoexit",
+                "-nodisp",
+                "-loglevel",
+                "error",
+                "-af",
+                f"volume={self.volume}",
+                str(path),
+            ]
+        if backend in {"cvlc", "vlc"}:
+            return [binary, "--play-and-exit", "--no-video", "--gain", f"{self.volume}", str(path)]
+        if backend == "afplay":
+            return [binary, "-v", f"{self.volume}", str(path)]
+        if backend == "powershell":
             ps_script = (
                 "Add-Type -AssemblyName presentationCore; "
                 "$player = New-Object System.Windows.Media.MediaPlayer; "
-                f"$player.Open([Uri]'file:///{path.as_posix()}'); "
-                "$player.Volume = 1.0; "
+                f"$player.Open([Uri]'file:///{path.as_posix()}');"
+                f"$player.Volume = {self.volume}; "
                 "$player.Play(); "
                 "while ($player.NaturalDuration.HasTimeSpan -eq $false) { Start-Sleep -Milliseconds 100 }; "
                 "while ($player.Position -lt $player.NaturalDuration.TimeSpan) { Start-Sleep -Milliseconds 200 }; "
                 "$player.Stop();"
             )
-            if self._run([self.powershell, "-NoProfile", "-Command", ps_script]):
-                self.logger.info("Using PowerShell MediaPlayer backend")
-                return
-
-        raise AudioPlaybackError("No audio backend succeeded; install ffmpeg/ffplay for best results.")
+            return [binary, "-NoProfile", "-Command", ps_script]
+        return [binary, str(path)]
 
     def _run(self, cmd: list[str]) -> bool:
         try:
@@ -220,6 +217,8 @@ class SpeakerRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # type: ignore[override]
         if self.path == "/health":
             self._send_json({"status": "ok"})
+        elif self.path.startswith("/status"):
+            self._handle_status()
         else:
             self.send_error(404, "Not found")
 
@@ -240,6 +239,18 @@ class SpeakerRequestHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404, "Unknown endpoint")
 
+    def _handle_status(self) -> None:
+        """Return basic playback status (best-effort)."""
+        state = getattr(self.server, "play_state", {})  # type: ignore[attr-defined]
+        payload = {
+            "status": "ok",
+            "last_path": state.get("last_path"),
+            "last_started": state.get("last_started"),
+            "last_finished": state.get("last_finished"),
+            "in_progress": bool(state.get("in_progress")),
+        }
+        self._send_json(payload)
+
     def _handle_play(self, payload: bytes, content_type: str) -> None:
         delete_after = False
         target_path: Optional[pathlib.Path] = None
@@ -253,7 +264,9 @@ class SpeakerRequestHandler(BaseHTTPRequestHandler):
             if not target_path:
                 raise ValueError("Unable to determine target audio file")
 
+            self._mark_start(target_path)
             self.server.player.play(target_path)  # type: ignore[attr-defined]
+            self._mark_end(target_path)
 
             if delete_after and target_path.exists():
                 target_path.unlink()
@@ -261,6 +274,7 @@ class SpeakerRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"success": True, "path": str(target_path)})
         except Exception as exc:  # pylint: disable=broad-except
             LOGGER.exception("Playback failed: %s", exc)
+            self._mark_end(target_path, failed=True)
             self.send_error(500, explain=str(exc))
 
     def _handle_browser(self, payload: bytes, content_type: str) -> None:
@@ -324,6 +338,30 @@ class SpeakerRequestHandler(BaseHTTPRequestHandler):
 
         return destination, True
 
+    def _mark_start(self, path: pathlib.Path) -> None:
+        state = getattr(self.server, "play_state", {})  # type: ignore[attr-defined]
+        state.update(
+            {
+                "last_path": str(path),
+                "last_started": time.time(),
+                "last_finished": None,
+                "in_progress": True,
+            }
+        )
+        self.server.play_state = state  # type: ignore[attr-defined]
+
+    def _mark_end(self, path: Optional[pathlib.Path], failed: bool = False) -> None:
+        state = getattr(self.server, "play_state", {})  # type: ignore[attr-defined]
+        state.update(
+            {
+                "last_path": str(path) if path else state.get("last_path"),
+                "last_finished": time.time(),
+                "in_progress": False,
+                "failed": failed,
+            }
+        )
+        self.server.play_state = state  # type: ignore[attr-defined]
+
     def _ensure_within_outbox(self, path: pathlib.Path) -> pathlib.Path:
         path = path.resolve()
         outbox = self.server.outbox.resolve()  # type: ignore[attr-defined]
@@ -343,16 +381,21 @@ class SpeakerRequestHandler(BaseHTTPRequestHandler):
         LOGGER.info("Completed %s request", self.path)
 
 
-def _write_test_tone(target: pathlib.Path, duration: float = 0.5, freq: float = 660.0, sample_rate: int = 44100) -> None:
+def _write_test_tone(target: pathlib.Path, duration: float = 0.5, sample_rate: int = 44100) -> None:
+    """Write a short, softer burst of white noise for a clear sanity check."""
     frame_count = int(sample_rate * duration)
+    rng = os.urandom
     with wave.open(str(target), "w") as wav_file:
         wav_file.setnchannels(1)
         wav_file.setsampwidth(2)
         wav_file.setframerate(sample_rate)
         frames = bytearray()
-        for i in range(frame_count):
-            value = int(32767 * math.sin(2 * math.pi * freq * (i / sample_rate)))
-            frames.extend(struct.pack("<h", value))
+        # Softer noise: scale down amplitude
+        for _ in range(frame_count):
+            sample_bytes = rng(2)
+            sample = struct.unpack("<h", sample_bytes)[0]
+            sample = int(sample * 0.2)  # reduce volume to 20%
+            frames.extend(struct.pack("<h", sample))
         wav_file.writeframes(frames)
 
 

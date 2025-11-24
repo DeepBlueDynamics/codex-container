@@ -122,11 +122,11 @@ while [[ $# -gt 0 ]]; do
       PUSH_IMAGE=true
       shift
       ;;
-    --danger)
+    --danger|--dangerously-bypass-approvals-and-sandbox)
       DANGER_MODE=1
       shift
       ;;
-    --safe|--no-danger)
+    --safe|--no-danger|--no-dangerously-bypass-approvals-and-sandbox)
       DANGER_MODE=0
       shift
       ;;

@@ -383,6 +383,12 @@ class SessionStore {
       if (payload.content) {
         run.content_preview = String(payload.content).slice(0, 400);
       }
+      if (payload.usage) {
+        run.usage = payload.usage;
+      }
+      if (payload.model) {
+        run.model = payload.model;
+      }
     }
     if (payload.codexSessionId) {
       meta.codex_session_id = payload.codexSessionId;
@@ -953,6 +959,8 @@ function runCodex(prompt, model, options = {}) {
           content: parsed.content,
           tool_calls: parsed.tool_calls,
           events: parsed.events,
+          usage: parsed.usage || null,
+          model,
           raw: stdout,
         });
       } catch (error) {
@@ -973,6 +981,7 @@ function parseCodexOutput(stdout) {
     .filter((line) => line.length > 0);
   const events = [];
   let content = '';
+  let usage = null;
   const toolCalls = [];
   for (const line of lines) {
     let parsed;
@@ -1007,9 +1016,15 @@ function parseCodexOutput(stdout) {
         default:
           break;
       }
+      if (msg.usage && typeof msg.usage === 'object') {
+        usage = msg.usage;
+      }
+    }
+    if (parsed.usage && typeof parsed.usage === 'object') {
+      usage = parsed.usage;
     }
   }
-  return { content, tool_calls: toolCalls, events };
+  return { content, tool_calls: toolCalls, events, usage };
 }
 
 async function executeSessionRun({ payload, messages, systemPrompt, sessionId, resumeSessionId }) {
@@ -1052,6 +1067,8 @@ async function executeSessionRun({ payload, messages, systemPrompt, sessionId, r
       codexSessionId,
       content: result.content,
       events: result.events,
+      usage: result.usage || null,
+      model: runOptions.model || null,
     });
     return {
       session_id: resolvedSessionId,
@@ -1060,6 +1077,8 @@ async function executeSessionRun({ payload, messages, systemPrompt, sessionId, r
       tool_calls: result.tool_calls,
       events: result.events,
       status: 'completed',
+      usage: result.usage || null,
+      model: runOptions.model || null,
     };
   } catch (error) {
     const status = error.message && error.message.includes('timed out') ? 'timeout' : 'error';
@@ -1096,6 +1115,8 @@ async function runPromptWithWorker({ payload, messages, systemPrompt, sessionId 
     content: result.content,
     tool_calls: result.tool_calls,
     events: result.events,
+    usage: result.usage || null,
+    model: result.model || null,
   };
 }
 
@@ -1768,6 +1789,8 @@ async function handleCompletion(req, res) {
       content: result.content,
       tool_calls: result.tool_calls,
       events: result.events,
+      usage: result.usage || null,
+      model: result.model || null,
       session_url: `/sessions/${result.codex_session_id || result.session_id}`,
     });
   } catch (error) {
@@ -1973,108 +1996,114 @@ async function handleSessionNudge(req, res, sessionIdentifier) {
   }
 }
 
-let triggerSchedulerManager = null;
-if (!DISABLE_TRIGGER_SCHEDULER) {
-  triggerSchedulerManager = new TriggerSchedulerManager({
-    defaultFile: DEFAULT_TRIGGER_FILE,
-    extraFiles: EXTRA_TRIGGER_FILES,
-    includeSessionTriggers: true,
-    dispatchPrompt: async (options) => runPromptWithWorker(options),
-  });
-  triggerSchedulerManager.start().catch((error) => {
-    console.error('[codex-gateway] failed to start trigger schedulers:', error.message);
-  });
-} else {
-  console.log('[codex-gateway] trigger scheduler disabled by configuration');
-}
+if (require.main === module) {
+  let triggerSchedulerManager = null;
+  if (!DISABLE_TRIGGER_SCHEDULER) {
+    triggerSchedulerManager = new TriggerSchedulerManager({
+      defaultFile: DEFAULT_TRIGGER_FILE,
+      extraFiles: EXTRA_TRIGGER_FILES,
+      includeSessionTriggers: true,
+      dispatchPrompt: async (options) => runPromptWithWorker(options),
+    });
+    triggerSchedulerManager.start().catch((error) => {
+      console.error('[codex-gateway] failed to start trigger schedulers:', error.message);
+    });
+  } else {
+    console.log('[codex-gateway] trigger scheduler disabled by configuration');
+  }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const normalizedPath = url.pathname.endsWith('/') && url.pathname.length > 1
-    ? url.pathname.slice(0, -1)
-    : url.pathname;
-  const method = req.method.toUpperCase();
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const normalizedPath = url.pathname.endsWith('/') && url.pathname.length > 1
+      ? url.pathname.slice(0, -1)
+      : url.pathname;
+    const method = req.method.toUpperCase();
 
-  try {
-    if ((method === 'GET' || method === 'HEAD') && normalizedPath === '/health') {
-      sendJson(res, 200, { status: 'ok' });
-      return;
-    }
+    try {
+      if ((method === 'GET' || method === 'HEAD') && normalizedPath === '/health') {
+        sendJson(res, 200, { status: 'ok' });
+        return;
+      }
 
-    if ((method === 'GET' || method === 'HEAD') && (normalizedPath === '/' || normalizedPath === '')) {
-      sendJson(res, 200, {
-        status: 'codex-gateway',
-        endpoints: {
-          health: '/health',
-          completion: { path: '/completion', method: 'POST' },
-          sessions: {
-            list: { path: '/sessions', method: 'GET' },
-            detail: { path: '/sessions/:id', method: 'GET' },
-            search: { path: '/sessions/:id/search', method: 'GET' },
-            prompt: { path: '/sessions/:id/prompt', method: 'POST' },
-            nudge: { path: '/sessions/:id/nudge', method: 'POST' },
+      if ((method === 'GET' || method === 'HEAD') && (normalizedPath === '/' || normalizedPath === '')) {
+        sendJson(res, 200, {
+          status: 'codex-gateway',
+          endpoints: {
+            health: '/health',
+            completion: { path: '/completion', method: 'POST' },
+            sessions: {
+              list: { path: '/sessions', method: 'GET' },
+              detail: { path: '/sessions/:id', method: 'GET' },
+              search: { path: '/sessions/:id/search', method: 'GET' },
+              prompt: { path: '/sessions/:id/prompt', method: 'POST' },
+              nudge: { path: '/sessions/:id/nudge', method: 'POST' },
+            },
           },
-        },
-      });
-      return;
-    }
-
-    const segments = normalizedPath.split('/').filter(Boolean);
-    if (segments.length === 0 && method === 'POST' && normalizedPath === '/completion') {
-      await handleCompletion(req, res);
-      return;
-    }
-
-    if (segments.length === 1 && segments[0] === 'completion' && method === 'POST') {
-      await handleCompletion(req, res);
-      return;
-    }
-
-    if (segments.length === 1 && segments[0] === 'sessions' && method === 'GET') {
-      await handleSessionList(req, res, url);
-      return;
-    }
-
-    if (segments.length >= 2 && segments[0] === 'sessions') {
-      const sessionId = decodeURIComponent(segments[1]);
-      if (segments.length === 2 && method === 'GET') {
-        await handleSessionDetail(req, res, sessionId, url);
+        });
         return;
       }
-      if (segments.length === 3 && segments[2] === 'search' && method === 'GET') {
-        await handleSessionSearch(req, res, sessionId, url);
+
+      const segments = normalizedPath.split('/').filter(Boolean);
+      if (segments.length === 0 && method === 'POST' && normalizedPath === '/completion') {
+        await handleCompletion(req, res);
         return;
       }
-      if (segments.length === 3 && segments[2] === 'prompt' && method === 'POST') {
-        await handleSessionPrompt(req, res, sessionId);
+
+      if (segments.length === 1 && segments[0] === 'completion' && method === 'POST') {
+        await handleCompletion(req, res);
         return;
       }
-      if (segments.length === 3 && segments[2] === 'nudge' && method === 'POST') {
-        await handleSessionNudge(req, res, sessionId);
+
+      if (segments.length === 1 && segments[0] === 'sessions' && method === 'GET') {
+        await handleSessionList(req, res, url);
         return;
       }
+
+      if (segments.length >= 2 && segments[0] === 'sessions') {
+        const sessionId = decodeURIComponent(segments[1]);
+        if (segments.length === 2 && method === 'GET') {
+          await handleSessionDetail(req, res, sessionId, url);
+          return;
+        }
+        if (segments.length === 3 && segments[2] === 'search' && method === 'GET') {
+          await handleSessionSearch(req, res, sessionId, url);
+          return;
+        }
+        if (segments.length === 3 && segments[2] === 'prompt' && method === 'POST') {
+          await handleSessionPrompt(req, res, sessionId);
+          return;
+        }
+        if (segments.length === 3 && segments[2] === 'nudge' && method === 'POST') {
+          await handleSessionNudge(req, res, sessionId);
+          return;
+        }
+      }
+
+      sendError(res, 404, 'Not Found');
+    } catch (error) {
+      console.error('[codex-gateway] unhandled error:', error);
+      sendError(res, 500, 'Internal Server Error');
     }
-
-    sendError(res, 404, 'Not Found');
-  } catch (error) {
-    console.error('[codex-gateway] unhandled error:', error);
-    sendError(res, 500, 'Internal Server Error');
-  }
-});
-
-server.listen(DEFAULT_PORT, DEFAULT_HOST, () => {
-  console.log(`[codex-gateway] listening on http://${DEFAULT_HOST}:${DEFAULT_PORT}`);
-});
-
-const shutdown = () => {
-  console.log('[codex-gateway] shutting down');
-  if (triggerSchedulerManager) {
-    triggerSchedulerManager.stop();
-  }
-  server.close(() => {
-    process.exit(0);
   });
-};
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+  server.listen(DEFAULT_PORT, DEFAULT_HOST, () => {
+    console.log(`[codex-gateway] listening on http://${DEFAULT_HOST}:${DEFAULT_PORT}`);
+  });
+
+  const shutdown = () => {
+    console.log('[codex-gateway] shutting down');
+    if (triggerSchedulerManager) {
+      triggerSchedulerManager.stop();
+    }
+    server.close(() => {
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+} else {
+  module.exports = {
+    parseCodexOutput,
+  };
+}

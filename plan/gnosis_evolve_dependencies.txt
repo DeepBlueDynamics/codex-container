@@ -1,0 +1,11 @@
+Reference list for when I land inside `codex-container` and lose direct access to the `gnosis-evolve` tree:
+
+1. Emoji extraction/translation: rely on `../gnosis-evolve/tools/semantic_storage_clean.py` (see the `content_type == 'emojis'` branch around lines 156-205) to pull emoji sequences out of any crying-report text before converting them into human-readable descriptions.
+
+2. Fuzzy search/edit framework: reuse `../gnosis-evolve/tools/file_diff_editor.py` (the `find_fuzzy_matches` helpers near lines 487-600 and the `search_in_file_fuzzy` / `fuzzy_replace_in_file` flows around lines 1500-1898) plus the companion `file_diff_writer.py` and `toolkami_enhanced_diff.py` utilities if the plan needs softer matching or direct edits.
+
+3. Character/Iching/random generation: point to `../gnosis-evolve/tools/iching.py` (especially the `iching_character_generator` entry near line 722) for hexagram-backed personas, `../gnosis-evolve/tools/random_generator.py` (the `iching_casting` and general `random_generator` tools at lines 126 and 229), and `../gnosis-evolve/tools/character_generator.py` (the `evolve_characters` tool and its `save_character_data` helpers around line 1300) if blending existing characters becomes necessary.
+
+4. Storage/endpoints: use `../gnosis-evolve/tools/character_saver.py` and `../gnosis-evolve/tools/character_saver.py` functions (invoked from the above generators) for persistence, plus the `mcp` server scaffolding already configured in those modules.
+
+Keep this file around so that even after I’m moved into `/workspace/codex-container` I can reference exactly which modules and line ranges to consult when I do get back into `gnosis-evolve` (or issue requests to sync code snippets).
