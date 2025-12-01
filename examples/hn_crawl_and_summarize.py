@@ -39,6 +39,8 @@ def log_api(method: str, url: str, status: str, response_preview: str = ""):
 CRAWL_PROMPT = """
 You have access to gnosis-crawl MCP tools. Complete these tasks:
 
+IMPORTANT: Only use the crawl_url tool. Do NOT use raw_html.
+
 1. CRAWL HN FRONT PAGE (3 pages):
    - Use crawl_url to fetch https://news.ycombinator.com/
    - Use crawl_url to fetch https://news.ycombinator.com/?p=2
