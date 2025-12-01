@@ -25,7 +25,7 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("tool-recommender")
 
 # Default model for recommendations
-DEFAULT_MODEL = os.getenv("TOOL_RECOMMENDER_MODEL", "claude-3-5-sonnet-20240620")
+DEFAULT_MODEL = os.getenv("TOOL_RECOMMENDER_MODEL", "claude-sonnet-4-5-20250929")
 
 
 def _get_available_tools() -> List[Dict[str, str]]:
@@ -106,40 +106,22 @@ async def list_anthropic_models() -> Dict[str, object]:
     """
     models = [
         {
-            "id": "claude-3-5-sonnet-20241022",
-            "name": "Claude 3.5 Sonnet (New)",
-            "description": "Most intelligent model, best for complex tasks",
-            "max_tokens": 8192
+            "id": "claude-opus-4-5-20251101",
+            "name": "Claude Opus 4.5",
+            "description": "Most powerful model, best for complex reasoning",
+            "max_tokens": 16384
         },
         {
-            "id": "claude-3-5-sonnet-20240620",
-            "name": "Claude 3.5 Sonnet",
-            "description": "Intelligent model for complex tasks",
-            "max_tokens": 8192
+            "id": "claude-sonnet-4-5-20250929",
+            "name": "Claude Sonnet 4.5",
+            "description": "Best balance of intelligence and speed (recommended)",
+            "max_tokens": 16384
         },
         {
             "id": "claude-3-5-haiku-20241022",
             "name": "Claude 3.5 Haiku",
-            "description": "Fast and efficient model",
+            "description": "Fast and efficient for simple tasks",
             "max_tokens": 8192
-        },
-        {
-            "id": "claude-3-opus-20240229",
-            "name": "Claude 3 Opus",
-            "description": "Most powerful Claude 3 model",
-            "max_tokens": 4096
-        },
-        {
-            "id": "claude-3-sonnet-20240229",
-            "name": "Claude 3 Sonnet",
-            "description": "Balanced intelligence and speed",
-            "max_tokens": 4096
-        },
-        {
-            "id": "claude-3-haiku-20240307",
-            "name": "Claude 3 Haiku",
-            "description": "Fastest Claude 3 model",
-            "max_tokens": 4096
         }
     ]
 
@@ -175,7 +157,7 @@ async def recommend_tool(task: str, model: Optional[str] = None) -> Dict[str, ob
 
     Args:
         task: Description of the task you want to accomplish
-        model: Anthropic model to use (default: from TOOL_RECOMMENDER_MODEL env var or claude-3-5-sonnet-20240620)
+        model: Anthropic model to use (default: from TOOL_RECOMMENDER_MODEL env var or claude-sonnet-4-5-20250929)
 
     Returns:
         Dictionary with recommended tools (can be multiple), reasoning, and confidence.
