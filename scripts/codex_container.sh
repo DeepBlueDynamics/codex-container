@@ -978,6 +978,13 @@ docker_run() {
     fi
     args+=(-e "GH_TOKEN=${GH_TOKEN}")
   fi
+  # Pass SerpAPI key if present
+  if [[ -n "${SERPAPI_API_KEY:-}" ]]; then
+    if [[ $quiet -eq 0 ]]; then
+      echo "Passing SERPAPI_API_KEY to container (${#SERPAPI_API_KEY} chars)" >&2
+    fi
+    args+=(-e "SERPAPI_API_KEY=${SERPAPI_API_KEY}")
+  fi
   if [[ ${#DOCKER_RUN_EXTRA_ARGS[@]} -gt 0 ]]; then
     args+=("${DOCKER_RUN_EXTRA_ARGS[@]}")
   fi

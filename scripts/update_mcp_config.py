@@ -66,12 +66,64 @@ def main(argv: list[str]) -> int:
         table = tomlkit.table()
         table.add("command", python_cmd)
         table.add("args", ["-u", f"/opt/codex-home/mcp/{filename}"])
-        # Pass ANTHROPIC_API_KEY to MCP servers if set in environment
+        
+        # Collect environment variables to pass to MCP servers
+        env_vars = {}
+        
+        # Pass ANTHROPIC_API_KEY if set
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
         if anthropic_key:
+            env_vars["ANTHROPIC_API_KEY"] = anthropic_key
+        
+        # Pass MarketBot environment variables if set
+        marketbot_key = os.environ.get("MARKETBOT_API_KEY")
+        marketbot_team = os.environ.get("MARKETBOT_TEAM_ID")
+        marketbot_url = os.environ.get("MARKETBOT_API_URL")
+        
+        if marketbot_key:
+            env_vars["MARKETBOT_API_KEY"] = marketbot_key
+        if marketbot_team:
+            env_vars["MARKETBOT_TEAM_ID"] = marketbot_team
+        if marketbot_url:
+            env_vars["MARKETBOT_API_URL"] = marketbot_url
+        
+        # Also try to read from .marketbot.env file if env vars aren't set
+        if not marketbot_key or not marketbot_team:
+            marketbot_env_paths = [
+                Path("/workspace/.marketbot.env"),
+                Path("/opt/codex-home/.marketbot.env"),
+                Path.home() / ".marketbot.env",
+            ]
+            
+            # Check session-specific env if CODEX_SESSION_ID is set
+            session_id = os.environ.get("CODEX_SESSION_ID")
+            if session_id:
+                marketbot_env_paths.insert(0, Path(f"/opt/codex-home/sessions/{session_id}/.env"))
+            
+            for env_path in marketbot_env_paths:
+                if env_path.exists() and env_path.is_file():
+                    try:
+                        for line in env_path.read_text(encoding="utf-8").splitlines():
+                            line = line.strip()
+                            if not line or line.startswith("#") or "=" not in line:
+                                continue
+                            key, value = line.split("=", 1)
+                            key = key.strip()
+                            value = value.strip()
+                            if key.startswith("MARKETBOT_") and key not in env_vars:
+                                env_vars[key] = value
+                        if env_vars.get("MARKETBOT_API_KEY") or env_vars.get("MARKETBOT_TEAM_ID"):
+                            break  # Found MarketBot config, stop searching
+                    except Exception:
+                        continue  # Skip invalid files
+        
+        # Add env table if we have any variables
+        if env_vars:
             env_table = tomlkit.table()
-            env_table.add("ANTHROPIC_API_KEY", anthropic_key)
+            for key, value in env_vars.items():
+                env_table.add(key, value)
             table.add("env", env_table)
+        
         mcp_table[name] = table
 
     config_path.write_text(tomlkit.dumps(doc), encoding="utf-8")

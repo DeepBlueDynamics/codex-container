@@ -1,0 +1,18 @@
+codex cli
+
+```
+./scripts/codex-container.sh --install
+./scripts/codex-container.sh 
+./scripts/codex_container.sh --session-id 52775
+
+CODEX_GATEWAY_DEFAULT_MODEL="gpt-5.1-codex-mini" ./scripts/codex_container.sh --serve
+CODEX_GATEWAY_DEFAULT_MODEL="gpt-5.1-codex-mini" CODEX_UNSAFE_ALLOW_NO_SANDBOX="1" ./scripts/codex_container.sh --serve
+```
+
+setup .codex-mcp.config to access tools 
+setup .marketbot.env
+
+
+Gnosis crawl
+docker-compose up -d
+DISABLE_AUTH=true; docker compose up -d

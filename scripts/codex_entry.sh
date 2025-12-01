@@ -213,7 +213,158 @@ ensure_baml_workspace() {
   mkdir -p "${workspace}"
 }
 
+mount_pi_share() {
+  # Optionally mount a Raspberry Pi NFS export into the container.
+  # Controlled via environment variables:
+  #   PI_NFS_DISABLE=1         -> skip mounting
+  #   PI_NFS_SERVER            -> default 192.168.86.37
+  #   PI_NFS_EXPORT            -> default /srv/share
+  #   PI_NFS_MOUNTPOINT        -> default /workspace/pi-share
+
+  if [[ "${PI_NFS_DISABLE:-0}" == "1" ]]; then
+    return
+  fi
+
+  local server="${PI_NFS_SERVER:-192.168.86.37}"
+  local export_path="${PI_NFS_EXPORT:-/srv/share}"
+  local mountpoint="${PI_NFS_MOUNTPOINT:-/workspace/pi-share}"
+
+  mkdir -p "${mountpoint}"
+
+  if command -v mountpoint >/dev/null 2>&1; then
+    if mountpoint -q "${mountpoint}"; then
+      echo "[codex_entry] Pi NFS share already mounted at ${mountpoint}" >&2
+      return
+    fi
+  fi
+
+  if ! command -v mount >/dev/null 2>&1; then
+    echo "[codex_entry] mount command not available; skipping Pi NFS mount" >&2
+    return
+  fi
+
+  # Best-effort mount; failure should not stop Codex from starting.
+  if mount -t nfs "${server}:${export_path}" "${mountpoint}" >/dev/null 2>&1; then
+    echo "[codex_entry] Mounted Pi NFS share ${server}:${export_path} at ${mountpoint}" >&2
+  else
+    echo "[codex_entry] Failed to mount Pi NFS share ${server}:${export_path}; continuing without it" >&2
+  fi
+}
+
+ensure_marketbot_env() {
+  # Ensure .marketbot.env is accessible in the workspace for MCP servers.
+  # Checks multiple locations and copies to /workspace/.marketbot.env if found.
+  
+  local workspace_env="/workspace/.marketbot.env"
+  local candidates=(
+    "/workspace/.marketbot.env"
+    "/opt/codex-home/.marketbot.env"
+    "${HOME}/.marketbot.env"
+    "/opt/codex-home/sessions/.env"
+  )
+  
+  # If workspace env already exists, use it
+  if [[ -f "$workspace_env" ]]; then
+    echo "[codex_entry] Found .marketbot.env at ${workspace_env}" >&2
+    load_marketbot_env "$workspace_env"
+    return 0
+  fi
+  
+  # Check session-specific env if CODEX_SESSION_ID is set
+  local session_id="${CODEX_SESSION_ID:-}"
+  if [[ -n "$session_id" ]]; then
+    local session_env="/opt/codex-home/sessions/${session_id}/.env"
+    if [[ -f "$session_env" ]] && grep -q "MARKETBOT" "$session_env" 2>/dev/null; then
+      echo "[codex_entry] Found MarketBot config in session env: ${session_env}" >&2
+      # Extract MarketBot vars and write to workspace
+      grep "^MARKETBOT" "$session_env" > "$workspace_env" 2>/dev/null && {
+        echo "[codex_entry] Copied MarketBot vars to ${workspace_env}" >&2
+        load_marketbot_env "$workspace_env"
+        return 0
+      }
+    fi
+  fi
+  
+  # Try to find and copy from candidate locations
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "$candidate" ]] && grep -q "MARKETBOT" "$candidate" 2>/dev/null; then
+      cp "$candidate" "$workspace_env" 2>/dev/null && {
+        echo "[codex_entry] Copied .marketbot.env from ${candidate} to ${workspace_env}" >&2
+        load_marketbot_env "$workspace_env"
+        return 0
+      }
+    fi
+  done
+  
+  # If MARKETBOT env vars are set in process environment, write them to file
+  if [[ -n "${MARKETBOT_API_KEY:-}" ]] || [[ -n "${MARKETBOT_TEAM_ID:-}" ]]; then
+    {
+      [[ -n "${MARKETBOT_API_KEY:-}" ]] && echo "MARKETBOT_API_KEY=${MARKETBOT_API_KEY}"
+      [[ -n "${MARKETBOT_TEAM_ID:-}" ]] && echo "MARKETBOT_TEAM_ID=${MARKETBOT_TEAM_ID}"
+      [[ -n "${MARKETBOT_API_URL:-}" ]] && echo "MARKETBOT_API_URL=${MARKETBOT_API_URL}"
+    } > "$workspace_env" 2>/dev/null && {
+      echo "[codex_entry] Created ${workspace_env} from environment variables" >&2
+      load_marketbot_env "$workspace_env"
+      return 0
+    }
+  fi
+  
+  echo "[codex_entry] Warning: .marketbot.env not found; MarketBot tools may not work" >&2
+  return 1
+}
+
+load_marketbot_env() {
+  # Load MarketBot environment variables from a file into the current shell.
+  # This exports the variables so they're available to child processes.
+  
+  local env_file="${1:-/workspace/.marketbot.env}"
+  
+  if [[ ! -f "$env_file" ]]; then
+    echo "[codex_entry] Warning: MarketBot env file not found: ${env_file}" >&2
+    return 1
+  fi
+  
+  echo "[codex_entry] Loading MarketBot environment variables from ${env_file}" >&2
+  
+  # Read the file line by line and export variables
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Skip empty lines and comments
+    line="${line%%#*}"  # Remove comments
+    line="${line#"${line%%[![:space:]]*}"}"  # Trim leading whitespace
+    line="${line%"${line##*[![:space:]]}"}"  # Trim trailing whitespace
+    
+    if [[ -z "$line" ]]; then
+      continue
+    fi
+    
+    # Only process MARKETBOT_* variables
+    if [[ "$line" =~ ^MARKETBOT_ ]]; then
+      # Split on first = sign
+      if [[ "$line" =~ ^([^=]+)=(.*)$ ]]; then
+        local key="${BASH_REMATCH[1]}"
+        local value="${BASH_REMATCH[2]}"
+        
+        # Remove quotes if present
+        value="${value#\"}"
+        value="${value%\"}"
+        value="${value#\'}"
+        value="${value%\'}"
+        
+        # Export the variable - use printf to safely construct the export command
+        # This avoids issues with special characters in the value
+        printf -v export_cmd "export %s=%q" "$key" "$value"
+        eval "$export_cmd"
+        echo "[codex_entry] Loaded ${key} from ${env_file}" >&2
+      fi
+    fi
+  done < "$env_file"
+  
+  return 0
+}
+
 # Install MCP servers on first run (skippable for maintenance/update calls)
+mount_pi_share
+ensure_marketbot_env
 if [[ "${CODEX_SKIP_MCP_SETUP:-0}" != "1" ]]; then
   install_mcp_servers_runtime
 else
@@ -232,6 +383,21 @@ if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
   echo "[codex_entry] ANTHROPIC_API_KEY is set (${#ANTHROPIC_API_KEY} chars)" >&2
 else
   echo "[codex_entry] ANTHROPIC_API_KEY is NOT set (Claude-specific MCP tools will be skipped)" >&2
+fi
+
+# Log MarketBot environment variable status
+if [[ -n "${MARKETBOT_API_KEY:-}" ]]; then
+  echo "[codex_entry] MARKETBOT_API_KEY is set (${#MARKETBOT_API_KEY} chars)" >&2
+else
+  echo "[codex_entry] MARKETBOT_API_KEY is NOT set in environment" >&2
+fi
+if [[ -n "${MARKETBOT_TEAM_ID:-}" ]]; then
+  echo "[codex_entry] MARKETBOT_TEAM_ID is set" >&2
+else
+  echo "[codex_entry] MARKETBOT_TEAM_ID is NOT set in environment" >&2
+fi
+if [[ -f "/workspace/.marketbot.env" ]]; then
+  echo "[codex_entry] Found /workspace/.marketbot.env" >&2
 fi
 
 # Note: Transcription daemon is now a separate persistent service container

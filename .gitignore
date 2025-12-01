@@ -112,3 +112,11 @@ temp/
 .codex-monitor
 .codex-monitor-triggers.json
 *-triggers.json
+
+
+# Marketbotai v2
+marketbot-hidden/
+MCP/marketbot.py
+.marketbot-processed.json
+.marketbot.env
+.serpapi.env

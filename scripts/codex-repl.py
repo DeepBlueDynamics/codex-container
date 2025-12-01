@@ -4,11 +4,22 @@ import json
 import os
 import readline  # noqa: F401 - history support on POSIX shells
 import sys
+from datetime import datetime
 
 import requests
 
 
 DEFAULT_TIMEOUT_MS = 300_000  # 5 minutes
+
+
+def timestamp():
+    """Return current timestamp in ISO format."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def log_with_timestamp(message, prefix="[codex-repl]"):
+    """Print a message with timestamp prefix."""
+    print(f"{prefix} [{timestamp()}] {message}")
 
 
 def pretty(obj):
@@ -75,6 +86,35 @@ def resume_prompt(base_url, session_id, prompt, timeout_ms):
     return resp.json()
 
 
+def extract_trigger_ids(events):
+    """Extract trigger IDs from events array."""
+    trigger_ids = []
+    if not isinstance(events, list):
+        return trigger_ids
+    
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if (event.get('type') == 'item.completed' and 
+            event.get('item', {}).get('type') == 'mcp_tool_call' and
+            event.get('item', {}).get('tool') == 'create_trigger'):
+            result = event.get('item', {}).get('result', {})
+            if 'content' in result:
+                for content_item in result['content']:
+                    if content_item.get('type') == 'text':
+                        try:
+                            data = json.loads(content_item['text'])
+                            if 'trigger' in data and 'id' in data['trigger']:
+                                trigger_ids.append({
+                                    'id': data['trigger']['id'],
+                                    'title': data['trigger'].get('title', 'Unknown'),
+                                    'tags': data['trigger'].get('tags', [])
+                                })
+                        except:
+                            pass
+    return trigger_ids
+
+
 def print_help(base, timeout_ms, pinned_session):
     help_text = f"""
 Connected to {base}
@@ -83,6 +123,7 @@ Commands:
   list                        → GET /sessions
   show <id>                   → GET /sessions/:id (tail=200)
   show <id> events            → include events
+  show <id> triggers          → extract and show trigger IDs from events
   search <id> <phrase> [--f]  → search session text, add --f for fuzzy
   prompt <id> <text>          → resume Codex session with new text
   use <id>                    → pin a gateway session for future runs
@@ -136,14 +177,16 @@ def main():
         try:
             if cmd == "run":
                 if not remainder:
-                    print("Usage: run <prompt>")
+                    log_with_timestamp("Usage: run <prompt>")
                     continue
+                log_with_timestamp(f"🚀 Starting job: {remainder[:80]}..." if len(remainder) > 80 else f"🚀 Starting job: {remainder}")
                 result = post_completion(base, remainder, current_timeout_ms, session_id=current_session)
+                log_with_timestamp("✅ Job completed")
                 print(pretty(result))
                 gateway_session = result.get("gateway_session_id") or result.get("session_id")
                 if gateway_session:
                     current_session = gateway_session
-                    print(f"→ gateway_session_id: {gateway_session}")
+                    log_with_timestamp(f"→ gateway_session_id: {gateway_session}")
                 model_info = result.get("model")
                 usage_info = result.get("usage")
                 if model_info:
@@ -151,15 +194,37 @@ def main():
                 if usage_info is not None:
                     print(f"→ usage: {usage_info}")
             elif cmd == "list":
+                log_with_timestamp("📋 Fetching sessions list...")
                 result = get_sessions(base)
+                log_with_timestamp(f"✅ Found {len(result.get('sessions', []))} session(s)")
                 print(pretty(result))
             elif cmd == "show":
                 if not remainder:
-                    print("Usage: show <session-id> [events]")
+                    log_with_timestamp("Usage: show <session-id> [events|triggers]")
                     continue
                 session_id, _, flag = remainder.partition(" ")
-                include_events = flag.strip().lower() == "events"
+                flag_lower = flag.strip().lower()
+                include_events = flag_lower == "events" or flag_lower == "triggers"
+                log_with_timestamp(f"📄 Fetching session {session_id}..." + (f" (with {flag_lower})" if flag_lower else ""))
                 result = get_session_detail(base, session_id, include_events=include_events)
+                log_with_timestamp("✅ Session data retrieved")
+                
+                # If "triggers" flag, extract and show trigger IDs
+                if flag_lower == "triggers":
+                    events = result.get('events', [])
+                    trigger_ids = extract_trigger_ids(events)
+                    if trigger_ids:
+                        print("\n📋 Trigger IDs found in this session:")
+                        for trigger in trigger_ids:
+                            print(f"  ID: {trigger['id']}")
+                            print(f"  Title: {trigger['title']}")
+                            if trigger['tags']:
+                                print(f"  Tags: {', '.join(trigger['tags'])}")
+                            print()
+                    else:
+                        print("\n⚠️  No trigger IDs found in events")
+                    print("\n--- Full session data ---")
+                
                 print(pretty(result))
                 runs = result.get("runs") or []
                 for run in runs:
@@ -190,20 +255,22 @@ def main():
                 print(pretty(result))
             elif cmd == "prompt":
                 if not remainder:
-                    print("Usage: prompt <session-id> <text>")
+                    log_with_timestamp("Usage: prompt <session-id> <text>")
                     continue
                 session_id, _, prompt_text = remainder.partition(" ")
                 if not prompt_text:
-                    print("Usage: prompt <session-id> <text>")
+                    log_with_timestamp("Usage: prompt <session-id> <text>")
                     continue
+                log_with_timestamp(f"📝 Resuming session {session_id}: {prompt_text[:80]}..." if len(prompt_text) > 80 else f"📝 Resuming session {session_id}: {prompt_text}")
                 result = resume_prompt(base, session_id, prompt_text, current_timeout_ms)
+                log_with_timestamp("✅ Prompt completed")
                 print(pretty(result))
             elif cmd == "use":
                 if not remainder:
-                    print("Usage: use <session-id>")
+                    log_with_timestamp("Usage: use <session-id>")
                     continue
                 current_session = remainder.strip()
-                print(f"Pinned session set to {current_session}")
+                log_with_timestamp(f"📌 Pinned session set to {current_session}")
             elif cmd == "timeout":
                 if not remainder:
                     print("Usage: timeout <seconds>")
@@ -220,11 +287,11 @@ def main():
             else:
                 print("Unknown command. Type 'help' for instructions.")
         except requests.HTTPError as err:
-            print(f"HTTP error {err.response.status_code}: {err.response.text}")
+            log_with_timestamp(f"❌ HTTP error {err.response.status_code}: {err.response.text}", prefix="[codex-repl]")
         except requests.RequestException as err:
-            print(f"Request failed: {err}")
+            log_with_timestamp(f"❌ Request failed: {err}", prefix="[codex-repl]")
         except Exception as err:
-            print(f"Error: {err}")
+            log_with_timestamp(f"❌ Error: {err}", prefix="[codex-repl]")
 
 
 if __name__ == "__main__":
