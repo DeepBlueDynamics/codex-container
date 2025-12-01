@@ -8,7 +8,6 @@ load_session_env() {
   if [[ -n "${CODEX_SESSION_ID:-}" ]]; then
     candidates+=("${sessions_root}/${CODEX_SESSION_ID}/.env")
   fi
-  candidates+=("${sessions_root}/unknown/.env")
 
   local candidate
   for candidate in "${candidates[@]}"; do
@@ -21,18 +20,6 @@ load_session_env() {
       return
     fi
   done
-
-  if [[ -d "$sessions_root" ]]; then
-    local fallback
-    fallback=$(find "$sessions_root" -maxdepth 2 -name '.env' -print | head -n 1 2>/dev/null || true)
-    if [[ -n "$fallback" && -f "$fallback" ]]; then
-      echo "[codex_entry] Loading fallback session env from ${fallback}" >&2
-      set -o allexport
-      # shellcheck disable=SC1090
-      source "$fallback"
-      set +o allexport
-    fi
-  fi
 }
 
 load_session_env
@@ -226,47 +213,12 @@ ensure_baml_workspace() {
   mkdir -p "${workspace}"
 }
 
-mount_pi_share() {
-  # Optionally mount a Raspberry Pi NFS export into the container.
-  # Controlled via environment variables:
-  #   PI_NFS_DISABLE=1         -> skip mounting
-  #   PI_NFS_SERVER            -> default 192.168.86.37
-  #   PI_NFS_EXPORT            -> default /srv/share
-  #   PI_NFS_MOUNTPOINT        -> default /workspace/pi-share
-
-  if [[ "${PI_NFS_DISABLE:-0}" == "1" ]]; then
-    return
-  fi
-
-  local server="${PI_NFS_SERVER:-192.168.86.37}"
-  local export_path="${PI_NFS_EXPORT:-/srv/share}"
-  local mountpoint="${PI_NFS_MOUNTPOINT:-/workspace/pi-share}"
-
-  mkdir -p "${mountpoint}"
-
-  if command -v mountpoint >/dev/null 2>&1; then
-    if mountpoint -q "${mountpoint}"; then
-      echo "[codex_entry] Pi NFS share already mounted at ${mountpoint}" >&2
-      return
-    fi
-  fi
-
-  if ! command -v mount >/dev/null 2>&1; then
-    echo "[codex_entry] mount command not available; skipping Pi NFS mount" >&2
-    return
-  fi
-
-  # Best-effort mount; failure should not stop Codex from starting.
-  if mount -t nfs "${server}:${export_path}" "${mountpoint}" >/dev/null 2>&1; then
-    echo "[codex_entry] Mounted Pi NFS share ${server}:${export_path} at ${mountpoint}" >&2
-  else
-    echo "[codex_entry] Failed to mount Pi NFS share ${server}:${export_path}; continuing without it" >&2
-  fi
-}
-
-# Install MCP servers on first run
-mount_pi_share
-install_mcp_servers_runtime
+# Install MCP servers on first run (skippable for maintenance/update calls)
+if [[ "${CODEX_SKIP_MCP_SETUP:-0}" != "1" ]]; then
+  install_mcp_servers_runtime
+else
+  echo "[codex_entry] Skipping MCP setup (CODEX_SKIP_MCP_SETUP=1)" >&2
+fi
 
 if [[ "${ENABLE_OSS_BRIDGE:-}" == "1" ]]; then
   start_oss_bridge
@@ -279,7 +231,7 @@ ensure_baml_workspace
 if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
   echo "[codex_entry] ANTHROPIC_API_KEY is set (${#ANTHROPIC_API_KEY} chars)" >&2
 else
-  echo "[codex_entry] ANTHROPIC_API_KEY is NOT set" >&2
+  echo "[codex_entry] ANTHROPIC_API_KEY is NOT set (Claude-specific MCP tools will be skipped)" >&2
 fi
 
 # Note: Transcription daemon is now a separate persistent service container

@@ -141,6 +141,10 @@ param(
     [int]$GatewayTimeoutMs,
     [string]$GatewayDefaultModel,
     [string[]]$GatewayExtraArgs,
+    [string]$GatewaySessionDirs,
+    [string]$GatewaySecureDir,
+    [string]$GatewaySecureToken,
+    [int]$GatewayLogLevel,
     [string]$TranscriptionServiceUrl = 'http://host.docker.internal:8765',
     [string]$SessionId,
     [switch]$ListSessions,
@@ -237,6 +241,206 @@ function Resolve-CodexHomePath {
     } catch [System.Management.Automation.ItemNotFoundException] {
         return [System.IO.Path]::GetFullPath($candidate)
     }
+}
+
+function Build-GatewaySessionEnv {
+    param(
+        [string]$SessionDirs,
+        [string]$SecureDir,
+        [string]$SecureToken,
+        [string]$CodexHome
+    )
+
+    $envMap = @{}
+
+    $normalizePath = {
+        param($p)
+        if (-not $p) { return $null }
+        return ($p -replace '\\','/')
+    }
+
+    if (-not $SessionDirs) {
+        $SessionDirs = '/opt/codex-home/.codex/sessions,/workspace/.codex-gateway-sessions'
+    }
+
+    if ($SessionDirs) {
+        $parts = $SessionDirs.Split(',') | ForEach-Object { & $normalizePath $_ } | Where-Object { $_ }
+        if ($parts.Count -gt 0) {
+            $envMap['CODEX_GATEWAY_SESSION_DIRS'] = ($parts -join ',')
+        }
+    }
+
+    if (-not $SecureDir) {
+        $SecureDir = '/opt/codex-home/.codex/sessions/secure'
+    }
+    if ($SecureDir) {
+        $envMap['CODEX_GATEWAY_SECURE_SESSION_DIR'] = & $normalizePath $SecureDir
+    }
+    if ($SecureToken) {
+        $envMap['CODEX_GATEWAY_SECURE_TOKEN'] = $SecureToken
+    }
+
+    return $envMap
+}
+
+function Get-ConfigFilePath {
+    param(
+        [string]$WorkspacePath
+    )
+    $candidates = @(
+        (Join-Path $WorkspacePath '.codex-container.json'),
+        (Join-Path $WorkspacePath '.codex_container.json'),
+        (Join-Path $WorkspacePath '.codex-container.toml'),
+        (Join-Path $WorkspacePath '.codex_container.toml')
+    )
+    foreach ($path in $candidates) {
+        if (Test-Path $path) {
+            return $path
+        }
+    }
+    return $null
+}
+
+function Read-ProjectConfig {
+    param(
+        [string]$WorkspacePath
+    )
+
+    $configPath = Get-ConfigFilePath -WorkspacePath $WorkspacePath
+    if (-not $configPath) {
+        return $null
+    }
+
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $python) {
+        Write-Warning "python not found; skipping config parse for $configPath"
+        return $null
+    }
+
+    $py = @"
+import json, sys, pathlib
+try:
+    import tomllib
+except Exception:
+    tomllib = None
+
+path = pathlib.Path(r"""$configPath""")
+data = {}
+if path.suffix.lower() == ".json":
+    data = json.loads(path.read_text())
+elif path.suffix.lower() == ".toml":
+    if not tomllib:
+        sys.stderr.write("tomllib not available; ignoring config\n")
+    else:
+        data = tomllib.loads(path.read_text())
+else:
+    # try both
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        if tomllib:
+            data = tomllib.loads(path.read_text())
+        else:
+            raise
+
+def default(obj, key, fallback):
+    if isinstance(obj, dict):
+        return obj.get(key, fallback)
+    return fallback
+
+out = {
+    "env": default(data, "env", {}),
+    "mounts": default(data, "mounts", []),
+    "tools": default(data, "tools", []),
+    "env_imports": default(data, "env_imports", []),
+}
+print(json.dumps(out))
+"@
+
+    try {
+        $json = & $python.Path -c $py
+    } catch {
+        Write-Warning "Failed to parse ${configPath}: $($_.Exception.Message)"
+        return $null
+    }
+
+    try {
+        return $json | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to decode config JSON from ${configPath}"
+        return $null
+    }
+}
+
+function Build-MountArgs {
+    param(
+        [string]$WorkspacePath,
+        $ConfigMounts
+    )
+
+    $args = @()
+    if (-not $ConfigMounts) {
+        return $args
+    }
+
+    $normalizePath = {
+        param($p)
+        if (-not $p) { return $null }
+        return ($p -replace '\\','/')
+    }
+
+    foreach ($m in $ConfigMounts) {
+        $hostPath = $null
+        $container = $null
+        $mode = 'rw'
+        if ($m -is [string]) {
+            $hostPath = $m
+        } elseif ($m) {
+            $hostPath = $m.host
+            $container = $m.container
+            if ($m.mode) { $mode = $m.mode }
+        }
+        if (-not $hostPath) { continue }
+        $hostNorm = & $normalizePath $hostPath
+        if (-not $container) {
+            $container = "/workspace/" + ([System.IO.Path]::GetFileName($hostNorm))
+        }
+        $containerNorm = & $normalizePath $container
+        $suffix = if ($mode -and $mode.ToLower() -eq 'ro') { ':ro' } else { '' }
+        $args += @('-v', "${hostNorm}:${containerNorm}${suffix}")
+    }
+    return $args
+}
+
+function Build-EnvArgs {
+    param(
+        $EnvMap
+    )
+    $envArgs = @()
+    if (-not $EnvMap) { return $envArgs }
+    foreach ($key in $EnvMap.Keys) {
+        $val = $EnvMap[$key]
+        if ($null -ne $val) {
+            $envArgs += @('-e', "$key=$val")
+        }
+    }
+    return $envArgs
+}
+
+function Build-EnvImportArgs {
+    param(
+        [string[]]$Names
+    )
+    $envArgs = @()
+    if (-not $Names) { return $envArgs }
+    foreach ($name in $Names) {
+        if (-not $name) { continue }
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($null -ne $value -and $value -ne '') {
+            $envArgs += @('-e', "${name}=${value}")
+        }
+    }
+    return $envArgs
 }
 
 function Add-DefaultSystemPrompt {
@@ -459,7 +663,10 @@ function New-CodexContext {
         [string]$Workspace,
         [string]$ScriptRoot,
         [string]$CodexHomeOverride,
-        [switch]$Privileged
+        [switch]$Privileged,
+        [string]$GatewaySessionDirs,
+        [string]$GatewaySecureDir,
+        [string]$GatewaySecureToken
     )
 
     $scriptDir = if ($ScriptRoot) { $ScriptRoot } else { throw "ScriptRoot is required" }
@@ -520,6 +727,27 @@ function New-CodexContext {
         $runArgs += @('-v', ("${normalized}:/workspace"), '-w', '/workspace')
     }
 
+    $config = Read-ProjectConfig -WorkspacePath $workspacePath
+    if ($config) {
+        Write-Host "  Project config: $((Get-ConfigFilePath -WorkspacePath $workspacePath))" -ForegroundColor DarkGray
+    }
+
+    if ($config -and $config.mounts) {
+        $runArgs += (Build-MountArgs -WorkspacePath $workspacePath -ConfigMounts $config.mounts)
+    }
+
+    if ($config -and $config.env) {
+        $runArgs += (Build-EnvArgs -EnvMap $config.env)
+    }
+    if ($config -and $config.env_imports) {
+        $runArgs += (Build-EnvImportArgs -Names $config.env_imports)
+    }
+
+    $gatewaySessionEnv = Build-GatewaySessionEnv -SessionDirs $GatewaySessionDirs -SecureDir $GatewaySecureDir -SecureToken $GatewaySecureToken -CodexHome $codexHome
+    foreach ($key in $gatewaySessionEnv.Keys) {
+        $runArgs += @('-e', "${key}=$($gatewaySessionEnv[$key])")
+    }
+
     if ($Privileged) {
         Write-Host "  Docker run will use --privileged" -ForegroundColor DarkGray
         $runArgs += '--privileged'
@@ -529,6 +757,8 @@ function New-CodexContext {
         Tag = $Tag
         CodexRoot = $codexRoot
         CodexHome = $codexHome
+        GatewaySessionEnv = $gatewaySessionEnv
+        ProjectConfig = $config
         WorkspacePath = $workspacePath
         CurrentLocation = $currentLocation.ProviderPath
         RunArgs = $runArgs
@@ -688,6 +918,8 @@ function New-DockerRunArgs {
         $args += $AdditionalArgs
     }
     $args += $Context.Tag
+    $args += '/usr/bin/tini'
+    $args += '--'
     $args += '/usr/local/bin/codex_entry.sh'
     if ($Danger) {
         $args += '--dangerously-bypass-approvals-and-sandbox'
@@ -885,10 +1117,12 @@ function Ensure-CodexCli {
 
 $updateScript = "set -euo pipefail; export PATH=`"`$PATH:/usr/local/share/npm-global/bin`"; echo `"Ensuring Codex CLI is up to date...`"; if npm install -g @openai/codex@latest --prefer-online >/tmp/codex-install.log 2>&1; then echo `"Codex CLI updated.`"; else echo `"Failed to install Codex CLI; see /tmp/codex-install.log.`"; cat /tmp/codex-install.log; exit 1; fi; cat /tmp/codex-install.log"
 
+    $updateEnv = @()
+    if ($env:CODEX_SKIP_MCP_SETUP) { $updateEnv += "CODEX_SKIP_MCP_SETUP=$($env:CODEX_SKIP_MCP_SETUP)" }
     if ($Silent) {
-        Invoke-CodexContainer -Context $Context -CommandArgs @('/bin/bash', '-c', $updateScript) | Out-Null
+        Invoke-CodexContainer -Context $Context -CommandArgs @('/bin/bash', '-c', $updateScript) -AdditionalEnv $updateEnv | Out-Null
     } else {
-        Invoke-CodexContainer -Context $Context -CommandArgs @('/bin/bash', '-c', $updateScript)
+        Invoke-CodexContainer -Context $Context -CommandArgs @('/bin/bash', '-c', $updateScript) -AdditionalEnv $updateEnv
     }
     $script:CodexUpdateCompleted = $true
 }
@@ -1041,7 +1275,8 @@ function Invoke-CodexServe {
         [string]$BindHost,
         [int]$TimeoutMs,
         [string]$DefaultModel,
-        [string[]]$ExtraArgs
+        [string[]]$ExtraArgs,
+        [int]$LogLevel
     )
 
     Ensure-CodexCli -Context $Context
@@ -1067,6 +1302,9 @@ function Invoke-CodexServe {
         if ($joined.Trim().Length -gt 0) {
             $envVars += "CODEX_GATEWAY_EXTRA_ARGS=$joined"
         }
+    }
+    if ($LogLevel) {
+        $envVars += "CODEX_GATEWAY_LOG_LEVEL=$LogLevel"
     }
 
     Invoke-CodexContainer -Context $Context -CommandArgs @('node', '/usr/local/bin/codex_gateway.js') -AdditionalArgs @('-p', $publish) -AdditionalEnv $envVars
@@ -1658,7 +1896,7 @@ if ($jsonFlagsSpecified.Count -gt 1) {
 
 $speakerConfig = $null
 try {
-    $context = New-CodexContext -Tag $Tag -Workspace $Workspace -ScriptRoot $PSScriptRoot -CodexHomeOverride $CodexHome -Privileged:$Privileged
+    $context = New-CodexContext -Tag $Tag -Workspace $Workspace -ScriptRoot $PSScriptRoot -CodexHomeOverride $CodexHome -Privileged:$Privileged -GatewaySessionDirs $GatewaySessionDirs -GatewaySecureDir $GatewaySecureDir -GatewaySecureToken $GatewaySecureToken
 
     if (-not $jsonOutput) {
         Write-Host "Codex container context" -ForegroundColor Cyan
@@ -1716,7 +1954,7 @@ try {
     }
     'Serve' {
         Ensure-CodexAuthentication -Context $context
-        Invoke-CodexServe -Context $context -Port $GatewayPort -BindHost $GatewayHost -TimeoutMs $GatewayTimeoutMs -DefaultModel $GatewayDefaultModel -ExtraArgs $GatewayExtraArgs
+        Invoke-CodexServe -Context $context -Port $GatewayPort -BindHost $GatewayHost -TimeoutMs $GatewayTimeoutMs -DefaultModel $GatewayDefaultModel -ExtraArgs $GatewayExtraArgs -LogLevel $GatewayLogLevel
     }
     'Monitor' {
         $context.NewSession = $NewSession

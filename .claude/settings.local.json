@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(docker exec 3ad658d11f2b curl -s http://gnosis-crawl:8080/health)",
+      "Bash(docker exec:*)",
+      "Bash(docker ps:*)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

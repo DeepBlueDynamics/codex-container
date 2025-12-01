@@ -1,0 +1,30 @@
+# Codex container project config
+
+[env]
+# Gateway session roots (defaults are applied if omitted)
+CODEX_GATEWAY_SESSION_DIRS = "/opt/codex-home/.codex/sessions,/workspace/.codex-gateway-sessions"
+CODEX_GATEWAY_SECURE_SESSION_DIR = "/opt/codex-home/.codex/sessions/secure"
+# Uncomment to enforce secure-session token
+# CODEX_GATEWAY_SECURE_TOKEN = "choose-a-secret"
+
+# Example explicit env pushed into the container
+SOME_SERVICE_URL = "https://api.example.com"
+
+# Import these host env vars into the container if present
+env_imports = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "OSS_API_KEY"
+]
+
+# Optional extra mounts
+# NOTE: Sessions are already accessible via the main codex-home mount
+# Don't add a separate ro mount as it blocks writes needed for resume
+
+# Uncomment if C:/data/shared exists on your system:
+# [[mounts]]
+# host = "C:/data/shared"
+# container = "/workspace/shared"
+# mode = "rw"

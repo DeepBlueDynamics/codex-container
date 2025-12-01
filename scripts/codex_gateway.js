@@ -18,12 +18,267 @@ const CODEX_JSON_FLAG = process.env.CODEX_GATEWAY_JSON_FLAG || '--experimental-j
 const EXTRA_ARGS = (process.env.CODEX_GATEWAY_EXTRA_ARGS || '')
   .split(/\s+/)
   .filter(Boolean);
-const SESSION_DIR = process.env.CODEX_GATEWAY_SESSION_DIR
-  || path.join(process.cwd(), '.codex-gateway-sessions');
+const CODEX_HOME_PATH = process.env.CODEX_GATEWAY_CODEX_HOME
+  || process.env.CODEX_HOME
+  || process.env.HOME
+  || '/opt/codex-home';
+const DEFAULT_SESSION_ROOT = path.join(CODEX_HOME_PATH, 'sessions', 'gateway');
+
+function normalizeDirs(list) {
+  const seen = new Set();
+  const result = [];
+  for (const entry of list) {
+    if (!entry) {
+      continue;
+    }
+    const resolved = path.resolve(entry);
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    result.push(resolved);
+  }
+  return result;
+}
+
+const SESSION_DIRS = (() => {
+  const candidates = [];
+  const multi = process.env.CODEX_GATEWAY_SESSION_DIRS;
+  if (multi && multi.trim().length > 0) {
+    candidates.push(...multi.split(',').map((entry) => entry.trim()).filter(Boolean));
+  }
+  if (process.env.CODEX_GATEWAY_SESSION_DIR) {
+    candidates.push(process.env.CODEX_GATEWAY_SESSION_DIR);
+  }
+  if (candidates.length === 0) {
+    candidates.push(DEFAULT_SESSION_ROOT);
+  }
+  const legacy = path.join(process.cwd(), '.codex-gateway-sessions');
+  candidates.push(legacy);
+  return normalizeDirs(candidates);
+})();
+
+const PRIMARY_SESSION_DIR = SESSION_DIRS[0];
+const SECURE_SESSION_DIR = path.resolve(process.env.CODEX_GATEWAY_SECURE_SESSION_DIR
+  || path.join(process.env.CODEX_HOME || process.env.HOME || '/opt/codex-home', 'sessions', 'secure-gateway'));
+const SECURE_SESSION_TOKEN = process.env.CODEX_GATEWAY_SECURE_TOKEN || null;
 const MAX_BODY_BYTES = parseInt(process.env.CODEX_GATEWAY_MAX_BODY_BYTES || '1048576', 10);
 const DEFAULT_TAIL_LINES = parseInt(process.env.CODEX_GATEWAY_DEFAULT_TAIL_LINES || '200', 10);
 const MAX_TAIL_LINES = parseInt(process.env.CODEX_GATEWAY_MAX_TAIL_LINES || '2000', 10);
 const SIGNAL_CONTEXT_CHARS = parseInt(process.env.CODEX_GATEWAY_SIGNAL_CONTEXT || '160', 10);
+
+// =============================================================================
+// Concurrency Limiter - Hard limit on concurrent Codex runs
+// Returns 429 (Too Many Requests) when at capacity instead of queuing forever
+// =============================================================================
+const MAX_CONCURRENT_CODEX = parseInt(process.env.CODEX_GATEWAY_MAX_CONCURRENT || '3', 10);
+
+// Retry configuration for failed/empty Codex runs
+// Set MAX_RETRIES=0 to disable retries (default now for faster debugging)
+const MAX_RETRIES = parseInt(process.env.CODEX_GATEWAY_MAX_RETRIES || '0', 10);
+const RETRY_BASE_DELAY_MS = parseInt(process.env.CODEX_GATEWAY_RETRY_DELAY_MS || '2000', 10);
+const RETRY_ON_EMPTY = process.env.CODEX_GATEWAY_RETRY_ON_EMPTY === 'true'; // disabled by default
+
+class ConcurrencyLimiter {
+  constructor(maxConcurrent) {
+    this.maxConcurrent = maxConcurrent;
+    this.active = 0;
+  }
+
+  tryAcquire() {
+    if (this.active >= this.maxConcurrent) {
+      console.log(`[codex-gateway] concurrency: REJECTED (active: ${this.active}/${this.maxConcurrent})`);
+      return false;
+    }
+    this.active++;
+    console.log(`[codex-gateway] concurrency: acquired (active: ${this.active}/${this.maxConcurrent})`);
+    return true;
+  }
+
+  release() {
+    this.active = Math.max(0, this.active - 1);
+    console.log(`[codex-gateway] concurrency: released (active: ${this.active}/${this.maxConcurrent})`);
+  }
+
+  getStatus() {
+    return {
+      active: this.active,
+      max: this.maxConcurrent,
+      available: this.maxConcurrent - this.active,
+    };
+  }
+}
+
+const concurrencyLimiter = new ConcurrencyLimiter(MAX_CONCURRENT_CODEX);
+
+// Legacy throttler interface for spawn staggering (simplified - just tracks for logging)
+class SpawnThrottler {
+  constructor() {
+    this.active = 0;
+  }
+  async acquire() {
+    this.active++;
+  }
+  release() {
+    this.active = Math.max(0, this.active - 1);
+  }
+}
+
+const spawnThrottler = new SpawnThrottler();
+
+// =============================================================================
+// Modular Logger - Control verbosity via CODEX_GATEWAY_LOG_LEVEL
+// Levels: 0=errors only, 1=info (default), 2=verbose, 3=debug (all)
+// =============================================================================
+const LOG_LEVEL = parseInt(process.env.CODEX_GATEWAY_LOG_LEVEL || '1', 10);
+const LOG_PREFIX = '[codex-gateway]';
+
+const logger = {
+  // Always log errors
+  error: (...args) => console.error(LOG_PREFIX, ...args),
+  warn: (...args) => console.warn(LOG_PREFIX, ...args),
+
+  // Info level (level >= 1) - basic operational logs
+  info: (...args) => { if (LOG_LEVEL >= 1) console.log(LOG_PREFIX, ...args); },
+
+  // Verbose level (level >= 2) - detailed event/tool tracing
+  verbose: (...args) => { if (LOG_LEVEL >= 2) console.log(LOG_PREFIX, ...args); },
+
+  // Debug level (level >= 3) - everything including raw data
+  debug: (...args) => { if (LOG_LEVEL >= 3) console.log(LOG_PREFIX, ...args); },
+
+  // Formatted verbose logs for specific event types
+  event: (type, details) => {
+    if (LOG_LEVEL < 2) return;
+    console.log(`${LOG_PREFIX} >>> ${type}:`, details);
+  },
+
+  // Tool call logging with emoji indicators
+  toolStart: (server, tool, args) => {
+    if (LOG_LEVEL < 2) return;
+    console.log(`${LOG_PREFIX} 🔧 TOOL CALL STARTED:`);
+    console.log(`${LOG_PREFIX}   Server: ${server}`);
+    console.log(`${LOG_PREFIX}   Tool: ${tool}`);
+    if (args && LOG_LEVEL >= 3) {
+      const argsStr = typeof args === 'string' ? args : JSON.stringify(args);
+      console.log(`${LOG_PREFIX}   Arguments:`, argsStr.slice(0, 500) + (argsStr.length > 500 ? '...' : ''));
+    }
+  },
+
+  toolEnd: (server, tool, status, result, error) => {
+    if (LOG_LEVEL < 2) return;
+    const emoji = status === 'success' ? '✅' : status === 'error' ? '❌' : '🔧';
+    console.log(`${LOG_PREFIX} ${emoji} TOOL CALL COMPLETED:`);
+    console.log(`${LOG_PREFIX}   Server: ${server}`);
+    console.log(`${LOG_PREFIX}   Tool: ${tool}`);
+    console.log(`${LOG_PREFIX}   Status: ${status}`);
+    if (error) console.error(`${LOG_PREFIX}   ERROR:`, error);
+    if (result && LOG_LEVEL >= 3) {
+      const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+      if (resultStr.length <= 1000) {
+        console.log(`${LOG_PREFIX}   Result:`, resultStr);
+      } else {
+        console.log(`${LOG_PREFIX}   Result (preview):`, resultStr.slice(0, 500) + '...');
+        console.log(`${LOG_PREFIX}   Result (length):`, resultStr.length, 'chars');
+      }
+    }
+  },
+
+  // Special logging for gnosis-crawl
+  crawl: (action, url, details) => {
+    if (LOG_LEVEL < 2) return;
+    console.log(`${LOG_PREFIX} 🔍 GNOSIS-CRAWL ${action}:`, url);
+    if (details && LOG_LEVEL >= 3) {
+      console.log(`${LOG_PREFIX} 🔍 GNOSIS-CRAWL details:`, details);
+    }
+  },
+
+  // Agent message logging
+  agentMessage: (messageId, text, isComplete) => {
+    if (LOG_LEVEL < 2) return;
+    const emoji = isComplete ? '💬' : '...';
+    console.log(`${LOG_PREFIX} ${emoji} AGENT MESSAGE${isComplete ? ' COMPLETED' : ''}:`);
+    if (messageId) console.log(`${LOG_PREFIX} ${emoji}   ID: ${messageId}`);
+    console.log(`${LOG_PREFIX} ${emoji}   Length: ${text?.length || 0} chars`);
+    if (LOG_LEVEL >= 3 && text) {
+      if (text.length <= 1000) {
+        console.log(`${LOG_PREFIX} ${emoji}   Content: ${text}`);
+      } else {
+        console.log(`${LOG_PREFIX} ${emoji}   Content (first 500): ${text.slice(0, 500)}...`);
+        console.log(`${LOG_PREFIX} ${emoji}   Content (last 300): ...${text.slice(-300)}`);
+      }
+    }
+  },
+
+  // Reasoning logging
+  reasoning: (text) => {
+    if (LOG_LEVEL < 2) return;
+    console.log(`${LOG_PREFIX} 🤔 REASONING:`);
+    if (text) {
+      const preview = text.length > 500 ? text.slice(0, 500) + '...' : text;
+      console.log(`${LOG_PREFIX} 🤔   ${preview}`);
+      if (text.length > 500) console.log(`${LOG_PREFIX} 🤔   (length: ${text.length} chars)`);
+    }
+  },
+
+  // MCP tools summary at end of run
+  mcpSummary: (mcpTools) => {
+    if (LOG_LEVEL < 2 || !mcpTools || mcpTools.length === 0) return;
+    console.log(`${LOG_PREFIX} ========================================`);
+    console.log(`${LOG_PREFIX} 📋 MCP TOOLS CALLED SUMMARY:`);
+    mcpTools.forEach((t, idx) => {
+      const emoji = t.status === 'success' ? '✅' : t.status === 'error' ? '❌' : '🔧';
+      console.log(`${LOG_PREFIX}   ${idx + 1}. ${emoji} ${t.server || 'unknown'}::${t.tool || t.name || 'unknown'} (${t.status || 'unknown'})`);
+    });
+    console.log(`${LOG_PREFIX} ========================================`);
+
+    // Warnings for expected tools not called
+    const hasCrawl = mcpTools.some(t => (t.tool || t.name || '').includes('crawl'));
+    if (!hasCrawl && LOG_LEVEL >= 2) {
+      console.warn(`${LOG_PREFIX} ⚠️  No gnosis-crawl tool calls detected`);
+    }
+  },
+
+  // Session info logging
+  sessionInfo: (gatewayId, codexId) => {
+    if (LOG_LEVEL < 1) return;
+    console.log(`${LOG_PREFIX} SESSION INFO:`);
+    console.log(`${LOG_PREFIX}   Gateway Session ID: ${gatewayId}`);
+    console.log(`${LOG_PREFIX}   Codex Thread ID: ${codexId || 'none'}`);
+    if (codexId) {
+      console.log(`${LOG_PREFIX}   Access via: /sessions/${gatewayId} or /sessions/${codexId}`);
+    }
+  },
+
+  // Thread lifecycle
+  threadStarted: (threadId) => {
+    if (LOG_LEVEL < 2) return;
+    console.log(`${LOG_PREFIX} >>> Thread started, ID: ${threadId}`);
+  },
+
+  turnStarted: () => {
+    if (LOG_LEVEL < 2) return;
+    console.log(`${LOG_PREFIX} >>> Turn started - AI is processing...`);
+  },
+
+  turnCompleted: () => {
+    if (LOG_LEVEL < 2) return;
+    console.log(`${LOG_PREFIX} >>> Turn completed`);
+  },
+
+  taskComplete: (message) => {
+    if (LOG_LEVEL < 2) return;
+    console.log(`${LOG_PREFIX} >>> TASK COMPLETE`);
+    if (message && LOG_LEVEL >= 3) {
+      console.log(`${LOG_PREFIX} >>> Final message:`, message.slice(0, 300));
+    }
+  },
+};
+
+// Log startup config at verbose level
+if (LOG_LEVEL >= 2) {
+  console.log(`${LOG_PREFIX} Logger initialized at level ${LOG_LEVEL} (0=error, 1=info, 2=verbose, 3=debug)`);
+}
 
 function ensureDirSync(dir) {
   if (!fs.existsSync(dir)) {
@@ -125,13 +380,51 @@ function extractCodexSessionId(events) {
       continue;
     }
     if (typeof msg.session_id === 'string' && msg.session_id.trim().length > 0) {
+      logger.debug('extractCodexSessionId: found session_id', msg.session_id);
       return msg.session_id.trim();
     }
     if (msg.session && typeof msg.session.id === 'string' && msg.session.id.trim().length > 0) {
+      logger.debug('extractCodexSessionId: found session.id', msg.session.id);
       return msg.session.id.trim();
     }
   }
+  logger.debug('extractCodexSessionId: no session id found in events');
   return null;
+}
+
+function summarizeToolCalls(toolCalls) {
+  if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
+    return [];
+  }
+  const counts = new Map();
+  for (const msg of toolCalls) {
+    if (!msg || typeof msg !== 'object') {
+      continue;
+    }
+    const name = msg.tool_name || msg.tool || msg.name || 'unknown';
+    const status = msg.status || (msg.type === 'mcp_tool_call_end' ? 'completed' : 'called');
+    const key = `${name}::${status}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const entries = Array.from(counts.entries()).map(([key, count]) => {
+    const [name, status] = key.split('::');
+    return { name, status, count };
+  });
+  entries.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  return entries;
+}
+
+function logRunSummary(result) {
+  const contentLen = result && result.content ? result.content.length : 0;
+  const eventsLen = result && Array.isArray(result.events) ? result.events.length : 0;
+  const toolsLen = result && Array.isArray(result.tool_calls) ? result.tool_calls.length : 0;
+  logger.verbose(`📄 content length: ${contentLen} events: ${eventsLen} tool_calls: ${toolsLen}`);
+  const summary = summarizeToolCalls(result.tool_calls);
+  if (summary.length > 0) {
+    const top = summary.slice(0, 8).map((entry, idx) => `${idx + 1}. 🛠 ${entry.name} (${entry.status}) x${entry.count}`);
+    const truncated = summary.length > 8 ? `…+${summary.length - 8} more` : '';
+    logger.verbose('🧰 tool summary:', top.join(' | '), truncated);
+  }
 }
 
 function parseTailParam(url) {
@@ -156,15 +449,48 @@ function parseBoolean(value) {
   return false;
 }
 
+function buildEnvSnapshot() {
+  return {
+    CODEX_UNSAFE_ALLOW_NO_SANDBOX: process.env.CODEX_UNSAFE_ALLOW_NO_SANDBOX || '<unset>',
+    CODEX_GATEWAY_SESSION_DIRS: process.env.CODEX_GATEWAY_SESSION_DIRS || '<unset>',
+  };
+}
+
+function extractSecureToken(req, url) {
+  const headerToken = req && (req.headers['x-codex-secure-token'] || req.headers['x-secure-token']);
+  if (headerToken && typeof headerToken === 'string') {
+    return headerToken.trim();
+  }
+  if (url) {
+    const qp = url.searchParams.get('secure_token');
+    if (qp) {
+      return qp.trim();
+    }
+  }
+  return null;
+}
+
+function hasSecureAccess(req, url) {
+  if (!SECURE_SESSION_TOKEN) {
+    return true;
+  }
+  const provided = extractSecureToken(req, url);
+  return typeof provided === 'string' && provided === SECURE_SESSION_TOKEN;
+}
+
+function enforceSecureAccess(meta, req, res, url) {
+  if (meta && meta.secure && !hasSecureAccess(req, url)) {
+    sendError(res, 403, 'Secure session requires a valid token');
+    return false;
+  }
+  return true;
+}
+
 const DEFAULT_TRIGGER_FILE = process.env.CODEX_GATEWAY_TRIGGER_FILE
   || path.join(process.cwd(), '.codex-monitor-triggers.json');
 const DISABLE_TRIGGER_SCHEDULER = parseBoolean(process.env.CODEX_GATEWAY_DISABLE_TRIGGERS);
 const TRIGGER_WATCH_DEBOUNCE_MS = parseInt(process.env.CODEX_GATEWAY_TRIGGER_DEBOUNCE_MS || '750', 10);
 const MIN_TRIGGER_DELAY_MS = 250;
-const CODEX_HOME_PATH = process.env.CODEX_GATEWAY_CODEX_HOME
-  || process.env.CODEX_HOME
-  || process.env.HOME
-  || '/opt/codex-home';
 const SESSION_TRIGGER_ROOT = path.join(CODEX_HOME_PATH, 'sessions');
 const EXTRA_TRIGGER_FILES = (process.env.CODEX_GATEWAY_TRIGGER_FILES || '')
   .split(',')
@@ -173,47 +499,90 @@ const EXTRA_TRIGGER_FILES = (process.env.CODEX_GATEWAY_TRIGGER_FILES || '')
   .map((entry) => path.resolve(entry));
 
 class SessionStore {
-  constructor(rootDir) {
-    this.rootDir = rootDir;
-    ensureDirSync(this.rootDir);
+  constructor(primaryDir, extraDirs = [], secureDir) {
+    const candidates = normalizeDirs([primaryDir, ...(Array.isArray(extraDirs) ? extraDirs : [])]);
+    const writable = [];
+    for (const dir of candidates) {
+      try {
+        ensureDirSync(dir);
+        writable.push(dir);
+      } catch (error) {
+        logger.error(`unable to ensure session dir ${dir}:`, error.message);
+      }
+    }
+    this.primaryDir = writable[0] || primaryDir;
+    this.extraDirs = writable.slice(1);
+    const secureFallback = path.join(process.cwd(), '.codex-gateway-secure-sessions');
+    this.secureDir = secureDir || this.primaryDir;
+    try {
+      ensureDirSync(this.secureDir);
+    } catch (error) {
+      logger.error(`unable to ensure secure session dir ${this.secureDir}:`, error.message);
+      this.secureDir = secureFallback;
+      ensureDirSync(this.secureDir);
+    }
     this.sessions = new Map();
+    this.sessionRoots = new Map();
     this.codexIndex = new Map();
     this.ready = this.loadExisting();
   }
 
   async loadExisting() {
     try {
-      const entries = await fsp.readdir(this.rootDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory() || !entry.name.startsWith('session-')) {
+      const roots = [this.primaryDir, ...this.extraDirs, this.secureDir].filter(Boolean);
+      const seen = new Set();
+      for (const root of roots) {
+        ensureDirSync(root);
+        let entries = [];
+        try {
+          entries = await fsp.readdir(root, { withFileTypes: true });
+        } catch (error) {
+          logger.error('unable to load sessions:', error.message);
           continue;
         }
-        const sessionId = entry.name.replace(/^session-/, '');
-        const metaPath = this.metaPath(sessionId);
-        try {
-          const metaRaw = await fsp.readFile(metaPath, 'utf8');
-          const meta = JSON.parse(metaRaw);
-          if (meta && meta.session_id) {
-            this.sessions.set(meta.session_id, meta);
-            if (meta.codex_session_id) {
-              this.codexIndex.set(meta.codex_session_id, meta.session_id);
-            }
+        for (const entry of entries) {
+          if (!entry.isDirectory() || !entry.name.startsWith('session-')) {
+            continue;
           }
-        } catch (error) {
-          console.error(`[codex-gateway] failed to load session ${sessionId}:`, error.message);
+          const sessionId = entry.name.replace(/^session-/, '');
+          if (seen.has(sessionId)) {
+            continue;
+          }
+          const metaPath = this.metaPath(sessionId, root);
+          try {
+            const metaRaw = await fsp.readFile(metaPath, 'utf8');
+            const meta = JSON.parse(metaRaw);
+            if (meta && meta.session_id) {
+              meta.secure = Boolean(meta.secure) || path.resolve(root) === path.resolve(this.secureDir);
+              this.sessions.set(meta.session_id, meta);
+              this.sessionRoots.set(meta.session_id, root);
+              seen.add(sessionId);
+              if (meta.codex_session_id) {
+                this.codexIndex.set(meta.codex_session_id, meta.session_id);
+              }
+            }
+          } catch (error) {
+            logger.error(`failed to load session ${sessionId}:`, error.message);
+          }
         }
       }
     } catch (error) {
-      console.error('[codex-gateway] unable to load sessions:', error.message);
+      logger.error('unable to load sessions:', error.message);
     }
   }
 
   sessionDir(sessionId) {
-    return path.join(this.rootDir, `session-${sessionId}`);
+    const meta = this.sessions.get(sessionId);
+    if (meta && meta.secure) {
+      return path.join(this.secureDir, `session-${sessionId}`);
+    }
+    const root = this.sessionRoots.get(sessionId) || this.primaryDir;
+    return path.join(root, `session-${sessionId}`);
   }
 
-  metaPath(sessionId) {
-    return path.join(this.sessionDir(sessionId), 'meta.json');
+  metaPath(sessionId, overrideRoot) {
+    const base = overrideRoot ? path.join(overrideRoot, `session-${sessionId}`) : this.sessionDir(sessionId);
+    return path.join(base, 'meta.json');
   }
 
   stdoutPath(sessionId) {
@@ -231,6 +600,9 @@ class SessionStore {
   async createSession(seedMeta = {}) {
     const sessionId = crypto.randomUUID();
     const now = new Date().toISOString();
+    const secure = Boolean(seedMeta.secure);
+    const targetRoot = secure ? this.secureDir : this.primaryDir;
+    ensureDirSync(targetRoot);
     const meta = {
       session_id: sessionId,
       codex_session_id: seedMeta.codex_session_id || null,
@@ -247,8 +619,10 @@ class SessionStore {
       execution_timeout_ms: seedMeta.execution_timeout_ms || DEFAULT_TIMEOUT_MS,
       idle_timeout_ms: seedMeta.idle_timeout_ms || DEFAULT_IDLE_TIMEOUT_MS,
       runs: [],
+      secure,
     };
     this.sessions.set(sessionId, meta);
+    this.sessionRoots.set(sessionId, targetRoot);
     ensureDirSync(this.sessionDir(sessionId));
     await Promise.all([
       fsp.writeFile(this.stdoutPath(sessionId), '', 'utf8'),
@@ -283,6 +657,13 @@ class SessionStore {
     }
 
     const meta = this.sessions.get(resolved);
+    if (metadata && metadata.secure) {
+      meta.secure = true;
+      if (this.sessionRoots.get(resolved) !== this.secureDir) {
+        ensureDirSync(this.secureDir);
+        this.sessionRoots.set(resolved, this.secureDir);
+      }
+    }
     const runId = crypto.randomUUID();
     const now = new Date().toISOString();
     const runRecord = {
@@ -332,7 +713,7 @@ class SessionStore {
     try {
       await fsp.appendFile(file, chunk);
     } catch (error) {
-      console.error('[codex-gateway] failed to append stdout:', error.message);
+      logger.error('failed to append stdout:', error.message);
     }
   }
 
@@ -344,7 +725,7 @@ class SessionStore {
     try {
       await fsp.appendFile(file, chunk);
     } catch (error) {
-      console.error('[codex-gateway] failed to append stderr:', error.message);
+      logger.error('failed to append stderr:', error.message);
     }
   }
 
@@ -358,7 +739,7 @@ class SessionStore {
     try {
       await fsp.appendFile(this.eventsPath(sessionId), `${payload}\n`);
     } catch (error) {
-      console.error('[codex-gateway] failed to append events:', error.message);
+      logger.error('failed to append events:', error.message);
     }
   }
 
@@ -422,8 +803,22 @@ class SessionStore {
     await this.saveMeta(sessionId);
   }
 
-  async listSessions(limit) {
-    const entries = Array.from(this.sessions.values());
+  async listSessions(limit, options = {}) {
+    const includeSecure = options.includeSecure !== false;
+    const secureOnly = options.secureOnly === true;
+    const authorizedSecure = options.authorizedSecure !== false;
+    const entries = Array.from(this.sessions.values()).filter((meta) => {
+      if (secureOnly && !meta.secure) {
+        return false;
+      }
+      if (meta.secure && !authorizedSecure) {
+        return false;
+      }
+      if (!includeSecure && meta.secure) {
+        return false;
+      }
+      return true;
+    });
     entries.sort((a, b) => {
       const left = Date.parse(b.updated_at || b.created_at || 0);
       const right = Date.parse(a.updated_at || a.created_at || 0);
@@ -439,6 +834,7 @@ class SessionStore {
       last_activity_at: meta.last_activity_at,
       model: meta.model,
       objective: meta.objective,
+      secure: Boolean(meta.secure),
       worker_state: meta.worker_state || 'stopped',
       worker_pid: Object.prototype.hasOwnProperty.call(meta, 'worker_pid') ? meta.worker_pid : null,
       execution_timeout_ms: meta.execution_timeout_ms || DEFAULT_TIMEOUT_MS,
@@ -456,6 +852,10 @@ class SessionStore {
     const meta = this.sessions.get(sessionId);
     if (!meta) {
       return;
+    }
+    meta.secure = Boolean(meta.secure);
+    if (meta.secure && this.sessionRoots.get(sessionId) !== this.secureDir) {
+      this.sessionRoots.set(sessionId, this.secureDir);
     }
     meta.updated_at = new Date().toISOString();
     if (meta.codex_session_id) {
@@ -558,7 +958,7 @@ class SessionStore {
   }
 }
 
-const sessionStore = new SessionStore(SESSION_DIR);
+const sessionStore = new SessionStore(PRIMARY_SESSION_DIR, SESSION_DIRS.slice(1), SECURE_SESSION_DIR);
 const workerPool = new Map();
 
 class SessionWorker extends EventEmitter {
@@ -574,6 +974,8 @@ class SessionWorker extends EventEmitter {
     this.idleTimer = null;
     this.starting = null;
     this.startOptions = null;
+    this.verboseStreamLog = parseBoolean(process.env.CODEX_GATEWAY_VERBOSE_STREAM);
+    this.verboseEventLog = parseBoolean(process.env.CODEX_GATEWAY_LOG_EVENTS);
   }
 
   buildArgs(meta) {
@@ -630,24 +1032,42 @@ class SessionWorker extends EventEmitter {
         ...(this.options.env || {}),
       },
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32', // Use process group on Unix for clean shutdown
     };
     this.startOptions = spawnOptions;
     const args = this.buildArgs(meta || {});
-    console.log('[codex-gateway] launching worker', JSON.stringify({
+    logger.info('launching worker', JSON.stringify({
       session_id: this.sessionId,
       argv: ['codex', ...args],
       cwd: spawnOptions.cwd,
       env_keys: this.options.env ? Object.keys(this.options.env) : [],
       resume_codex_session_id: meta?.codex_session_id || null,
     }));
+    // Acquire throttle before spawning to prevent MCP handshake timeouts from resource contention
+    await spawnThrottler.acquire();
     this.starting = new Promise((resolve, reject) => {
       const child = spawn('codex', args, spawnOptions);
       this.proc = child;
       this.store.setWorkerState(this.sessionId, 'starting', { worker_pid: child.pid });
-      child.stdout.on('data', (chunk) => this.handleStdout(chunk));
-      child.stderr.on('data', (chunk) => this.handleStderr(chunk));
+      child.stdout.on('data', (chunk) => {
+        if (this.verboseStreamLog) {
+          logger.debug(`stdout chunk ${chunk.length} size: ${chunk.length} bytes`);
+          const preview = chunk.toString().slice(0, 200).replace(/\n/g, '\\n');
+          logger.debug(`stdout content preview: "${preview}"`);
+        }
+        this.handleStdout(chunk);
+      });
+      child.stderr.on('data', (chunk) => {
+        if (this.verboseStreamLog) {
+          logger.debug(`stderr chunk ${chunk.length} size: ${chunk.length} bytes`);
+          const preview = chunk.toString().slice(0, 200).replace(/\n/g, '\\n');
+          logger.debug(`stderr content preview: "${preview}"`);
+        }
+        this.handleStderr(chunk);
+      });
       child.on('error', (error) => {
-        console.error('[codex-gateway] worker error:', error);
+        logger.error('worker error:', error);
+        spawnThrottler.release(); // Release on spawn error
         this.finishCurrentRun('error', { error: error.message });
         this.proc = null;
         this.store.setWorkerState(this.sessionId, 'stopped', { worker_pid: null });
@@ -665,6 +1085,8 @@ class SessionWorker extends EventEmitter {
         this.emit('exit', { code, signal });
       });
       child.once('spawn', () => {
+        // Delay release by stagger time to prevent rapid successive spawns
+        spawnThrottler.release();
         this.store.setWorkerState(this.sessionId, 'idle', { worker_pid: child.pid });
         this.scheduleIdleTimer(this.options.idleTimeoutMs || meta?.idle_timeout_ms || DEFAULT_IDLE_TIMEOUT_MS);
         resolve();
@@ -699,6 +1121,12 @@ class SessionWorker extends EventEmitter {
       parsed = JSON.parse(line);
     } catch (error) {
       return;
+    }
+    if (this.verboseEventLog && parsed && parsed.type) {
+      const summary = parsed.type === 'item.completed'
+        ? `${parsed.type} (${parsed.item?.type || ''})`
+        : parsed.type;
+      logger.verbose(`>>> CODEX EVENT: ${summary}`);
     }
     const eventSessionId = parsed.session_id
       || parsed.session?.id
@@ -806,10 +1234,26 @@ class SessionWorker extends EventEmitter {
   async stop(reason = 'stopped') {
     this.clearIdleTimer();
     if (this.proc) {
+      const pid = this.proc.pid;
       try {
-        this.proc.kill('SIGTERM');
+        // Kill the entire process group on Unix
+        if (process.platform !== 'win32' && pid) {
+          process.kill(-pid, 'SIGTERM');
+        } else {
+          this.proc.kill('SIGTERM');
+        }
+        // Force kill after 2 seconds if still alive
+        setTimeout(() => {
+          try {
+            if (process.platform !== 'win32' && pid) {
+              process.kill(-pid, 'SIGKILL');
+            } else if (this.proc) {
+              this.proc.kill('SIGKILL');
+            }
+          } catch (e) { /* process already dead */ }
+        }, 2000);
       } catch (error) {
-        console.error('[codex-gateway] failed to stop worker:', error.message);
+        logger.error('failed to stop worker:', error.message);
       }
     }
     await this.store.setWorkerState(this.sessionId, 'stopped', {
@@ -846,6 +1290,7 @@ function buildRunOptions(payload, meta) {
     model: typeof payload.model === 'string' && payload.model.trim().length > 0
       ? payload.model.trim()
       : DEFAULT_MODEL,
+    secure: parseBoolean(payload.secure) || parseBoolean(payload.secure_session),
     objective: typeof payload.objective === 'string' ? payload.objective.trim() : '',
     nudge_prompt: typeof payload.nudge_prompt === 'string' ? payload.nudge_prompt.trim() : '',
     nudge_interval_ms: typeof payload.nudge_interval_ms === 'number'
@@ -858,52 +1303,83 @@ function buildRunOptions(payload, meta) {
   };
 }
 
-function runCodex(prompt, model, options = {}) {
+async function runCodex(prompt, model, options = {}) {
+  const args = ['exec'];
+  if (parseBoolean(process.env.CODEX_UNSAFE_ALLOW_NO_SANDBOX) !== false) {
+    args.push('--dangerously-bypass-approvals-and-sandbox');
+  }
+  if (CODEX_JSON_FLAG && CODEX_JSON_FLAG.trim().length > 0) {
+    args.push(CODEX_JSON_FLAG.trim());
+  }
+  args.push('--color=never', '--skip-git-repo-check');
+  if (model) {
+    args.push('--model', model);
+  }
+  if (Array.isArray(EXTRA_ARGS) && EXTRA_ARGS.length > 0) {
+    args.push(...EXTRA_ARGS);
+  }
+  if (options.resumeSessionId) {
+    args.push('resume', options.resumeSessionId);
+  }
+  args.push('-');
+
+  const cwd = options.cwd || process.cwd();
+  const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const env = { ...process.env };
+  if (options.env && typeof options.env === 'object') {
+    for (const [key, value] of Object.entries(options.env)) {
+      env[key] = value;
+    }
+  }
+
+  // Acquire throttle before spawning to prevent MCP handshake timeouts
+  await spawnThrottler.acquire();
+
+  logger.info('spawning codex', JSON.stringify({
+    argv: ['codex', ...args],
+    cwd,
+  }));
+
   return new Promise((resolve, reject) => {
-    const args = ['exec'];
-    if (CODEX_JSON_FLAG && CODEX_JSON_FLAG.trim().length > 0) {
-      args.push(CODEX_JSON_FLAG.trim());
-    }
-    args.push('--color=never', '--skip-git-repo-check');
-    if (model) {
-      args.push('--model', model);
-    }
-    if (Array.isArray(EXTRA_ARGS) && EXTRA_ARGS.length > 0) {
-      args.push(...EXTRA_ARGS);
-    }
-    if (options.resumeSessionId) {
-      args.push('resume', options.resumeSessionId);
-    }
-    args.push('-');
-
-    const cwd = options.cwd || process.cwd();
-    const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
-    const env = { ...process.env };
-    if (options.env && typeof options.env === 'object') {
-      for (const [key, value] of Object.entries(options.env)) {
-        env[key] = value;
-      }
-    }
-
-    console.log('[codex-gateway] spawning codex', JSON.stringify({
-      argv: ['codex', ...args],
-      cwd,
-    }));
-
     const proc = spawn('codex', args, {
       cwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32', // Use process group on Unix
     });
 
     let stdout = '';
     let stderr = '';
     let finished = false;
 
+    // Helper to kill the entire process tree
+    const killProcessTree = () => {
+      try {
+        if (process.platform !== 'win32' && proc.pid) {
+          // Kill the entire process group (negative PID)
+          process.kill(-proc.pid, 'SIGKILL');
+        } else {
+          proc.kill('SIGKILL');
+        }
+      } catch (e) {
+        // Process may already be dead
+      }
+    };
+
     const timer = setTimeout(() => {
       if (!finished) {
         finished = true;
-        proc.kill('SIGTERM');
+        logger.warn('codex exec timed out, killing process tree');
+        // First try SIGTERM
+        try {
+          if (process.platform !== 'win32' && proc.pid) {
+            process.kill(-proc.pid, 'SIGTERM');
+          } else {
+            proc.kill('SIGTERM');
+          }
+        } catch (e) { /* ignore */ }
+        // Force kill after 2 seconds if still alive
+        setTimeout(killProcessTree, 2000);
         reject(new Error(`Codex exec timed out after ${timeoutMs}ms`));
       }
     }, timeoutMs);
@@ -915,7 +1391,7 @@ function runCodex(prompt, model, options = {}) {
         try {
           options.onStdout(text);
         } catch (error) {
-          console.error('[codex-gateway] onStdout handler failed:', error.message);
+          logger.error('onStdout handler failed:', error.message);
         }
       }
     });
@@ -927,13 +1403,18 @@ function runCodex(prompt, model, options = {}) {
         try {
           options.onStderr(text);
         } catch (error) {
-          console.error('[codex-gateway] onStderr handler failed:', error.message);
+          logger.error('onStderr handler failed:', error.message);
         }
       }
     });
 
+    proc.once('spawn', () => {
+      spawnThrottler.release();
+    });
+
     proc.on('error', (error) => {
-      console.error('[codex-gateway] codex spawn error:', error);
+      logger.error('codex spawn error:', error);
+      spawnThrottler.release(); // Release on spawn error
       if (!finished) {
         finished = true;
         clearTimeout(timer);
@@ -942,7 +1423,7 @@ function runCodex(prompt, model, options = {}) {
     });
 
     proc.on('close', (code) => {
-      console.log('[codex-gateway] codex exited', code);
+      logger.info('codex exited', code);
       if (finished) {
         return;
       }
@@ -1040,6 +1521,7 @@ async function executeSessionRun({ payload, messages, systemPrompt, sessionId, r
       model: runOptions.model,
       nudge_prompt: runOptions.nudge_prompt,
       nudge_interval_ms: runOptions.nudge_interval_ms,
+      secure: runOptions.secure,
       resume_codex_session_id: resumeSessionId,
     },
   });
@@ -1049,59 +1531,123 @@ async function executeSessionRun({ payload, messages, systemPrompt, sessionId, r
   const runMeta = beginResult.meta;
   const prompt = buildPrompt(messages, systemPrompt);
 
-  try {
-    const result = await runCodex(prompt, runOptions.model, {
-      timeoutMs: runOptions.timeoutMs,
-      cwd: runOptions.cwd,
-      env: runOptions.env,
-      resumeSessionId,
-      onStdout: (chunk) => sessionStore.appendStdout(resolvedSessionId, chunk),
-      onStderr: (chunk) => sessionStore.appendStderr(resolvedSessionId, chunk),
-    });
-    const codexSessionId = extractCodexSessionId(result.events)
-      || resumeSessionId
-      || runMeta.codex_session_id
-      || null;
-    await sessionStore.finishRun(resolvedSessionId, runId, {
-      status: 'completed',
-      codexSessionId,
-      content: result.content,
-      events: result.events,
-      usage: result.usage || null,
-      model: runOptions.model || null,
-    });
-    return {
-      session_id: resolvedSessionId,
-      codex_session_id: codexSessionId,
-      content: result.content,
-      tool_calls: result.tool_calls,
-      events: result.events,
-      status: 'completed',
-      usage: result.usage || null,
-      model: runOptions.model || null,
-    };
-  } catch (error) {
-    const status = error.message && error.message.includes('timed out') ? 'timeout' : 'error';
-    await sessionStore.finishRun(resolvedSessionId, runId, {
-      status,
-      codexSessionId: resumeSessionId,
-      error: error.message,
-    });
-    throw error;
+  // Retry loop for timeout/empty responses
+  // Important: Share the timeout budget across all retries, don't multiply it
+  const startTime = Date.now();
+  const totalBudgetMs = runOptions.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const maxPerAttemptMs = Math.min(30000, Math.floor(totalBudgetMs / (MAX_RETRIES + 1))); // Max 30s per attempt
+
+  let lastError = null;
+  let attempt = 0;
+
+  while (attempt <= MAX_RETRIES) {
+    attempt++;
+
+    // Check if we've exhausted time budget
+    const elapsedMs = Date.now() - startTime;
+    const remainingMs = totalBudgetMs - elapsedMs;
+    if (remainingMs < 5000) {
+      logger.warn(`time budget exhausted (${elapsedMs}ms elapsed), stopping retries`);
+      break;
+    }
+
+    // Use smaller timeout for retries to fit within budget
+    const attemptTimeoutMs = attempt === 1
+      ? Math.min(runOptions.timeoutMs || DEFAULT_TIMEOUT_MS, remainingMs - 1000)
+      : Math.min(maxPerAttemptMs, remainingMs - 1000);
+
+    try {
+      if (attempt > 1) {
+        const delay = Math.min(RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 2), 5000); // Cap delay at 5s
+        logger.warn(`retry attempt ${attempt}/${MAX_RETRIES + 1} after ${delay}ms delay (${remainingMs}ms remaining)`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+
+      const result = await runCodex(prompt, runOptions.model, {
+        timeoutMs: attemptTimeoutMs,
+        cwd: runOptions.cwd,
+        env: runOptions.env,
+        resumeSessionId,
+        onStdout: (chunk) => sessionStore.appendStdout(resolvedSessionId, chunk),
+        onStderr: (chunk) => sessionStore.appendStderr(resolvedSessionId, chunk),
+      });
+      logRunSummary(result);
+
+      // Check for empty response - might indicate MCP handshake failure
+      const isEmpty = !result.content && (!result.events || result.events.length === 0);
+      if (isEmpty && RETRY_ON_EMPTY && attempt <= MAX_RETRIES) {
+        logger.warn(`attempt ${attempt}: empty response (no content/events), will retry`);
+        lastError = new Error('Empty response from Codex (possible MCP handshake failure)');
+        continue;
+      }
+
+      const codexSessionId = extractCodexSessionId(result.events)
+        || resumeSessionId
+        || runMeta.codex_session_id
+        || null;
+      await sessionStore.finishRun(resolvedSessionId, runId, {
+        status: 'completed',
+        codexSessionId,
+        content: result.content,
+        events: result.events,
+        usage: result.usage || null,
+        model: runOptions.model || null,
+      });
+      return {
+        session_id: resolvedSessionId,
+        codex_session_id: codexSessionId,
+        content: result.content,
+        tool_calls: result.tool_calls,
+        events: result.events,
+        status: 'completed',
+        usage: result.usage || null,
+        model: runOptions.model || null,
+        retries: attempt - 1,
+      };
+    } catch (error) {
+      lastError = error;
+      const isTimeout = error.message && error.message.includes('timed out');
+
+      if (attempt <= MAX_RETRIES) {
+        logger.warn(`attempt ${attempt} failed: ${error.message}, will retry`);
+        continue;
+      }
+
+      // Final attempt failed
+      const status = isTimeout ? 'timeout' : 'error';
+      await sessionStore.finishRun(resolvedSessionId, runId, {
+        status,
+        codexSessionId: resumeSessionId,
+        error: error.message,
+      });
+      throw error;
+    }
   }
+
+  // Should not reach here, but handle it
+  const status = lastError?.message?.includes('timed out') ? 'timeout' : 'error';
+  await sessionStore.finishRun(resolvedSessionId, runId, {
+    status,
+    codexSessionId: resumeSessionId,
+    error: lastError?.message || 'Max retries exceeded',
+  });
+  throw lastError || new Error('Max retries exceeded');
 }
 
 async function runPromptWithWorker({ payload, messages, systemPrompt, sessionId }) {
   await sessionStore.ready;
   const promptPreview = extractPromptPreview(messages, systemPrompt);
-  const runOptions = buildRunOptions({ ...payload, prompt_preview: promptPreview }, { prompt_preview: promptPreview });
 
   const resolvedSessionId = sessionId ? sessionStore.resolveSessionId(sessionId) : null;
   const existingMeta = resolvedSessionId ? await sessionStore.getMeta(resolvedSessionId) : null;
   const resumeCodexSessionId = existingMeta?.codex_session_id || null;
+  const effectivePayload = { ...payload, prompt_preview: promptPreview };
+  if (existingMeta?.secure) {
+    effectivePayload.secure = true;
+  }
 
   const result = await executeSessionRun({
-    payload: { ...payload, prompt_preview: promptPreview },
+    payload: effectivePayload,
     messages,
     systemPrompt,
     sessionId: resolvedSessionId || undefined,
@@ -1317,7 +1863,7 @@ async function discoverSessionTriggerFiles() {
     }
   } catch (error) {
     if (error.code !== 'ENOENT') {
-      console.error('[codex-gateway] failed to enumerate session triggers:', error.message);
+      logger.error('failed to enumerate session triggers:', error.message);
     }
   }
   return files;
@@ -1356,7 +1902,7 @@ class TriggerScheduler extends EventEmitter {
     this.started = true;
     await this.reload();
     this.startWatcher();
-    console.log(`[codex-gateway] trigger scheduler watching ${this.triggerFile}`);
+    logger.info(`trigger scheduler watching ${this.triggerFile}`);
   }
 
   stop() {
@@ -1386,19 +1932,19 @@ class TriggerScheduler extends EventEmitter {
         this.triggers.clear();
         return;
       }
-      console.error('[codex-gateway] trigger config parse error:', error.message);
+      logger.error('trigger config parse error:', error.message);
       return;
     }
     const entries = Array.isArray(config.triggers) ? config.triggers : [];
     const seen = new Set();
-    console.log(`[codex-gateway] reloading ${entries.length} trigger(s) from ${this.triggerFile}`);
+    logger.info(`reloading ${entries.length} trigger(s) from ${this.triggerFile}`);
     for (const entry of entries) {
       try {
         const normalized = this.normalize(entry);
         seen.add(normalized.id);
         this.schedule(normalized);
       } catch (error) {
-        console.error('[codex-gateway] skipping trigger:', error.message);
+        logger.error('skipping trigger:', error.message);
       }
     }
     for (const key of Array.from(this.jobs.keys())) {
@@ -1448,18 +1994,18 @@ class TriggerScheduler extends EventEmitter {
     try {
       nextFire = computeNextTriggerFire(record, new Date());
     } catch (error) {
-      console.error(`[codex-gateway] trigger ${record.id} scheduling error:`, error.message);
+      logger.error(`trigger ${record.id} scheduling error:`, error.message);
     }
     record.next_fire = nextFire ? nextFire.toISOString() : null;
     this.triggers.set(record.id, record);
     if (!nextFire) {
       return;
     }
-    console.log(`[codex-gateway] trigger '${record.title}' scheduled for ${nextFire.toISOString()} (${this.triggerFile})`);
+    logger.info(`trigger '${record.title}' scheduled for ${nextFire.toISOString()} (${this.triggerFile})`);
     const delay = Math.max(nextFire.getTime() - Date.now(), MIN_TRIGGER_DELAY_MS);
     const timer = setTimeout(() => {
       this.execute(record.id).catch((error) => {
-        console.error(`[codex-gateway] trigger ${record.id} execution error:`, error.message);
+        logger.error(`trigger ${record.id} execution error:`, error.message);
       });
     }, delay);
     this.jobs.set(record.id, timer);
@@ -1501,7 +2047,7 @@ class TriggerScheduler extends EventEmitter {
       triggerId,
       triggerTitle: record.title,
     };
-    console.log('[codex-gateway] trigger dispatch', JSON.stringify({
+    logger.info('trigger dispatch', JSON.stringify({
       trigger_id: triggerId,
       title: record.title,
       payload: {
@@ -1527,10 +2073,10 @@ class TriggerScheduler extends EventEmitter {
       record.last_fired = nowIso;
       record.gateway_session_id = gatewaySessionId || null;
     } catch (error) {
-      console.error(`[codex-gateway] trigger ${record.id} run failed:`, error.message);
+      logger.error(`trigger ${record.id} run failed:`, error.message);
     } finally {
       if (runSucceeded && this.isOneShot(record)) {
-        console.log(`[codex-gateway] removing completed one-shot trigger ${record.id}`);
+        logger.info(`removing completed one-shot trigger ${record.id}`);
         await this.removeTriggerRecord(record.id);
         this.triggers.delete(record.id);
         this.jobs.delete(record.id);
@@ -1561,7 +2107,7 @@ class TriggerScheduler extends EventEmitter {
       }
     } catch (error) {
       if (error.code !== 'ENOENT') {
-        console.error('[codex-gateway] failed to persist trigger metadata:', error.message);
+        logger.error('failed to persist trigger metadata:', error.message);
       }
     }
   }
@@ -1580,7 +2126,7 @@ class TriggerScheduler extends EventEmitter {
       await fsp.writeFile(this.triggerFile, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
     } catch (error) {
       if (error.code !== 'ENOENT') {
-        console.error('[codex-gateway] failed to remove trigger:', error.message);
+        logger.error('failed to remove trigger:', error.message);
       }
     }
   }
@@ -1603,11 +2149,11 @@ class TriggerScheduler extends EventEmitter {
         if (eventType !== 'change' && eventType !== 'rename') {
           return;
         }
-        console.log(`[codex-gateway] detected change in ${this.triggerFile} (${eventType})`);
+        logger.verbose(`detected change in ${this.triggerFile} (${eventType})`);
         this.scheduleReload();
       });
     } catch (error) {
-      console.error('[codex-gateway] unable to watch trigger file:', error.message);
+      logger.error('unable to watch trigger file:', error.message);
     }
   }
 
@@ -1618,7 +2164,7 @@ class TriggerScheduler extends EventEmitter {
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
       this.reload().catch((error) => {
-        console.error('[codex-gateway] trigger reload failure:', error.message);
+        logger.error('trigger reload failure:', error.message);
       });
     }, Math.max(TRIGGER_WATCH_DEBOUNCE_MS, 250));
   }
@@ -1689,9 +2235,9 @@ class TriggerSchedulerManager {
     this.schedulers.set(filePath, scheduler);
     try {
       await scheduler.start();
-      console.log(`[codex-gateway] trigger scheduler watching ${filePath}`);
+      logger.info(`trigger scheduler watching ${filePath}`);
     } catch (error) {
-      console.error(`[codex-gateway] failed to start scheduler for ${filePath}:`, error.message);
+      logger.error(`failed to start scheduler for ${filePath}:`, error.message);
     }
   }
 
@@ -1705,7 +2251,7 @@ class TriggerSchedulerManager {
       });
     } catch (error) {
       if (error.code !== 'ENOENT') {
-        console.error('[codex-gateway] unable to watch session triggers:', error.message);
+        logger.error('unable to watch session triggers:', error.message);
       }
     }
   }
@@ -1717,24 +2263,46 @@ class TriggerSchedulerManager {
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null;
       this.refreshSchedulers().catch((error) => {
-        console.error('[codex-gateway] trigger refresh failure:', error.message);
+        logger.error('trigger refresh failure:', error.message);
       });
     }, Math.max(TRIGGER_WATCH_DEBOUNCE_MS, 250));
   }
 }
 
 async function handleCompletion(req, res) {
+  const requestId = Math.random().toString(36).substring(7);
+  logger.info('completion request', requestId, 'started');
+
+  // Check concurrency limit - return 429 if at capacity
+  if (!concurrencyLimiter.tryAcquire()) {
+    const status = concurrencyLimiter.getStatus();
+    logger.warn('request', requestId, 'rejected: at capacity', status);
+    sendError(res, 429, 'Too many concurrent requests', {
+      retry_after: 5,
+      active: status.active,
+      max: status.max,
+    });
+    return;
+  }
+
+  // Ensure we release the slot when done
+  const releaseSlot = () => concurrencyLimiter.release();
+
   let body = '';
   try {
     body = await readBody(req);
+    logger.verbose('request', requestId, 'body size:', body.length, 'bytes');
   } catch (error) {
-    console.error('[codex-gateway] read error:', error.message);
+    logger.error('request', requestId, 'read error:', error.message);
+    releaseSlot();
     sendError(res, 413, error.message);
     return;
   }
 
   const parsed = safeJsonParse(body || '{}');
   if (!parsed.ok) {
+    logger.error('request', requestId, 'invalid JSON');
+    releaseSlot();
     sendError(res, 400, 'Invalid JSON payload');
     return;
   }
@@ -1742,8 +2310,14 @@ async function handleCompletion(req, res) {
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   const systemPrompt = typeof payload.system_prompt === 'string' ? payload.system_prompt : '';
   if (messages.length === 0) {
+    logger.error('request', requestId, 'no messages');
+    releaseSlot();
     sendError(res, 400, 'messages array is required');
     return;
+  }
+  logger.verbose('request', requestId, 'messages:', messages.length, 'timeout_ms:', payload.timeout_ms || 'default');
+  if (messages.length > 0 && messages[0].content) {
+    logger.debug('request', requestId, 'first message preview:', messages[0].content.slice(0, 100));
   }
 
   await sessionStore.ready;
@@ -1758,30 +2332,52 @@ async function handleCompletion(req, res) {
     : parseBoolean(payload.persistent);
   const parentMeta = resolvedSessionId ? await sessionStore.getMeta(resolvedSessionId) : null;
   const codexResumeId = resumeSessionId || (parentMeta && parentMeta.codex_session_id) || null;
+  const secureRequested = parseBoolean(payload.secure) || parseBoolean(payload.secure_session);
+  if ((secureRequested || (parentMeta && parentMeta.secure)) && !hasSecureAccess(req, null)) {
+    releaseSlot();
+    sendError(res, 403, 'Secure session requires a valid token');
+    return;
+  }
   const useWorker = Boolean(persistentFlag) || Boolean(resolvedSessionId);
 
+  const payloadWithSecure = { ...payload };
+  if (parentMeta && parentMeta.secure) {
+    payloadWithSecure.secure = true;
+  }
+
   try {
+    logger.verbose('request', requestId, 'executing, useWorker:', useWorker);
     if (useWorker) {
       const result = await runPromptWithWorker({
-        payload,
+        payload: payloadWithSecure,
         messages,
         systemPrompt,
         sessionId: resolvedSessionId,
       });
+      logger.verbose('request', requestId, 'worker result - status:', result.status, 'content length:', result.content?.length || 0);
+      releaseSlot();
       sendJson(res, 200, {
         ...result,
+        env: buildEnvSnapshot(),
         session_url: `/sessions/${result.codex_session_id || result.gateway_session_id}`,
       });
       return;
     }
 
     const result = await executeSessionRun({
-      payload,
+      payload: payloadWithSecure,
       messages,
       systemPrompt,
       sessionId: resolvedSessionId,
       resumeSessionId: codexResumeId,
     });
+    logger.verbose('request', requestId, 'session run result - status:', result.status, 'content length:', result.content?.length || 0, 'events:', result.events?.length || 0);
+    logger.verbose('request', requestId, 'session IDs - gateway:', result.session_id, 'codex:', result.codex_session_id);
+    if (result.content) {
+      logger.debug('request', requestId, 'content preview:', result.content.slice(0, 200));
+    }
+    logger.sessionInfo(result.session_id, result.codex_session_id);
+    releaseSlot();
     sendJson(res, 200, {
       gateway_session_id: result.session_id,
       codex_session_id: result.codex_session_id,
@@ -1791,10 +2387,13 @@ async function handleCompletion(req, res) {
       events: result.events,
       usage: result.usage || null,
       model: result.model || null,
+      env: buildEnvSnapshot(),
       session_url: `/sessions/${result.codex_session_id || result.session_id}`,
     });
   } catch (error) {
-    console.error('[codex-gateway] completion error:', error.message);
+    logger.error('request', requestId, 'completion error:', error.message);
+    logger.error('request', requestId, 'error stack:', error.stack);
+    releaseSlot();
     sendError(res, 500, error.message || 'Codex execution failed');
   }
 }
@@ -1803,7 +2402,18 @@ async function handleSessionList(req, res, url) {
   await sessionStore.ready;
   const limitRaw = url.searchParams.get('limit');
   const limit = limitRaw ? parseInt(limitRaw, 10) : null;
-  const sessions = await sessionStore.listSessions(limit && !Number.isNaN(limit) ? limit : undefined);
+  const includeSecureParam = url.searchParams.get('include_secure');
+  const secureOnly = parseBoolean(url.searchParams.get('secure_only'));
+  const includeSecure = includeSecureParam === null ? true : parseBoolean(includeSecureParam);
+  const authorizedSecure = hasSecureAccess(req, url);
+  const sessions = await sessionStore.listSessions(
+    limit && !Number.isNaN(limit) ? limit : undefined,
+    {
+      includeSecure,
+      secureOnly,
+      authorizedSecure,
+    },
+  );
   sendJson(res, 200, { sessions, count: sessions.length });
 }
 
@@ -1822,6 +2432,9 @@ async function handleSessionDetail(req, res, sessionIdentifier, url) {
     sendError(res, 404, 'Session metadata missing');
     return;
   }
+  if (!enforceSecureAccess(meta, req, res, url)) {
+    return;
+  }
 
   const [stdoutTail, stderrTail] = await Promise.all([
     sessionStore.readTail(resolvedId, 'stdout.log', tailLines),
@@ -1835,7 +2448,7 @@ async function handleSessionDetail(req, res, sessionIdentifier, url) {
       events = data.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
     } catch (error) {
       if (error.code !== 'ENOENT') {
-        console.error('[codex-gateway] failed to read events:', error.message);
+        logger.error('failed to read events:', error.message);
       }
     }
   }
@@ -1849,6 +2462,7 @@ async function handleSessionDetail(req, res, sessionIdentifier, url) {
     last_activity_at: meta.last_activity_at,
     model: meta.model,
     objective: meta.objective,
+    secure: Boolean(meta.secure),
     nudge_prompt: meta.nudge_prompt,
     nudge_interval_ms: meta.nudge_interval_ms,
     worker_state: meta.worker_state || 'stopped',
@@ -1882,13 +2496,16 @@ async function handleSessionSearch(req, res, sessionIdentifier, url) {
   const maxResults = maxResultsRaw ? parseInt(maxResultsRaw, 10) : 5;
   const minScoreRaw = url.searchParams.get('min_score');
   const minScore = minScoreRaw ? parseFloat(minScoreRaw) : undefined;
+  const meta = await sessionStore.getMeta(resolvedId);
+  if (meta && !enforceSecureAccess(meta, req, res, url)) {
+    return;
+  }
   try {
     const matches = await sessionStore.searchSession(resolvedId, query, {
       fuzzy,
       maxResults: !Number.isNaN(maxResults) && maxResults > 0 ? maxResults : 5,
       minScore: typeof minScore === 'number' && !Number.isNaN(minScore) ? minScore : undefined,
     });
-    const meta = await sessionStore.getMeta(resolvedId);
     sendJson(res, 200, {
       session_id: resolvedId,
       codex_session_id: meta ? meta.codex_session_id : null,
@@ -1896,7 +2513,7 @@ async function handleSessionSearch(req, res, sessionIdentifier, url) {
       signals: matches,
     });
   } catch (error) {
-    console.error('[codex-gateway] search error:', error.message);
+    logger.error('search error:', error.message);
     sendError(res, 500, 'Failed to search session');
   }
 }
@@ -1909,7 +2526,7 @@ async function handleSessionPrompt(req, res, sessionIdentifier) {
     return;
   }
   const body = await readBody(req).catch((error) => {
-    console.error('[codex-gateway] prompt body error:', error.message);
+    logger.error('prompt body error:', error.message);
     return null;
   });
   if (body === null) {
@@ -1938,6 +2555,9 @@ async function handleSessionPrompt(req, res, sessionIdentifier) {
     sendError(res, 404, 'Session metadata missing');
     return;
   }
+  if (!enforceSecureAccess(meta, req, res)) {
+    return;
+  }
 
   try {
     const result = await runPromptWithWorker({
@@ -1948,7 +2568,7 @@ async function handleSessionPrompt(req, res, sessionIdentifier) {
     });
     sendJson(res, 200, result);
   } catch (error) {
-    console.error('[codex-gateway] prompt error:', error.message);
+    logger.error('prompt error:', error.message);
     sendError(res, 500, error.message || 'Codex execution failed');
   }
 }
@@ -1963,6 +2583,9 @@ async function handleSessionNudge(req, res, sessionIdentifier) {
   const meta = await sessionStore.getMeta(resolvedId);
   if (!meta) {
     sendError(res, 404, 'Session metadata missing');
+    return;
+  }
+  if (!enforceSecureAccess(meta, req, res, url)) {
     return;
   }
   const body = await readBody(req).catch(() => null);
@@ -1991,7 +2614,7 @@ async function handleSessionNudge(req, res, sessionIdentifier) {
     });
     sendJson(res, 200, result);
   } catch (error) {
-    console.error('[codex-gateway] nudge error:', error.message);
+    logger.error('nudge error:', error.message);
     sendError(res, 500, error.message || 'Codex execution failed');
   }
 }
@@ -2006,10 +2629,10 @@ if (require.main === module) {
       dispatchPrompt: async (options) => runPromptWithWorker(options),
     });
     triggerSchedulerManager.start().catch((error) => {
-      console.error('[codex-gateway] failed to start trigger schedulers:', error.message);
+      logger.error('failed to start trigger schedulers:', error.message);
     });
   } else {
-    console.log('[codex-gateway] trigger scheduler disabled by configuration');
+    logger.info('trigger scheduler disabled by configuration');
   }
 
   const server = http.createServer(async (req, res) => {
@@ -2054,6 +2677,16 @@ if (require.main === module) {
         return;
       }
 
+      if (segments.length === 1 && segments[0] === 'status' && method === 'GET') {
+        const status = concurrencyLimiter.getStatus();
+        sendJson(res, 200, {
+          concurrency: status,
+          uptime: process.uptime(),
+          memory: process.memoryUsage(),
+        });
+        return;
+      }
+
       if (segments.length === 1 && segments[0] === 'sessions' && method === 'GET') {
         await handleSessionList(req, res, url);
         return;
@@ -2081,17 +2714,17 @@ if (require.main === module) {
 
       sendError(res, 404, 'Not Found');
     } catch (error) {
-      console.error('[codex-gateway] unhandled error:', error);
+      logger.error('unhandled error:', error);
       sendError(res, 500, 'Internal Server Error');
     }
   });
 
   server.listen(DEFAULT_PORT, DEFAULT_HOST, () => {
-    console.log(`[codex-gateway] listening on http://${DEFAULT_HOST}:${DEFAULT_PORT}`);
+    logger.info(`listening on http://${DEFAULT_HOST}:${DEFAULT_PORT}`);
   });
 
   const shutdown = () => {
-    console.log('[codex-gateway] shutting down');
+    logger.info('shutting down');
     if (triggerSchedulerManager) {
       triggerSchedulerManager.stop();
     }

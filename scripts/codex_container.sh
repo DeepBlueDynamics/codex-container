@@ -22,8 +22,15 @@ declare -a EXEC_ARGS=()
 declare -a POSITIONAL_ARGS=()
 GATEWAY_PORT_OVERRIDE=""
 GATEWAY_HOST_OVERRIDE=""
+GATEWAY_SESSION_DIRS_OVERRIDE=""
+GATEWAY_SECURE_DIR_OVERRIDE=""
+GATEWAY_SECURE_TOKEN_OVERRIDE=""
 declare -a DOCKER_RUN_EXTRA_ARGS=()
 declare -a DOCKER_RUN_EXTRA_ENVS=()
+declare -a CONFIG_MOUNT_ARGS=()
+declare -a CONFIG_ENV_KVS=()
+declare -a CONFIG_ENV_IMPORTS=()
+PROJECT_CONFIG_PATH=""
 WATCH_PATH=""
 declare -a WATCH_PATTERNS=()
 WATCH_INTERVAL=""
@@ -223,6 +230,43 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       GATEWAY_HOST_OVERRIDE="$1"
+      shift
+      ;;
+    --gateway-session-dirs)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --gateway-session-dirs requires a value" >&2
+        exit 1
+      fi
+      GATEWAY_SESSION_DIRS_OVERRIDE="$1"
+      shift
+      ;;
+    --gateway-secure-dir)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --gateway-secure-dir requires a value" >&2
+        exit 1
+      fi
+      GATEWAY_SECURE_DIR_OVERRIDE="$1"
+      shift
+      ;;
+    --gateway-secure-token)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --gateway-secure-token requires a value" >&2
+        exit 1
+      fi
+      GATEWAY_SECURE_TOKEN_OVERRIDE="$1"
+      shift
+      ;;
+    --gateway-log-level)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "Error: --gateway-log-level requires a value (0-3)" >&2
+        exit 1
+      fi
+      CODEX_GATEWAY_LOG_LEVEL="$1"
+      export CODEX_GATEWAY_LOG_LEVEL
       shift
       ;;
     --watch-path)
@@ -453,7 +497,176 @@ resolve_workspace() {
   exit 1
 }
 
+find_project_config() {
+  local base="$1"
+  local candidates=(
+    "$base/.codex-container.json"
+    "$base/.codex_container.json"
+    "$base/.codex-container.toml"
+    "$base/.codex_container.toml"
+  )
+  local path
+  for path in "${candidates[@]}"; do
+    if [[ -f "$path" ]]; then
+      echo "$path"
+      return 0
+    fi
+  done
+  return 1
+}
+
+load_project_config() {
+  local workspace="$1"
+  local cfg
+  cfg="$(find_project_config "$workspace" || true)"
+  if [[ -z "$cfg" ]]; then
+    return
+  fi
+  PROJECT_CONFIG_PATH="$cfg"
+  if ! command -v python >/dev/null 2>&1; then
+    echo "python not found; skipping config parse for $cfg" >&2
+    return
+  fi
+  local json
+  json="$(python - <<'PYCODE'
+import json, sys, pathlib
+try:
+    import tomllib
+except Exception:
+    tomllib = None
+
+path = pathlib.Path(r"""'"$cfg"'""")
+data = {}
+if path.suffix.lower() == ".json":
+    data = json.loads(path.read_text())
+elif path.suffix.lower() == ".toml":
+    if tomllib:
+        data = tomllib.loads(path.read_text())
+    else:
+        sys.stderr.write("tomllib not available; config ignored\n")
+        data = {}
+else:
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        if tomllib:
+            data = tomllib.loads(path.read_text())
+        else:
+            raise
+
+def default(obj, key, fallback):
+    if isinstance(obj, dict):
+        return obj.get(key, fallback)
+    return fallback
+
+out = {
+    "env": default(data, "env", {}),
+    "mounts": default(data, "mounts", []),
+    "tools": default(data, "tools", []),
+}
+print(json.dumps(out))
+PYCODE
+)" || json=""
+  if [[ -z "$json" ]]; then
+    echo "Failed to parse config $cfg" >&2
+    return
+  fi
+  CONFIG_ENV_KVS=()
+  CONFIG_MOUNT_ARGS=()
+  CONFIG_ENV_IMPORTS=()
+  # parse env
+  while IFS= read -r line; do
+    CONFIG_ENV_KVS+=("$line")
+  done < <(python - <<'PYCODE'
+import json, sys
+data=json.loads(r''''"$json"'""')
+env=data.get("env",{}) or {}
+for k,v in env.items():
+    if v is None:
+        continue
+    print(f"{k}={v}")
+PYCODE
+)
+  # parse env_imports
+  while IFS= read -r line; do
+    CONFIG_ENV_IMPORTS+=("$line")
+  done < <(python - <<'PYCODE'
+import json, sys
+data=json.loads(r''''"$json"'""')
+imports=data.get("env_imports",[]) or []
+for name in imports:
+    if name:
+        print(name)
+PYCODE
+)
+  # parse mounts
+  while IFS= read -r line; do
+    CONFIG_MOUNT_ARGS+=("$line")
+  done < <(python - <<'PYCODE'
+import json, sys, os
+data=json.loads(r''''"$json"'""')
+mounts=data.get("mounts",[]) or []
+def norm(p):
+    return None if p is None else p.replace("\\","/")
+for m in mounts:
+    host = m if isinstance(m,str) else m.get("host")
+    container = None if isinstance(m,str) else m.get("container")
+    mode = None if isinstance(m,str) else m.get("mode","rw")
+    if not host:
+        continue
+    host = norm(host)
+    if not container:
+        container = "/workspace/" + os.path.basename(host.rstrip("/"))
+    container = norm(container)
+    suffix = ":ro" if isinstance(mode,str) and mode.lower()=="ro" else ""
+    print(f"{host}:{container}{suffix}")
+PYCODE
+)
+}
+
 WORKSPACE_PATH="$(resolve_workspace "$WORKSPACE_OVERRIDE")"
+if [[ -n "$GATEWAY_SESSION_DIRS_OVERRIDE" ]]; then
+  CODEX_GATEWAY_SESSION_DIRS="$GATEWAY_SESSION_DIRS_OVERRIDE"
+fi
+if [[ -n "$GATEWAY_SECURE_DIR_OVERRIDE" ]]; then
+  CODEX_GATEWAY_SECURE_SESSION_DIR="$GATEWAY_SECURE_DIR_OVERRIDE"
+fi
+if [[ -n "$GATEWAY_SECURE_TOKEN_OVERRIDE" ]]; then
+  CODEX_GATEWAY_SECURE_TOKEN="$GATEWAY_SECURE_TOKEN_OVERRIDE"
+fi
+load_project_config "$WORKSPACE_PATH"
+
+build_gateway_session_env() {
+  local session_dirs="${CODEX_GATEWAY_SESSION_DIRS:-/opt/codex-home/.codex/sessions,/workspace/.codex-gateway-sessions}"
+  local secure_dir="${CODEX_GATEWAY_SECURE_SESSION_DIR:-/opt/codex-home/.codex/sessions/secure}"
+  local secure_token="${CODEX_GATEWAY_SECURE_TOKEN:-}"
+
+  # Allow overrides from CLI env arrays if provided later
+  DOCKER_RUN_EXTRA_ENVS+=("CODEX_GATEWAY_SESSION_DIRS=${session_dirs}")
+  DOCKER_RUN_EXTRA_ENVS+=("CODEX_GATEWAY_SECURE_SESSION_DIR=${secure_dir}")
+  if [[ -n "$secure_token" ]]; then
+    DOCKER_RUN_EXTRA_ENVS+=("CODEX_GATEWAY_SECURE_TOKEN=${secure_token}")
+  fi
+}
+
+# Inject config envs early
+if [[ ${#CONFIG_ENV_KVS[@]} -gt 0 ]]; then
+  for kv in "${CONFIG_ENV_KVS[@]}"; do
+    DOCKER_RUN_EXTRA_ENVS+=("$kv")
+  done
+fi
+# Import host envs listed in config
+if [[ ${#CONFIG_ENV_IMPORTS[@]} -gt 0 ]]; then
+  for name in "${CONFIG_ENV_IMPORTS[@]}"; do
+    val="${!name:-}"
+    if [[ -n "$val" ]]; then
+      DOCKER_RUN_EXTRA_ENVS+=("${name}=${val}")
+    fi
+  done
+fi
+
+# Apply default gateway session env unless explicitly overridden via env vars/CLI
+build_gateway_session_env
 has_system_prompt_flag() {
   local token
   for token in "$@"; do
@@ -700,6 +913,11 @@ docker_run() {
     fi
     args+=(-v "${mount_source}:/workspace" -w /workspace)
   fi
+  if [[ ${#CONFIG_MOUNT_ARGS[@]} -gt 0 ]]; then
+    for m in "${CONFIG_MOUNT_ARGS[@]}"; do
+      args+=(-v "$m")
+    done
+  fi
   args+=(-v "${CODEX_ROOT}/scripts:/opt/codex-support:ro")
   if [[ "$USE_OSS" == true ]]; then
     local oss_target="$RESOLVED_OSS_SERVER_URL"
@@ -763,7 +981,7 @@ docker_run() {
   if [[ ${#DOCKER_RUN_EXTRA_ARGS[@]} -gt 0 ]]; then
     args+=("${DOCKER_RUN_EXTRA_ARGS[@]}")
   fi
-  args+=("${TAG}" /usr/local/bin/codex_entry.sh)
+  args+=("${TAG}" /usr/bin/tini -- /usr/local/bin/codex_entry.sh)
   if [[ $DANGER_MODE -eq 1 ]]; then
     args+=('--dangerously-bypass-approvals-and-sandbox')
   fi
@@ -854,11 +1072,14 @@ fi
 cat /tmp/codex-install.log
 EOS
 )
+  local -a prev_envs=("${DOCKER_RUN_EXTRA_ENVS[@]+"${DOCKER_RUN_EXTRA_ENVS[@]}"}")
+  DOCKER_RUN_EXTRA_ENVS+=("CODEX_SKIP_MCP_SETUP=1")
   if [[ $silent -eq 1 ]]; then
     docker_run --quiet /bin/bash -lc "$update_script" >/dev/null
   else
     docker_run /bin/bash -lc "$update_script"
   fi
+  DOCKER_RUN_EXTRA_ENVS=("${prev_envs[@]+"${prev_envs[@]}"}")
   CODEX_UPDATE_DONE=1
 }
 
@@ -1109,6 +1330,9 @@ invoke_codex_server() {
   fi
   if [[ -n "${CODEX_GATEWAY_EXTRA_ARGS:-}" ]]; then
     DOCKER_RUN_EXTRA_ENVS+=("CODEX_GATEWAY_EXTRA_ARGS=${CODEX_GATEWAY_EXTRA_ARGS}")
+  fi
+  if [[ -n "${CODEX_GATEWAY_LOG_LEVEL:-}" ]]; then
+    DOCKER_RUN_EXTRA_ENVS+=("CODEX_GATEWAY_LOG_LEVEL=${CODEX_GATEWAY_LOG_LEVEL}")
   fi
 
   docker_run node /usr/local/bin/codex_gateway.js

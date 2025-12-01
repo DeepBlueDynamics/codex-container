@@ -45,6 +45,7 @@ RUN apt-get update \
     socat \
     unzip \
     ripgrep \
+    tini \
     zsh \
   && rm -rf /var/lib/apt/lists/*
 

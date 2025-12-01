@@ -19,6 +19,9 @@ pydantic
 faster-whisper
 elevenlabs
 
+# Fuzzy matching utilities
+rapidfuzz
+
 # Google GenAI SDK (provides `google.genai`)
 google-genai
 
