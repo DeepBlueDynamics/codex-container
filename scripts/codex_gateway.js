@@ -375,16 +375,36 @@ function extractCodexSessionId(events) {
     if (!entry || typeof entry !== 'object') {
       continue;
     }
+
+    // New format: check entry.session_id directly
+    if (typeof entry.session_id === 'string' && entry.session_id.trim().length > 0) {
+      logger.debug('extractCodexSessionId: found entry.session_id', entry.session_id);
+      return entry.session_id.trim();
+    }
+
+    // New format: check entry.item.session_id
+    if (entry.item && typeof entry.item.session_id === 'string' && entry.item.session_id.trim().length > 0) {
+      logger.debug('extractCodexSessionId: found item.session_id', entry.item.session_id);
+      return entry.item.session_id.trim();
+    }
+
+    // New format: thread.started event has session info
+    if (entry.type === 'thread.started' && entry.thread_id) {
+      logger.debug('extractCodexSessionId: found thread_id', entry.thread_id);
+      return entry.thread_id.trim();
+    }
+
+    // Old format: entry.msg
     const msg = entry.msg;
     if (!msg) {
       continue;
     }
     if (typeof msg.session_id === 'string' && msg.session_id.trim().length > 0) {
-      logger.debug('extractCodexSessionId: found session_id', msg.session_id);
+      logger.debug('extractCodexSessionId: found msg.session_id', msg.session_id);
       return msg.session_id.trim();
     }
     if (msg.session && typeof msg.session.id === 'string' && msg.session.id.trim().length > 0) {
-      logger.debug('extractCodexSessionId: found session.id', msg.session.id);
+      logger.debug('extractCodexSessionId: found msg.session.id', msg.session.id);
       return msg.session.id.trim();
     }
   }
@@ -1476,6 +1496,33 @@ function parseCodexOutput(stdout) {
       continue;
     }
 
+    // New format: {"type":"item.completed","item":{"type":"agent_message","text":"..."}}
+    if (parsed.type && parsed.item) {
+      events.push(parsed);
+      const item = parsed.item;
+      if (parsed.type === 'item.completed' && item.type === 'agent_message') {
+        if (typeof item.text === 'string') {
+          content = item.text;
+        }
+      }
+      if (item.type === 'mcp_tool_call') {
+        toolCalls.push({
+          type: parsed.type === 'item.completed' ? 'mcp_tool_call_end' : 'mcp_tool_call_begin',
+          server: item.server,
+          tool: item.tool,
+          arguments: item.arguments,
+          result: item.result,
+          status: item.status,
+        });
+      }
+    }
+
+    // New format: {"type":"turn.completed","usage":{...}}
+    if (parsed.type === 'turn.completed' && parsed.usage) {
+      usage = parsed.usage;
+    }
+
+    // Old format: {"msg":{"type":"agent_message","message":"..."}}
     if (parsed.msg) {
       const msg = parsed.msg;
       events.push(parsed);
@@ -1575,10 +1622,14 @@ async function executeSessionRun({ payload, messages, systemPrompt, sessionId, r
 
       // Check for empty response - might indicate MCP handshake failure
       const isEmpty = !result.content && (!result.events || result.events.length === 0);
-      if (isEmpty && RETRY_ON_EMPTY && attempt <= MAX_RETRIES) {
-        logger.warn(`attempt ${attempt}: empty response (no content/events), will retry`);
-        lastError = new Error('Empty response from Codex (possible MCP handshake failure)');
-        continue;
+      if (isEmpty) {
+        // Debug: log raw stdout to help diagnose why parsing found nothing
+        const rawPreview = result.raw ? result.raw.slice(0, 500) : '(no raw output)';
+        logger.warn(`attempt ${attempt}: empty response - raw stdout preview: ${rawPreview.replace(/\n/g, '\\n')}`);
+        if (RETRY_ON_EMPTY && attempt <= MAX_RETRIES) {
+          lastError = new Error('Empty response from Codex (possible MCP handshake failure)');
+          continue;
+        }
       }
 
       const codexSessionId = extractCodexSessionId(result.events)
@@ -2354,7 +2405,13 @@ async function handleCompletion(req, res) {
         systemPrompt,
         sessionId: resolvedSessionId,
       });
-      logger.verbose('request', requestId, 'worker result - status:', result.status, 'content length:', result.content?.length || 0);
+      logger.verbose('request', requestId, 'worker result - status:', result.status, 'content length:', result.content?.length || 0, 'events:', result.events?.length || 0);
+      logger.verbose('request', requestId, 'session IDs - gateway:', result.gateway_session_id, 'codex:', result.codex_session_id);
+      if (result.content) {
+        logger.debug('request', requestId, 'content preview:', result.content.slice(0, 200));
+      }
+      logger.sessionInfo(result.gateway_session_id, result.codex_session_id);
+      logRunSummary(result);
       releaseSlot();
       sendJson(res, 200, {
         ...result,

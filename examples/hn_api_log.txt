@@ -1,0 +1,14 @@
+=== HN Crawl Run 2025-12-01T10:10:51.493112 ===
+[2025-12-01 10:10:53] GET http://localhost:4000/status -> 200 OK | {"concurrency":{"active":0,"max":3,"available":3},"uptime":78.127609975,"memory"
+[2025-12-01 10:10:55] GET http://localhost:4000/sessions?limit=10 -> 200 OK | {"sessions":[{"session_id":"262292c2-4972-4792-9fed-c1d4622edb8e","codex_session
+[2025-12-01 10:12:01] GET http://localhost:4000/sessions?limit=10 -> 200 OK | {"sessions":[{"session_id":"ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0","codex_session
+[2025-12-01 10:12:03] GET http://localhost:4000/sessions/ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0?tail=50 -> 200 OK | {"session_id":"ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0","codex_session_id":null,"st
+[2025-12-01 10:12:10] GET http://localhost:4000/sessions/ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0?tail=50 -> 200 OK | {"session_id":"ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0","codex_session_id":null,"st
+[2025-12-01 10:12:18] GET http://localhost:4000/sessions/ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0?tail=50 -> 200 OK | {"session_id":"ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0","codex_session_id":null,"st
+[2025-12-01 10:12:25] GET http://localhost:4000/sessions/ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0?tail=50 -> 200 OK | {"session_id":"ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0","codex_session_id":null,"st
+[2025-12-01 10:12:32] GET http://localhost:4000/sessions/ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0?tail=50 -> 200 OK | {"session_id":"ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0","codex_session_id":null,"st
+[2025-12-01 10:12:39] GET http://localhost:4000/sessions/ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0?tail=50 -> 200 OK | {"session_id":"ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0","codex_session_id":null,"st
+[2025-12-01 10:12:46] GET http://localhost:4000/sessions/ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0?tail=50 -> 200 OK | {"session_id":"ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0","codex_session_id":null,"st
+[2025-12-01 10:12:53] GET http://localhost:4000/sessions/ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0?tail=50 -> 200 OK | {"session_id":"ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0","codex_session_id":null,"st
+[2025-12-01 10:13:00] GET http://localhost:4000/sessions/ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0?tail=50 -> 200 OK | {"session_id":"ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0","codex_session_id":null,"st
+[2025-12-01 10:13:02] GET http://localhost:4000/sessions/ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0?include_events=1&tail=5000 -> 200 OK | {"session_id":"ee25a1fd-a4e9-4141-8ee0-9f09b42bc4b0","codex_session_id":null,"st
