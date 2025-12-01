@@ -1,0 +1,10 @@
+=== HN Crawl Run 2025-11-30T21:21:24.494664 ===
+[2025-11-30 21:21:26] GET http://localhost:4000/status -> 200 OK | {"concurrency":{"active":0,"max":3,"available":3},"uptime":55.143846626,"memory"
+[2025-11-30 21:21:28] GET http://localhost:4000/sessions?limit=10 -> 200 OK | {"sessions":[{"session_id":"0a874800-4845-4047-b65a-494a40850d62","codex_session
+[2025-11-30 21:22:34] GET http://localhost:4000/sessions?limit=10 -> 200 OK | {"sessions":[{"session_id":"6f2d0c52-74f8-47f3-8370-3b05221673f9","codex_session
+[2025-11-30 21:22:36] GET http://localhost:4000/sessions/6f2d0c52-74f8-47f3-8370-3b05221673f9?tail=50 -> 200 OK | {"session_id":"6f2d0c52-74f8-47f3-8370-3b05221673f9","codex_session_id":null,"st
+[2025-11-30 21:22:43] GET http://localhost:4000/sessions/6f2d0c52-74f8-47f3-8370-3b05221673f9?tail=50 -> 200 OK | {"session_id":"6f2d0c52-74f8-47f3-8370-3b05221673f9","codex_session_id":null,"st
+[2025-11-30 21:22:51] GET http://localhost:4000/sessions/6f2d0c52-74f8-47f3-8370-3b05221673f9?tail=50 -> 200 OK | {"session_id":"6f2d0c52-74f8-47f3-8370-3b05221673f9","codex_session_id":null,"st
+[2025-11-30 21:22:58] GET http://localhost:4000/sessions/6f2d0c52-74f8-47f3-8370-3b05221673f9?tail=50 -> 200 OK | {"session_id":"6f2d0c52-74f8-47f3-8370-3b05221673f9","codex_session_id":null,"st
+[2025-11-30 21:23:05] GET http://localhost:4000/sessions/6f2d0c52-74f8-47f3-8370-3b05221673f9?tail=50 -> 200 OK | {"session_id":"6f2d0c52-74f8-47f3-8370-3b05221673f9","codex_session_id":null,"st
+[2025-11-30 21:23:07] GET http://localhost:4000/sessions/6f2d0c52-74f8-47f3-8370-3b05221673f9?include_events=1&tail=5000 -> 200 OK | {"session_id":"6f2d0c52-74f8-47f3-8370-3b05221673f9","codex_session_id":null,"st
