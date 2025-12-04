@@ -2630,7 +2630,7 @@ async function handleSessionPrompt(req, res, sessionIdentifier) {
   }
 }
 
-async function handleSessionNudge(req, res, sessionIdentifier) {
+async function handleSessionNudge(req, res, sessionIdentifier, url) {
   await sessionStore.ready;
   const resolvedId = sessionStore.resolveSessionId(sessionIdentifier);
   if (!resolvedId) {
@@ -2764,7 +2764,7 @@ if (require.main === module) {
           return;
         }
         if (segments.length === 3 && segments[2] === 'nudge' && method === 'POST') {
-          await handleSessionNudge(req, res, sessionId);
+          await handleSessionNudge(req, res, sessionId, url);
           return;
         }
       }

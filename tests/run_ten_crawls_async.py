@@ -3,9 +3,9 @@
 Run 10 gateway crawl requests with proper backoff for long-running Codex sessions.
 
 Each Codex session takes 30-120 seconds (persistent=False means we wait for completion).
-With max 2 concurrent slots, we expect ~5 batches = 2.5-10 minutes total.
+With max 3 concurrent slots, we expect ~4 batches = 2-8 minutes total.
 
-Retry strategy: Wait 60 seconds between retries since each Codex run is long.
+Retry strategy: Wait 15 seconds between retries.
 """
 
 import asyncio
@@ -27,14 +27,14 @@ PROMPT = (
 )
 NUM_REQUESTS = 10
 
-# Retry config - 60 second waits since each Codex run is long
-MAX_RETRIES = 15
-RETRY_DELAY = 60.0  # seconds between retries
+# Retry config - 15 second waits between retries
+MAX_RETRIES = 20
+RETRY_DELAY = 15.0  # seconds between retries
 
 
 def sync_post(request_id: int) -> Dict[str, Any]:
     """
-    Send a completion request, retrying on 429 with 60-second backoff.
+    Send a completion request, retrying on 429 with 15-second backoff.
 
     persistent=False means this blocks until Codex completes (30-120 seconds).
     """
@@ -72,7 +72,7 @@ def sync_post(request_id: int) -> Dict[str, Any]:
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 # Server at capacity - wait and retry
-                jitter = random.uniform(0, 10)
+                jitter = random.uniform(0, 5)
                 wait = RETRY_DELAY + jitter
                 print(f"  [req {request_id}] 429 at capacity - waiting {wait:.0f}s before retry...")
                 time.sleep(wait)
@@ -116,7 +116,7 @@ async def main():
     print(f"Retry: {MAX_RETRIES} attempts, {RETRY_DELAY}s between retries")
     print()
     print("NOTE: Each Codex session takes 30-120 seconds.")
-    print("      With 2 concurrent slots, expect 5-10 minutes total.")
+    print("      With 3 concurrent slots, expect 2-8 minutes total.")
     print("=" * 70)
     print()
 
