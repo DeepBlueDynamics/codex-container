@@ -452,9 +452,33 @@ async def oracle_walk_hint(
 
     Returns:
         Dict with hexagram, explore_ratio, domain_diversity, novelty_bias, term_pair_bias, note, seed, question.
+        Also returns chaining hints:
+        - next_tool_to_run: recommended follow-up tool.
+        - suggested_call: JSON payload template for that tool (with placeholders to fill).
+        - required_inputs: list of placeholders that must be provided.
     """
     seed_val = seed or datetime.utcnow().strftime("%Y-%m-%d")
-    return _oracle_hint(seed_val, question)
+    hint = _oracle_hint(seed_val, question)
+
+    # Non-breaking chaining metadata so agents can immediately call the sampler.
+    # Placeholders should be replaced by the caller.
+    hint["next_tool_to_run"] = "term_graph_tools.sample_urls"
+    hint["required_inputs"] = ["urls", "allowlist"]
+    hint["suggested_call"] = {
+        "tool": "term_graph_tools.sample_urls",
+        "arguments": {
+            "urls": "${urls}",  # list[str] to supply
+            "allowlist": "${allowlist}",  # list[str] to supply
+            "scores": "${scores_optional}",  # optional list[float]
+            "max_per_domain": 3,
+            "max_total": 10,
+            "explore_ratio": hint["explore_ratio"],
+            "domain_diversity": hint["domain_diversity"],
+            "seed": hint["seed"],
+        },
+        "description": "Fill urls/allowlist (and optional scores), then call sample_urls using oracle parameters.",
+    }
+    return hint
 
 
 @mcp.tool()
