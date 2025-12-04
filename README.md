@@ -1,56 +1,91 @@
-# Gnosis Container (OpenAI-first, local-friendly)
+# Gnosis Container (agent ops stack)
 
-A safe, auditable agent runtime that turns LLMs (OpenAI or local/Ollama) into reliable automations—containerized, observable, and PR-first. Built for individuals and teams needing repeatable workflows with strict guardrails, reproducible images, and controlled web ingress.
+**Containerized AI automation for people who ship.** Runs OpenAI models or local/Ollama inside reproducible Docker containers with controlled web ingress, schedulers, crawlers, and term-graph samplers to cut URL noise. Optional GPU services for Whisper and Instructor embeddings.
 
-## What & Why
-- OpenAI-first, local-friendly: run OpenAI or swap to local/Ollama models without changing the pattern.
-- Personal + team automation that is observable, reversible, and permissioned (PR-only writes by default).
-- Controlled ingestion: gnosis-crawl (markdown-only, caps/allowlists) and low-count SerpAPI with post-filters.
-- Proven in noisy pipelines (alerting/extraction): job state machine, retries, nudge/timeout handling, URL dedup, batch APIs.
+- **Models:** OpenAI or local/Ollama (OSS bridge included)
+- **Ingress:** gnosis-crawl (markdown/HTML, JS optional, caps/allowlists) + low-count SerpAPI wrapper
+- **Automation:** monitor + scheduler (interval/daily/once), unified queue, stuck/timeout/nudge/retry/backoff
+- **Noise-cutting:** term-graph `oracle_walk_hint` + `sample_urls` for allowlisted, deduped URL batches pre-crawl
+- **Safety:** allow/deny, rate/concurrency caps, depth/size/time caps, logs, backups/diffs
+- **Optional services:** GPU Whisper (8765), Instructor-XL (8787)
 
-## Pillars
-1) **Safety/Audit**: allow/deny lists, rate & concurrency caps, depth/size/time caps, PR-first writes, session/tool-call logs, diff/backup.
-2) **Reproducibility**: containerized Codex CLI + MCP tools; deterministic configs; optional GPU services.
-3) **Controlled Web Ingress**: gnosis-crawl (enhanced markdown, JS optional) + SerpAPI wrapper (small `num`, filters).
-4) **Automation Runtime**: scheduler/monitor with interval/daily/once triggers, stuck/timeout detection, nudges, retries/backoff.
-5) **Pre-filtered Search**: term-graph tools with oracle_walk_hint + sample_urls for deduped, allowlisted URL sets before crawling.
-6) **Model Flexibility**: OpenAI or local/Ollama endpoints; swap without redesigning automations.
+## Requirements
+- Docker (Desktop/Engine). Create the network once: `docker network create codex-network` (idempotent).
+- Bash or PowerShell. No local Node/Python needed beyond Docker.
+- For Ollama/local: keep your daemon running; the helper bridges `127.0.0.1:11434` into the container unless you set custom `OSS_SERVER_URL`.
+- For GPU services: NVIDIA + CUDA drivers installed on host.
 
-## What’s Included (MCP highlights)
-- Files: read/write/diff/backup/search/tree.
-- Web: gnosis-crawl (markdown/HTML), SerpAPI search.
-- Scheduling: monitor-scheduler (create/update/toggle triggers, clock utilities).
-- Orchestration: agent_to_agent, check_with_agent, recommend_tool.
-- Term graph tools: build/update graph, propose queries, filter URLs, summarize signals, oracle-guided sampling + Monte Carlo sampler.
-- Extras: Gmail/Calendar/Drive, Slack, sticky notes, marketbot, time, etc.
-
-## Optional Services
-- **GPU Whisper transcription** (cached large-v3) on 8765.
-- **Instructor-XL embedding service** on 8787.  
-  - In-container: `INSTRUCTOR_SERVICE_URL=http://instructor-service:8787/embed`  
-  - Host: `http://localhost:8787/embed`
-
-## Quick Start
+## Quick start (Bash)
 ```bash
-# Serve the gateway (default port 4000)
-./scripts/codex_container.sh --serve
+# install/update image, register MCP tools
+./scripts/codex_container.sh --install
 
-# Run a prompt once
+# run a one-off prompt
 ./scripts/codex_container.sh --exec "list markdown files"
 
-# Start transcription (GPU)
-./scripts/start_transcription_service_docker.sh --build
+# serve an HTTP gateway (chat-completions style) on port 4000
+./scripts/codex_container.sh --serve --gateway-port 4000
 
-# Start Instructor-XL (GPU)
-./scripts/start_instructor_service_docker.sh --build
+# monitor a folder and react to file changes using MONITOR.md
+./scripts/codex_container.sh --monitor --watch-path ./recordings
+
+# start optional services
+./scripts/start_transcription_service_docker.sh --build   # Whisper GPU @8765
+./scripts/start_instructor_service_docker.sh --build       # Instructor-XL @8787
 ```
 
-## Safety & Audit Levers
-- Allow/deny lists; rate/concurrency caps; crawl depth/size/time caps.
-- Full logs & session history; trigger file with `last_fired`; file backups/diffs.
-- PR-first ethos for code/config changes; explicit approvals for writes.
+PowerShell equivalents live in `scripts/codex_container.ps1` (`-Install`, `-Exec`, `-Serve`, `-Monitor`, etc.).
 
-## Demo Recipe (for skeptics)
-- Show a single bounded automation: read-only crawl + summarize with visible caps/logs.
-- Show failure handling: stuck/timeout/nudge/retry surfaced in logs.
-- Show control: allowlist, off-switch, PR-only writes, audit export.
+## Operating modes
+1) **Terminal / Exec** — `--exec "..."` or `--session-id <id>` to resume. Good for CI, scripts, quick runs.
+2) **API Gateway** — `--serve --gateway-port 4000` exposes `/completion` and `/health` for external callers.
+3) **Monitor** — `--monitor --watch-path ... [--monitor-prompt MONITOR.md]` for event-driven agents reacting to file changes.
+4) **Scheduler** — via `monitor-scheduler.*` MCP tools: interval/daily/once triggers stored in `.codex-monitor-triggers.json` with `last_fired` metadata; same queue as monitor events.
+
+## Model flexibility
+- OpenAI default; pass `--oss` (or PowerShell `-Oss`) to use local/Ollama. The helper bridges host `127.0.0.1:11434` into the container; disable bridge with `OSS_DISABLE_BRIDGE=1`.
+- Override model: `--model <name>` (implies `--oss`) or `--codex-model <name>` (hosted). Env vars honored: `OSS_SERVER_URL`, `OLLAMA_HOST`, `OSS_API_KEY`, `CODEX_DEFAULT_MODEL`.
+
+## Safety levers
+- Allow/deny lists per tool; crawl depth/size/time caps; per-domain caps; rate/concurrency caps.
+- Logs and session history; trigger file with `last_fired`; backups/diffs via gnosis-files-diff.
+- Workspace-scoped tool config via `.codex-mcp.config` (one filename per line). Default lives in the image; override per workspace at `/workspace/.codex-mcp.config`.
+
+## Key tools (MCP highlights)
+- **Web/Search:** `gnosis-crawl.*` (markdown/HTML, JS optional), `serpapi-search.*` (low num, filters).
+- **Term Graph:** `oracle_walk_hint`, `sample_urls`, `build_term_graph`, `summarize_signals`, `save_page`/`search_saved_pages`.
+- **Scheduler/Monitor:** `monitor-scheduler.*` (create/update/toggle/delete/list triggers; clock utilities).
+- **Files:** read/write/stat/exists/delete/copy/move; diff/backup/restore/patch; list/find/search/tree/recent.
+- **Orchestration:** `agent_to_agent`, `check_with_agent`, `recommend_tool`.
+- **Comms/Workspace:** Gmail/Calendar/Drive, Slack, sticky notes, marketbot, time, open-meteo, etc.
+
+## Optional services
+- **Whisper transcription (GPU)**: port 8765. REST + `transcribe-wav` MCP.
+- **Instructor-XL embeddings**: port 8787. Set `INSTRUCTOR_SERVICE_URL=http://instructor-service:8787/embed` inside the container (host: `http://localhost:8787/embed`).
+
+## Examples
+- `examples/run_codex_stream.py` — stream Codex CLI output using `--json-e`.
+- `monitor_prompts/MONITOR.md` — template for file-event agents (moustache vars like `{{file}}`, `{{container_path}}`).
+
+## Setup notes (Bash)
+- `--install` builds the image, registers MCP servers from `MCP/`, and places a runner on PATH.
+- `--login` refreshes Codex auth if needed.
+- Override Codex home: `--codex-home /path/to/state`. Default: `$HOME/.codex-service` (PowerShell: `%USERPROFILE%\.codex-service`).
+- Common flags: `--workspace <path>`, `--tag <image>`, `--push`, `--skip-update`, `--no-auto-login`, `--json` / `--json-e`, `--shell`, `--transcription-service-url <url>`, `--monitor-prompt <file>`.
+
+## Gateway usage
+```bash
+./scripts/codex_container.sh --serve --gateway-port 4000
+# POST /completion with {"prompt": "...", "model": "...", "workspace": "/workspace"}
+```
+Env tweaks: `CODEX_GATEWAY_DEFAULT_MODEL`, `CODEX_GATEWAY_TIMEOUT_MS`, `CODEX_GATEWAY_EXTRA_ARGS`.
+
+## Troubleshooting
+- `permission denied` to Docker: add your user to `docker` group, restart shell; verify `docker ps`.
+- `network codex-network not found`: run `docker network create codex-network` once.
+- Ollama tools error: pick a model with tool support or disable tool use.
+- Agent not firing on changes: check `--watch-path` and prompt file readability.
+- Reset: remove Codex home (e.g., `~/.codex-service`) and rerun `--install`/`--login`.
+
+---
+This stack is for semi-technical operators who want AI agents to do real work—crawling, scheduling, deduping URLs, and shipping outputs—without fighting dependencies or losing control. Everything runs in containers, every action is logged, and you can swap between OpenAI and local models as needed.
