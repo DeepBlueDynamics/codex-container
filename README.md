@@ -1,8 +1,17 @@
 # Gnosis Container (agent ops stack)
 
+[![License](https://img.shields.io/badge/license-BSD%20%2F%20Gnosis%20AI--Sovereign%20v1.3-blue.svg)](LICENSE.md)
+[![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
+[![Security](https://img.shields.io/badge/security-reproducible%20%7C%20secured%20%7C%20auditable-brightgreen.svg)](#safety--audit-levers)
+[![GPU](https://img.shields.io/badge/GPU-CUDA%20enabled-brightgreen.svg)](vibe/TRANSCRIPTION_SERVICE.md)
+[![MCP Tools](https://img.shields.io/badge/MCP%20tools-219-green.svg)](MCP/)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Shell](https://img.shields.io/badge/shell-PowerShell%20%7C%20Bash-orange.svg)]()
+
 **Automate anything, anywhere.** Codex in a container with cron jobs, file monitors, URL fetch/index, search, speech, and hundreds of tools.
 
-**Why it matters:** This is an “AI infra you can actually run” package—reproducible Docker images, safety levers, and 200+ MCP tools (currently **219** detectable `@mcp.tool` functions) so you can ship cron jobs, file monitors, URL pipelines, and search/indexing workflows without glue-code sprawl.
+**Why it matters:** This is an “AI infra you can actually run” package—reproducible Docker images, safety levers, and hundreds of MCP tools (currently **219** detectable `@mcp.tool` functions) so you can ship cron jobs, file monitors, URL pipelines, and search/indexing workflows without glue-code sprawl.
 
 - **Models:** OpenAI or local/Ollama (OSS bridge included)
 - **Ingress:** gnosis-crawl (markdown/HTML, JS optional, caps/allowlists) + low-count SerpAPI wrapper
