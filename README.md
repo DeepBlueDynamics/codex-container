@@ -1,6 +1,6 @@
 # Gnosis Container (agent ops stack)
 
-**Automate anything, anywhere.** A containerized agent runtime that turns OpenAI or local/Ollama models into dependable automations with schedulers, crawlers, content indexing, speech, and hundreds of tools.
+**Automate anything, anywhere.** Codex in a container with cron jobs, file monitors, URL fetch/index, search, speech, and hundreds of tools.
 
 **Why it matters:** This is an “AI infra you can actually run” package—reproducible Docker images, safety levers, and 200+ MCP tools (currently **219** detectable `@mcp.tool` functions) so you can ship cron jobs, file monitors, URL pipelines, and search/indexing workflows without glue-code sprawl.
 
