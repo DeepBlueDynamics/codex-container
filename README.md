@@ -1,6 +1,8 @@
 # Gnosis Container (agent ops stack)
 
-**Containerized AI automation for people who ship.** Runs OpenAI models or local/Ollama inside reproducible Docker containers with controlled web ingress, schedulers, crawlers, and term-graph samplers to cut URL noise. Optional GPU services for Whisper and Instructor embeddings.
+**Automate anything, anywhere.** A containerized agent runtime that turns OpenAI or local/Ollama models into dependable automations with schedulers, crawlers, content indexing, speech, and hundreds of tools.
+
+**Why it matters:** This is an “AI infra you can actually run” package—reproducible Docker images, safety levers, and 200+ MCP tools (currently **219** detectable `@mcp.tool` functions) so you can ship cron jobs, file monitors, URL pipelines, and search/indexing workflows without glue-code sprawl.
 
 - **Models:** OpenAI or local/Ollama (OSS bridge included)
 - **Ingress:** gnosis-crawl (markdown/HTML, JS optional, caps/allowlists) + low-count SerpAPI wrapper
