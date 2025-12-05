@@ -1,0 +1,37 @@
+#
+# mcphost service container (multi-stage build)
+# - Clones mark3labs/mcphost (main) and builds the CLI
+# - Runtime is slim, non-root
+# - Expects config at /mcphost/config.yml (mount a volume)
+#
+# Build:
+#   docker build -f Dockerfile.mcphost -t gnosis/mcphost:dev .
+#
+# Run (example):
+#   docker run --rm -it \
+#     --network codex-network \
+#     -v $PWD/scripts/mcphost_config.yml:/mcphost/config.yml:ro \
+#     gnosis/mcphost:dev
+#
+
+ARG GO_VERSION=1.24
+ARG MCPSRC=github.com/mark3labs/mcphost
+
+FROM golang:${GO_VERSION}-alpine AS builder
+ARG MCPSRC=github.com/mark3labs/mcphost
+RUN apk add --no-cache git ca-certificates
+WORKDIR /build
+RUN git clone https://${MCPSRC}.git .
+RUN go mod download
+RUN CGO_ENABLED=0 go build -o /out/mcphost .
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates bash tzdata
+RUN addgroup -g 1000 mcphost && adduser -D -u 1000 -G mcphost mcphost
+USER mcphost
+WORKDIR /mcphost
+
+COPY --from=builder /out/mcphost /usr/local/bin/mcphost
+COPY scripts/mcphost_entrypoint.sh /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["mcphost", "--config", "/mcphost/config.yml"]

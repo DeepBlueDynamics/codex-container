@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 """
-MCP server: bounded term-graph utilities with embeddings and Jaccard similarity.
+MCP server: term graph, URL sampling, and local page index helpers (embeddings + Jaccard).
 
-Tools:
-- build_term_graph(docs, ...) -> graph: build a capped term graph from provided docs.
-- propose_queries(graph, ...) -> [queries]: synthesize search queries from graph centrality.
-- filter_urls(urls, ...) -> [urls]: apply allowlists and per-domain caps.
-- update_graph(graph, docs, ...) -> graph: merge new docs into an existing graph.
-- summarize_signals(graph, docs, ...) -> summary: surface notable term/edge shifts and Jaccard overlaps.
+Tools
+- Graph core: build_term_graph, update_graph, summarize_signals, propose_queries
+- URL helpers: filter_urls, sample_urls, oracle_walk_hint
+- Page index: save_page, search_saved_pages
 
-Embedding backends:
-- "instructor-xl": uses hkunlp/instructor-xl (if available); otherwise falls back to hash with a warning.
+Embedding backends
+- "instructor-xl": uses hkunlp/instructor-xl (service or local) with hash fallback.
 - "hash": deterministic hash-based vectors (no external deps).
 
-Notes:
-- No crawling here; callers should supply docs (url, text). Keep text bounded upstream.
+Notes
+- No crawling here; callers supply docs (url, text). Keep text bounded upstream.
 - Embeddings can be persisted to JSON if a path is provided.
 - Jaccard similarity is computed on per-doc term sets to highlight overlaps.
 """
