@@ -148,7 +148,9 @@ param(
     [string]$TranscriptionServiceUrl = 'http://host.docker.internal:8765',
     [string]$SessionId,
     [switch]$ListSessions,
-[switch]$Privileged
+    [int]$RecentLimit = 20,
+    [int]$SinceDays = 3,
+    [switch]$Privileged
 )
 
 $ErrorActionPreference = 'Stop'
@@ -916,6 +918,12 @@ function New-DockerRunArgs {
     }
     if ($AdditionalArgs) {
         $args += $AdditionalArgs
+    }
+    if ($Danger) {
+        # Pass sandbox args via env var for gateway to use when spawning Codex
+        $args += @('-e', 'CODEX_GATEWAY_EXTRA_ARGS=--sandbox danger-full-access')
+        # Force network-enabled sandbox inside Codex
+        $args += @('-e', 'CODEX_SANDBOX_NETWORK_DISABLED=0')
     }
     $args += $Context.Tag
     $args += '/usr/bin/tini'
@@ -1758,7 +1766,8 @@ function Test-CodexAuthenticated {
 function Show-RecentSessions {
     param(
         $Context,
-        [int]$Limit = 5
+        [int]$Limit = 5,
+        [int]$SinceDays = 0  # 0 = no time filter
     )
 
     $sessionsDir = Join-Path $Context.CodexHome ".codex/sessions"
@@ -1769,6 +1778,11 @@ function Show-RecentSessions {
 
     # Find all rollout-*.jsonl files (sessions are stored as: sessions/2025/10/20/rollout-*.jsonl)
     $sessionFiles = Get-ChildItem -Path $sessionsDir -Recurse -Filter "rollout-*.jsonl" -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            if ($SinceDays -le 0) { return $true }
+            $cutoff = (Get-Date).AddDays(-$SinceDays)
+            return $_.LastWriteTime -ge $cutoff
+        } |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First $Limit
 
@@ -1962,7 +1976,7 @@ try {
         Invoke-CodexMonitor -Context $context -WatchPath $WatchPath -PromptFile $MonitorPrompt -JsonOutput:($Json -or $JsonE) -CodexArgs $CodexArgs -UseWatchdog:$UseWatchdog
     }
     'ListSessions' {
-        Show-RecentSessions -Context $context -Limit 10
+        Show-RecentSessions -Context $context -Limit $RecentLimit -SinceDays $SinceDays
     }
     default { # Run
         Ensure-CodexAuthentication -Context $context -Silent:($Json -or $JsonE)
@@ -2002,7 +2016,7 @@ try {
         }
 
         if (-not ($Json -or $JsonE) -and -not $SessionId) {
-            Show-RecentSessions -Context $context -Limit 5
+            Show-RecentSessions -Context $context -Limit $RecentLimit -SinceDays $SinceDays
         }
 
         # Build arguments - add session ID if provided
