@@ -1,0 +1,33 @@
+# Sample mcphost config (placeholders, adjust for your environment)
+# See https://github.com/mark3labs/mcphost for full schema
+
+mcpServers:
+  filesystem:
+    type: "builtin"
+    name: "fs"
+    options:
+      allowed_directories:
+        - "/workspace"
+        - "/mcphost"
+
+  bash:
+    type: "builtin"
+    name: "bash"
+
+  http:
+    type: "builtin"
+    name: "http"
+
+# Default model and provider (override via env/flags)
+model: "anthropic:claude-3-5-haiku-latest"
+provider-api-key: "${env://OPENAI_API_KEY:-}"
+provider-url: "https://api.openai.com/v1"
+
+# Generation defaults (tweak as needed)
+max-steps: 0
+max-tokens: 1024
+temperature: 0.7
+
+# Example tool filtering
+#allowedTools: []
+#excludedTools: []

@@ -1,0 +1,45 @@
+# GPU-enabled Instructor embedding service
+FROM nvidia/cuda:12.1.0-base-ubuntu22.04
+
+# System deps
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV VENV_PATH=/opt/instructor-venv
+RUN python3 -m venv $VENV_PATH
+ENV PATH="$VENV_PATH/bin:$PATH"
+
+# Python deps (GPU torch + pinned numpy)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir numpy==1.26.4 && \
+    pip install --no-cache-dir \
+      torch==2.2.2+cu121 \
+      torchvision==0.17.2+cu121 \
+      torchaudio==2.2.2+cu121 \
+      --index-url https://download.pytorch.org/whl/cu121 && \
+    pip install --no-cache-dir \
+      sentencepiece \
+      aiohttp \
+      tqdm \
+      huggingface_hub==0.23.2 \
+      sentence-transformers==2.2.2 \
+      InstructorEmbedding && \
+    python -c "import importlib; importlib.import_module('sentence_transformers'); importlib.import_module('InstructorEmbedding'); import torch; print('✅ deps OK, torch cuda:', torch.cuda.is_available())"
+
+# Optional HF cache env; model predownload disabled to avoid huge build times
+ENV HF_HOME=/opt/instructor-cache
+
+# Copy service
+COPY scripts/instructor_service.py /app/instructor_service.py
+RUN chmod 555 /app/instructor_service.py
+
+WORKDIR /app
+EXPOSE 8787
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8787/health')" || exit 1
+
+CMD ["python3", "/app/instructor_service.py"]

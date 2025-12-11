@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""
+MCP server: Personal search/index manager
+
+Capabilities:
+- save_url: log URLs (bookmark style) to JSONL
+- save_page: log page content with optional embeddings (instructor-xl service/local; hash fallback)
+- search_saved_urls: simple substring search over saved URLs/notes
+- search_saved_pages: embedding search over saved pages
+- count_saved_urls / count_saved_pages: quick counts without returning payloads
+
+Defaults:
+- URL log: temp/url_index.jsonl
+- Page log: temp/page_index.jsonl
+- Embedding service: INSTRUCTOR_SERVICE_URL env (default http://instructor-service:8787/embed)
+
+Notes:
+- No crawling here; caller supplies text for pages.
+- Uses API-key-less embeddings: instructor service or local InstructorEmbedding if present; otherwise hash embeddings.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import string
+from collections import Counter
+from datetime import datetime
+from hashlib import blake2b
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
+import urllib.request
+import urllib.error
+import urllib.parse
+
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("personal-search")
+
+# Embedding settings
+INSTRUCTOR_SERVICE_URL = os.environ.get("INSTRUCTOR_SERVICE_URL", "http://instructor-service:8787/embed")
+_INSTRUCTOR_MODEL = None
+_INSTRUCTOR_MODEL_NAME: Optional[str] = None
+try:
+    from InstructorEmbedding import INSTRUCTOR  # type: ignore
+except Exception:
+    INSTRUCTOR = None
+    _INSTRUCTOR_IMPORT_ERROR = "InstructorEmbedding not available; using hash embeddings."
+else:
+    _INSTRUCTOR_IMPORT_ERROR = ""
+
+STOPWORDS = {
+    "the","a","an","and","or","if","else","of","to","in","for","on","with","at","by","from",
+    "is","are","was","were","be","been","as","that","this","it","not","but","we","you","they",
+    "he","she","them","their","our","your"
+}
+
+
+def _normalize_url(u: str) -> str:
+    try:
+        parsed = urlparse(u)
+        if not parsed.scheme:
+            return "http://" + u
+        return u
+    except Exception:
+        return u
+
+
+def _tokenize(text: str) -> List[str]:
+    text = text.lower()
+    text = text.translate(str.maketrans({ch: " " for ch in string.punctuation}))
+    raw = text.split()
+    return [t for t in raw if t and t not in STOPWORDS and len(t) > 2]
+
+
+def _hash_embed(text: str, dim: int = 64) -> List[float]:
+    needed_bytes = max(4, dim // 8)
+    h = blake2b(text.encode("utf-8"), digest_size=needed_bytes).digest()
+    vec: List[float] = []
+    for i in range(0, len(h), 2):
+        v = int.from_bytes(h[i:i+2], "big", signed=False)
+        vec.append((v / 65535.0) * 2 - 1)
+    while len(vec) < dim:
+        vec.append(0.0)
+    return vec[:dim]
+
+
+def _embed_text(text: str, backend: str, model_name: str, timeout: int, warnings: List[str]) -> List[float]:
+    global _INSTRUCTOR_MODEL, _INSTRUCTOR_MODEL_NAME
+    if backend == "instructor-xl":
+        svc = os.environ.get("INSTRUCTOR_SERVICE_URL", INSTRUCTOR_SERVICE_URL)
+        if svc:
+            try:
+                payload = {
+                    "texts": [text],
+                    "instruction": "Represent the text for semantic search",
+                    "normalize": True,
+                }
+                req = urllib.request.Request(
+                    svc,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                    embeds = body.get("embeddings") or []
+                    if embeds:
+                        return embeds[0]
+                    warnings.append("Instructor service returned no embeddings; falling back to hash.")
+            except Exception as e:
+                warnings.append(f"instructor service failed ({e}); falling back to local/hash.")
+        if INSTRUCTOR is None:
+            if _INSTRUCTOR_IMPORT_ERROR:
+                warnings.append(_INSTRUCTOR_IMPORT_ERROR)
+            return _hash_embed(text)
+        try:
+            if _INSTRUCTOR_MODEL is None or _INSTRUCTOR_MODEL_NAME != model_name:
+                _INSTRUCTOR_MODEL = INSTRUCTOR(model_name)
+                _INSTRUCTOR_MODEL_NAME = model_name
+            vec = _INSTRUCTOR_MODEL.encode(
+                [["Represent the text for semantic search", text]],
+                normalize_embeddings=True,
+            )
+            return vec[0].tolist()
+        except Exception as e:
+            warnings.append(f"instructor-xl local failed ({e}); using hash.")
+            return _hash_embed(text)
+    # default hash
+    return _hash_embed(text)
+
+
+@mcp.tool()
+def save_url(
+    url: str,
+    note: Optional[str] = None,
+    log_path: str = "temp/url_index.jsonl",
+) -> Dict[str, Any]:
+    """Save a URL bookmark entry to JSONL."""
+    entry = {
+        "url": _normalize_url(url),
+        "note": note,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    p = Path(log_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=True) + "\n")
+    return {"entry": entry, "log_path": str(p)}
+
+
+@mcp.tool()
+def save_page(
+    url: str,
+    text: str,
+    note: Optional[str] = None,
+    log_path: str = "temp/page_index.jsonl",
+    max_store_chars: int = 8000,
+    embed: bool = False,
+    embedding_backend: str = "hash",
+    embedding_model: str = "hkunlp/instructor-xl",
+    timeout_seconds: int = 20,
+) -> Dict[str, Any]:
+    """Save a page (url + content) with optional embeddings to JSONL."""
+    warnings: List[str] = []
+    snippet = text[:max_store_chars]
+    entry: Dict[str, Any] = {
+        "url": _normalize_url(url),
+        "note": note,
+        "timestamp": datetime.utcnow().isoformat(),
+        "content": snippet,
+        "content_len": len(text),
+        "content_hash": blake2b(text.encode("utf-8"), digest_size=8).hexdigest(),
+    }
+    if embed:
+        entry["embedding"] = _embed_text(f"{url} {note or ''} {snippet}", embedding_backend, embedding_model, timeout_seconds, warnings)
+        entry["embedding_backend"] = entry.get("embedding_backend", embedding_backend)
+    if warnings:
+        entry["warnings"] = warnings
+    p = Path(log_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=True) + "\n")
+    return {"entry": entry, "log_path": str(p)}
+
+
+@mcp.tool()
+def search_saved_urls(
+    query: str,
+    log_path: str = "temp/url_index.jsonl",
+    top_k: int = 10,
+) -> Dict[str, Any]:
+    """Simple substring search over saved URLs/notes."""
+    p = Path(log_path)
+    if not p.exists():
+        return {"matches": [], "metadata": {"log_path": str(p), "error": "log_not_found"}}
+    q = query.lower()
+    matches: List[Dict[str, Any]] = []
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            hay = (entry.get("url", "") + " " + (entry.get("note") or "")).lower()
+            if q in hay:
+                matches.append(entry)
+    return {"matches": matches[:top_k], "metadata": {"log_path": str(p), "count": len(matches)}}
+
+
+@mcp.tool()
+def search_saved_pages(
+    query: str,
+    log_path: str = "temp/page_index.jsonl",
+    top_k: int = 10,
+    embedding_backend: str = "hash",
+    embedding_model: str = "hkunlp/instructor-xl",
+    max_query_chars: int = 2000,
+) -> Dict[str, Any]:
+    """Search saved pages by semantic similarity (embeds on the fly if missing)."""
+    p = Path(log_path)
+    if not p.exists():
+        return {"matches": [], "metadata": {"log_path": str(p), "error": "log_not_found"}}
+    warnings: List[str] = []
+    q_embed = _embed_text(query[:max_query_chars], embedding_backend, embedding_model, 20, warnings)
+    matches: List[Dict[str, Any]] = []
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            if "embedding" in entry:
+                e_embed = entry["embedding"]
+            else:
+                text_blob = " ".join(
+                    filter(None, [entry.get("url", ""), entry.get("note") or "", (entry.get("content") or "")[:max_query_chars]])
+                )
+                e_embed = _embed_text(text_blob, embedding_backend, embedding_model, 20, warnings)
+            # cosine similarity
+            a = q_embed
+            b = e_embed
+            if not a or not b or len(a) != len(b):
+                score = 0.0
+            else:
+                dot = sum(x * y for x, y in zip(a, b))
+                na = sum(x * x for x in a) ** 0.5
+                nb = sum(y * y for y in b) ** 0.5
+                score = dot / (na * nb) if na and nb else 0.0
+            matches.append({"score": score, "entry": entry})
+    matches = sorted(matches, key=lambda x: x["score"], reverse=True)[:top_k]
+    return {
+        "matches": matches,
+        "metadata": {
+            "log_path": str(p),
+            "embedding_backend_requested": embedding_backend,
+            "embedding_backend_effective": embedding_backend if not warnings else f"{embedding_backend} (fallback=hash)",
+            "embedding_model": embedding_model,
+            "warnings": warnings,
+        },
+    }
+
+
+@mcp.tool()
+def count_saved_urls(log_path: str = "temp/url_index.jsonl") -> Dict[str, Any]:
+    """Return count of saved URLs without returning entries."""
+    p = Path(log_path)
+    if not p.exists():
+        return {"count": 0, "log_path": str(p)}
+    n = sum(1 for _ in p.open("r", encoding="utf-8"))
+    return {"count": n, "log_path": str(p)}
+
+
+@mcp.tool()
+def count_saved_pages(log_path: str = "temp/page_index.jsonl") -> Dict[str, Any]:
+    """Return count of saved pages without returning entries."""
+    p = Path(log_path)
+    if not p.exists():
+        return {"count": 0, "log_path": str(p)}
+    n = sum(1 for _ in p.open("r", encoding="utf-8"))
+    return {"count": n, "log_path": str(p)}
+
+
+@mcp.tool()
+def term_stats(
+    log_path: str = "temp/page_index.jsonl",
+    top_k: int = 20,
+) -> Dict[str, Any]:
+    """Compute top unigrams/bigrams from saved pages (quick text stats)."""
+    p = Path(log_path)
+    if not p.exists():
+        return {"top_unigrams": [], "top_bigrams": [], "log_path": str(p), "error": "log_not_found"}
+    uni = Counter()
+    bi = Counter()
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            txt = entry.get("content", "")
+            toks = _tokenize(txt)
+            uni.update(toks)
+            bi.update([f"{toks[i]} {toks[i+1]}" for i in range(len(toks) - 1)])
+    return {
+        "top_unigrams": uni.most_common(top_k),
+        "top_bigrams": bi.most_common(top_k),
+        "log_path": str(p),
+    }
+
+
+if __name__ == "__main__":
+    mcp.run()
