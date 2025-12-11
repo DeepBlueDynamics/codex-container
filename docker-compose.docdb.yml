@@ -1,0 +1,37 @@
+version: "3.9"
+services:
+  docdb:
+    image: mongo:7
+    container_name: gnosis-docdb
+    restart: unless-stopped
+    networks:
+      - codex-network
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    ports:
+      - "27017:27017"  # optional for host access
+
+  docdb-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcph-mcp
+    image: gnosis/docdb-mcp:dev
+    container_name: gnosis-docdb-mcp
+    restart: unless-stopped
+    environment:
+      DOCDB_URI: mongodb://root:example@docdb:27017
+      DOCDB_DB: gnosis
+      DOCDB_TIMEOUT_MS: 3000
+      DOCDB_MAX_DOCS: 200
+      DOCDB_MAX_BYTES: 1000000
+      DOCDB_READONLY: "false"
+      # DOCDB_COLLECTION_ALLOWLIST: "foo,bar"
+    networks:
+      - codex-network
+    depends_on:
+      - docdb
+
+networks:
+  codex-network:
+    external: true

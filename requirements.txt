@@ -24,6 +24,8 @@ rapidfuzz
 
 # Google GenAI SDK (provides `google.genai`)
 google-genai
+# Gemini API SDK
+google-generativeai
 
 # Dog bark detection (YAMNet-based MCP)
 tensorflow
