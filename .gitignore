@@ -122,3 +122,6 @@ marketbot-hidden/
 
 # MCP Configuration (local settings)
 .codex-mcp.config
+
+# Porter app configuration files
+porter_app_codex_4529.yml
