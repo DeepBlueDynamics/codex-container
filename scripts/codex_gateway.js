@@ -68,6 +68,12 @@ const MAX_TAIL_LINES = parseInt(process.env.CODEX_GATEWAY_MAX_TAIL_LINES || '200
 const SIGNAL_CONTEXT_CHARS = parseInt(process.env.CODEX_GATEWAY_SIGNAL_CONTEXT || '160', 10);
 
 // =============================================================================
+// Webhook Configuration - ProductBot completion notifications
+// =============================================================================
+const PRODUCTBOT_WEBHOOK_URL = process.env.PRODUCTBOT_WEBHOOK_URL || null;
+const WEBHOOK_TIMEOUT_MS = 5000; // 5 seconds
+
+// =============================================================================
 // Concurrency Limiter - Hard limit on concurrent Codex runs
 // Returns 429 (Too Many Requests) when at capacity instead of queuing forever
 // =============================================================================
@@ -278,6 +284,86 @@ const logger = {
 // Log startup config at verbose level
 if (LOG_LEVEL >= 2) {
   console.log(`${LOG_PREFIX} Logger initialized at level ${LOG_LEVEL} (0=error, 1=info, 2=verbose, 3=debug)`);
+}
+
+// =============================================================================
+// Webhook Function - Call ProductBot webhook when sessions complete
+// =============================================================================
+async function callCompletionWebhook(sessionId, sessionStatus, metadata = {}) {
+  if (!PRODUCTBOT_WEBHOOK_URL) {
+    logger.verbose('webhook not configured, skipping');
+    return;
+  }
+
+  try {
+    // Get API key from session metadata (stored when session was created)
+    let apiKey = null;
+    try {
+      const meta = sessionStore.sessions.get(sessionId);
+      if (meta && meta.marketbot_api_key) {
+        apiKey = meta.marketbot_api_key;
+        logger.verbose(`webhook: found API key in session metadata for session ${sessionId}`);
+      }
+    } catch (err) {
+      logger.warn(`webhook: failed to get API key from session metadata: ${err.message}`);
+    }
+
+    // If not in metadata, try to get from metadata parameter (passed from finishRun/finishCurrentRun)
+    if (!apiKey && metadata.marketbotApiKey) {
+      apiKey = metadata.marketbotApiKey;
+      logger.verbose(`webhook: found API key in metadata parameter for session ${sessionId}`);
+    }
+
+    const payload = {
+      sessionId: sessionId,
+      gatewaySessionId: sessionId,
+      codexSessionId: metadata.codexSessionId || null,
+      status: sessionStatus.status || 'completed',
+      content: sessionStatus.content || null,
+      toolCalls: sessionStatus.tool_calls || [],
+      events: sessionStatus.events || [],
+      completedAt: new Date().toISOString(),
+      metadata: metadata,
+    };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
+
+    // Build headers with authentication if API key is available
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+      headers['X-API-Key'] = apiKey;
+      logger.verbose(`webhook: sending API key in Authorization header for session ${sessionId}`);
+    } else {
+      logger.warn(`webhook: no API key available for session ${sessionId}, webhook call may fail authentication`);
+    }
+
+    const response = await fetch(PRODUCTBOT_WEBHOOK_URL, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const responseText = await response.text();
+      logger.warn(`webhook returned ${response.status}: ${responseText}`);
+    } else {
+      logger.info(`webhook called successfully for session ${sessionId}`);
+    }
+  } catch (error) {
+    // Don't fail session completion if webhook fails
+    if (error.name === 'AbortError') {
+      logger.warn(`webhook call timed out for session ${sessionId}`);
+    } else {
+      logger.warn(`webhook call failed for session ${sessionId}: ${error.message}`);
+    }
+  }
 }
 
 function ensureDirSync(dir) {
@@ -623,6 +709,12 @@ class SessionStore {
     const secure = Boolean(seedMeta.secure);
     const targetRoot = secure ? this.secureDir : this.primaryDir;
     ensureDirSync(targetRoot);
+    logger.info('createSession: creating session', JSON.stringify({
+      session_id: sessionId,
+      target_root: targetRoot,
+      primary_dir: this.primaryDir,
+      secure,
+    }));
     const meta = {
       session_id: sessionId,
       codex_session_id: seedMeta.codex_session_id || null,
@@ -674,6 +766,11 @@ class SessionStore {
       }
     } else {
       resolved = await this.createSession(metadata);
+      logger.info('beginRun: created new session', JSON.stringify({
+        session_id: resolved,
+        session_dir: this.sessionDir(resolved),
+        primary_dir: this.primaryDir,
+      }));
     }
 
     const meta = this.sessions.get(resolved);
@@ -684,6 +781,13 @@ class SessionStore {
         this.sessionRoots.set(resolved, this.secureDir);
       }
     }
+    
+    // Store MARKETBOT_API_KEY in session metadata for webhook authentication
+    if (metadata && metadata.marketbot_api_key) {
+      meta.marketbot_api_key = metadata.marketbot_api_key;
+      logger.verbose('beginRun: stored MARKETBOT_API_KEY in session metadata');
+    }
+    
     const runId = crypto.randomUUID();
     const now = new Date().toISOString();
     const runRecord = {
@@ -800,7 +904,38 @@ class SessionStore {
     await this.appendStdout(sessionId, `\n===== RUN ${runId} END ${now} [${meta.status}] =====\n`);
     await this.saveMeta(sessionId);
     if (payload.events) {
+      const eventCount = Array.isArray(payload.events) ? payload.events.length : 0;
+      logger.info('finishRun: appending events', JSON.stringify({
+        session_id: sessionId,
+        run_id: runId,
+        event_count: eventCount,
+        session_dir: this.sessionDir(sessionId),
+        events_path: this.eventsPath(sessionId),
+      }));
       await this.appendEvents(sessionId, payload.events, runId);
+    } else {
+      logger.warn('finishRun: no events in payload', JSON.stringify({
+        session_id: sessionId,
+        run_id: runId,
+        has_events_key: 'events' in payload,
+        payload_keys: Object.keys(payload),
+      }));
+    }
+
+    // Call webhook after saving metadata (only for completed runs)
+    if (payload.status === 'completed') {
+      callCompletionWebhook(sessionId, {
+        status: 'completed',
+        content: payload.content,
+        tool_calls: payload.tool_calls || [],
+        events: payload.events || [],
+      }, {
+        codexSessionId: payload.codexSessionId || meta.codex_session_id,
+        runId: runId,
+        marketbotApiKey: meta.marketbot_api_key || null, // Pass API key for authentication
+      }).catch(err => {
+        logger.warn(`webhook call failed in finishRun: ${err.message}`);
+      });
     }
   }
 
@@ -1040,6 +1175,8 @@ class SessionWorker extends EventEmitter {
       return;
     }
     const mergedEnv = { ...(this.options.env || {}), ...(options.env || {}) };
+    // ⭐ CRITICAL: Add CODEX_SESSION_ID so marketbot.py can find session-specific .env file
+    mergedEnv.CODEX_SESSION_ID = this.sessionId;
     this.options = { ...this.options, ...options, env: mergedEnv };
     const meta = await this.store.getMeta(this.sessionId);
     if (meta && meta.codex_session_id) {
@@ -1249,6 +1386,33 @@ class SessionWorker extends EventEmitter {
       this.store.setWorkerState(this.sessionId, 'idle', { worker_pid: this.proc.pid });
       this.scheduleIdleTimer(this.options.idleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS);
     }
+
+    // Call webhook when run completes (only for completed status)
+    if (status === 'completed') {
+      // Get API key from session metadata for webhook authentication
+      let marketbotApiKey = null;
+      try {
+        const meta = this.store.sessions.get(this.sessionId);
+        if (meta && meta.marketbot_api_key) {
+          marketbotApiKey = meta.marketbot_api_key;
+        }
+      } catch (err) {
+        logger.warn(`finishCurrentRun: failed to get API key from session metadata: ${err.message}`);
+      }
+      
+      callCompletionWebhook(this.sessionId, {
+        status: 'completed',
+        content: this.currentRun.content,
+        tool_calls: this.currentRun.toolCalls || [],
+        events: this.currentRun.events || [],
+      }, {
+        codexSessionId: this.codexSessionId,
+        runId: this.currentRun.runId,
+        marketbotApiKey: marketbotApiKey, // Pass API key for authentication
+      }).catch(err => {
+        logger.warn(`webhook call failed in finishCurrentRun: ${err.message}`);
+      });
+    }
   }
 
   async stop(reason = 'stopped') {
@@ -1303,6 +1467,19 @@ function buildRunOptions(payload, meta) {
     ? payload.cwd
     : process.cwd();
   const envVars = sanitizeEnv(payload.env);
+  if (envVars) {
+    const envKeys = Object.keys(envVars);
+    logger.info('buildRunOptions: env vars sanitized', JSON.stringify({
+      count: envKeys.length,
+      keys: envKeys,
+      has_marketbot: envKeys.some(k => k.includes('MARKETBOT')),
+    }));
+  } else {
+    logger.warn('buildRunOptions: no env vars after sanitize', JSON.stringify({
+      payload_env_type: typeof payload.env,
+      payload_env_keys: payload.env ? Object.keys(payload.env) : null,
+    }));
+  }
   return {
     timeoutMs,
     cwd: cwdCandidate,
@@ -1350,6 +1527,16 @@ async function runCodex(prompt, model, options = {}) {
     for (const [key, value] of Object.entries(options.env)) {
       env[key] = value;
     }
+    const envKeys = Object.keys(options.env);
+    logger.info('runCodex: merging env vars', JSON.stringify({
+      count: envKeys.length,
+      keys: envKeys,
+      has_marketbot: envKeys.some(k => k.includes('MARKETBOT')),
+    }));
+  } else {
+    logger.warn('runCodex: no env vars in options', JSON.stringify({
+      options_env_type: typeof options.env,
+    }));
   }
 
   // Acquire throttle before spawning to prevent MCP handshake timeouts
@@ -1358,6 +1545,8 @@ async function runCodex(prompt, model, options = {}) {
   logger.info('spawning codex', JSON.stringify({
     argv: ['codex', ...args],
     cwd,
+    env_keys_count: Object.keys(env).length,
+    marketbot_env_present: ['MARKETBOT_API_KEY', 'MARKETBOT_API_URL', 'MARKETBOT_TEAM_ID'].every(k => k in env),
   }));
 
   return new Promise((resolve, reject) => {
@@ -1559,6 +1748,11 @@ async function executeSessionRun({ payload, messages, systemPrompt, sessionId, r
   await sessionStore.ready;
   const promptPreview = extractPromptPreview(messages, systemPrompt);
   const runOptions = buildRunOptions({ ...payload, prompt_preview: promptPreview }, { prompt_preview: promptPreview });
+  // Extract MARKETBOT_API_KEY from env vars for webhook authentication
+  const marketbotApiKey = runOptions.env && runOptions.env.MARKETBOT_API_KEY 
+    ? runOptions.env.MARKETBOT_API_KEY 
+    : null;
+  
   const beginResult = await sessionStore.beginRun({
     sessionId,
     metadata: {
@@ -1570,6 +1764,7 @@ async function executeSessionRun({ payload, messages, systemPrompt, sessionId, r
       nudge_interval_ms: runOptions.nudge_interval_ms,
       secure: runOptions.secure,
       resume_codex_session_id: resumeSessionId,
+      marketbot_api_key: marketbotApiKey, // Store for webhook authentication
     },
   });
 
@@ -1577,6 +1772,95 @@ async function executeSessionRun({ payload, messages, systemPrompt, sessionId, r
   const runId = beginResult.runId;
   const runMeta = beginResult.meta;
   const prompt = buildPrompt(messages, systemPrompt);
+
+  // ⭐ CRITICAL: Add CODEX_SESSION_ID to env vars so marketbot.py can find session-specific .env file
+  if (!runOptions.env) {
+    runOptions.env = {};
+  }
+  runOptions.env.CODEX_SESSION_ID = resolvedSessionId;
+
+  // Write MarketBot env vars to session-specific directory
+  // This ensures each session has isolated credentials, preventing race conditions
+  // when multiple teams' jobs run concurrently
+  if (runOptions.env && typeof runOptions.env === 'object') {
+    // ⭐ CRITICAL: Use the same session directory structure as SessionStore
+    // SessionStore uses: /opt/codex-home/sessions/gateway/session-{sessionId}
+    // We need to match this exact path structure
+    const sessionDir = sessionStore.sessionDir(resolvedSessionId);
+    const marketbotEnvPath = path.join(sessionDir, '.env');
+    
+    logger.info('executeSessionRun: writing MarketBot env to session directory', JSON.stringify({
+      session_id: resolvedSessionId,
+      session_dir: sessionDir,
+      env_file: marketbotEnvPath,
+      session_store_path: sessionStore.sessionDir(resolvedSessionId),
+    }));
+    const envLines = [];
+    
+    // Only write MarketBot-related env vars to avoid overwriting other config
+    // Also write CODEX_SESSION_ID so marketbot.py knows which session directory to use
+    // Include MARKETBOT_COMPETITOR_ID and MARKETBOT_COMPETITOR_NAME for fallback in marketbot.py
+    // ⭐ CRITICAL: Also include CODEX_JOB_ID so marketbot.py can publish events
+    for (const [key, value] of Object.entries(runOptions.env)) {
+      if (key.startsWith('MARKETBOT_') || 
+          key.startsWith('PRODUCTBOT_') || 
+          key === 'CODEX_SESSION_ID' ||
+          key === 'CODEX_JOB_ID') {
+        if (typeof value === 'string' && value.trim().length > 0) {
+          // Escape special characters in value for shell compatibility
+          const escapedValue = value.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+          envLines.push(`${key}="${escapedValue}"`);
+        }
+      }
+    }
+    
+    if (envLines.length > 0) {
+      try {
+        // ⭐ CRITICAL: Create session directory if it doesn't exist (recursive)
+        // This ensures the directory structure exists before writing the env file
+        await fsp.mkdir(sessionDir, { recursive: true, mode: 0o755 });
+        
+        // Write env vars to session-specific file
+        await fsp.writeFile(marketbotEnvPath, envLines.join('\n') + '\n', 'utf8');
+        
+        // ⭐ CRITICAL: Set permissions to ensure file is readable by MCP server
+        // 0o644 = rw-r--r-- (owner read/write, group/others read-only)
+        // This ensures MCP server (which may run as different user) can read the file
+        await fsp.chmod(marketbotEnvPath, 0o644);
+        
+        // Verify file was created and is readable
+        const stats = await fsp.stat(marketbotEnvPath);
+        const isReadable = (stats.mode & parseInt('444', 8)) === parseInt('444', 8);
+        if (!isReadable) {
+          logger.warn('executeSessionRun: env file created but may not be readable by all users', JSON.stringify({
+            session_id: resolvedSessionId,
+            env_file: marketbotEnvPath,
+            mode: stats.mode.toString(8),
+          }));
+        }
+        
+        logger.info('executeSessionRun: wrote MarketBot env vars to session-specific .env', JSON.stringify({
+          session_id: resolvedSessionId,
+          session_dir: sessionDir,
+          env_file: marketbotEnvPath,
+          env_var_count: envLines.length,
+          env_keys: envLines.map(line => line.split('=')[0]),
+          permissions: '0o644 (readable by all)',
+        }));
+      } catch (error) {
+        // CRITICAL: Fail session creation if env file cannot be created
+        logger.error('executeSessionRun: CRITICAL - failed to write session-specific .env file', JSON.stringify({
+          session_id: resolvedSessionId,
+          session_dir: sessionDir,
+          env_file: marketbotEnvPath,
+          error: error.message,
+          stack: error.stack,
+        }));
+        // Don't throw - let the session continue, but log the error prominently
+        // The MCP tool will fail with a clear error message if env vars are missing
+      }
+    }
+  }
 
   // Retry loop for timeout/empty responses
   // Important: Share the timeout budget across all retries, don't multiply it
@@ -2630,7 +2914,7 @@ async function handleSessionPrompt(req, res, sessionIdentifier) {
   }
 }
 
-async function handleSessionNudge(req, res, sessionIdentifier) {
+async function handleSessionNudge(req, res, sessionIdentifier, url) {
   await sessionStore.ready;
   const resolvedId = sessionStore.resolveSessionId(sessionIdentifier);
   if (!resolvedId) {
@@ -2764,7 +3048,7 @@ if (require.main === module) {
           return;
         }
         if (segments.length === 3 && segments[2] === 'nudge' && method === 'POST') {
-          await handleSessionNudge(req, res, sessionId);
+          await handleSessionNudge(req, res, sessionId, url);
           return;
         }
       }

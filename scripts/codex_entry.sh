@@ -2,10 +2,15 @@
 set -euo pipefail
 
 load_session_env() {
+  # ⭐ CRITICAL: Session directory structure matches SessionStore
+  # Path: /opt/codex-home/sessions/gateway/session-{CODEX_SESSION_ID}/.env
   local sessions_root="/opt/codex-home/sessions"
   local candidates=()
 
   if [[ -n "${CODEX_SESSION_ID:-}" ]]; then
+    # Try gateway session directory first (matches SessionStore structure)
+    candidates+=("${sessions_root}/gateway/session-${CODEX_SESSION_ID}/.env")
+    # Fallback to direct session ID (for backward compatibility)
     candidates+=("${sessions_root}/${CODEX_SESSION_ID}/.env")
   fi
 
@@ -252,81 +257,81 @@ mount_pi_share() {
 }
 
 ensure_marketbot_env() {
-  # Ensure .marketbot.env is accessible in the workspace for MCP servers.
-  # Checks multiple locations and copies to /workspace/.marketbot.env if found.
+  # ⭐ SESSION-ISOLATED ARCHITECTURE: Only load from session-specific env file
+  # Each Codex session has its own env file at: /opt/codex-home/sessions/{CODEX_SESSION_ID}/.env
+  # This ensures different teams with different API keys are properly isolated
+  # No legacy workspace paths are used to prevent credential conflicts
   
-  local workspace_env="/workspace/.marketbot.env"
-  local candidates=(
-    "/workspace/.marketbot.env"
-    "/opt/codex-home/.marketbot.env"
-    "${HOME}/.marketbot.env"
-    "/opt/codex-home/sessions/.env"
-  )
-  
-  # If workspace env already exists, use it
-  if [[ -f "$workspace_env" ]]; then
-    echo "[codex_entry] Found .marketbot.env at ${workspace_env}" >&2
-    load_marketbot_env "$workspace_env"
-    return 0
-  fi
-  
-  # Check session-specific env if CODEX_SESSION_ID is set
   local session_id="${CODEX_SESSION_ID:-}"
-  if [[ -n "$session_id" ]]; then
-    local session_env="/opt/codex-home/sessions/${session_id}/.env"
-    if [[ -f "$session_env" ]] && grep -q "MARKETBOT" "$session_env" 2>/dev/null; then
-      echo "[codex_entry] Found MarketBot config in session env: ${session_env}" >&2
-      # Extract MarketBot vars and write to workspace
-      grep "^MARKETBOT" "$session_env" > "$workspace_env" 2>/dev/null && {
-        echo "[codex_entry] Copied MarketBot vars to ${workspace_env}" >&2
-        load_marketbot_env "$workspace_env"
-        return 0
-      }
-    fi
+  
+  # During container initialization, CODEX_SESSION_ID may not be set yet
+  # This is OK - we'll load env vars when a session actually starts
+  if [[ -z "$session_id" ]]; then
+    echo "[codex_entry] ℹ️  CODEX_SESSION_ID not set during container startup (this is normal)" >&2
+    echo "[codex_entry] MarketBot env vars will be loaded when a session starts" >&2
+    return 0  # Don't fail container startup
   fi
   
-  # Try to find and copy from candidate locations
-  for candidate in "${candidates[@]}"; do
-    if [[ -f "$candidate" ]] && grep -q "MARKETBOT" "$candidate" 2>/dev/null; then
-      cp "$candidate" "$workspace_env" 2>/dev/null && {
-        echo "[codex_entry] Copied .marketbot.env from ${candidate} to ${workspace_env}" >&2
-        load_marketbot_env "$workspace_env"
-        return 0
-      }
-    fi
-  done
+  # ⭐ CRITICAL: Only use session-specific env file (no legacy workspace paths)
+  # Session directory structure matches SessionStore: /opt/codex-home/sessions/gateway/session-{sessionId}
+  local session_env_gateway="/opt/codex-home/sessions/gateway/session-${session_id}/.env"
+  local session_env_direct="/opt/codex-home/sessions/${session_id}/.env"
+  local session_env=""
   
-  # If MARKETBOT env vars are set in process environment, write them to file
-  if [[ -n "${MARKETBOT_API_KEY:-}" ]] || [[ -n "${MARKETBOT_TEAM_ID:-}" ]]; then
-    {
-      [[ -n "${MARKETBOT_API_KEY:-}" ]] && echo "MARKETBOT_API_KEY=${MARKETBOT_API_KEY}"
-      [[ -n "${MARKETBOT_TEAM_ID:-}" ]] && echo "MARKETBOT_TEAM_ID=${MARKETBOT_TEAM_ID}"
-      [[ -n "${MARKETBOT_API_URL:-}" ]] && echo "MARKETBOT_API_URL=${MARKETBOT_API_URL}"
-    } > "$workspace_env" 2>/dev/null && {
-      echo "[codex_entry] Created ${workspace_env} from environment variables" >&2
-      load_marketbot_env "$workspace_env"
-      return 0
-    }
+  # Try gateway path first (matches SessionStore structure)
+  if [[ -f "$session_env_gateway" ]]; then
+    session_env="$session_env_gateway"
+  elif [[ -f "$session_env_direct" ]]; then
+    session_env="$session_env_direct"
   fi
   
-  echo "[codex_entry] Warning: .marketbot.env not found; MarketBot tools may not work" >&2
-  return 1
+  if [[ -z "$session_env" ]] || [[ ! -f "$session_env" ]]; then
+    echo "[codex_entry] ❌ ERROR: Session-specific env file not found" >&2
+    echo "[codex_entry] Tried gateway path: ${session_env_gateway}" >&2
+    echo "[codex_entry] Tried direct path: ${session_env_direct}" >&2
+    echo "[codex_entry] MarketBot tools will fail. Codex Gateway should have created this file." >&2
+    return 1
+  fi
+  
+  # Check file permissions (should be readable)
+  if [[ ! -r "$session_env" ]]; then
+    echo "[codex_entry] ❌ ERROR: Session env file exists but is not readable: ${session_env}" >&2
+    echo "[codex_entry] File permissions: $(stat -c '%a' "$session_env" 2>/dev/null || stat -f '%A' "$session_env" 2>/dev/null || echo 'unknown')" >&2
+    return 1
+  fi
+  
+  if ! grep -q "MARKETBOT" "$session_env" 2>/dev/null; then
+    echo "[codex_entry] ⚠️ WARNING: Session env file exists but contains no MARKETBOT variables: ${session_env}" >&2
+    echo "[codex_entry] MarketBot tools may fail." >&2
+    return 1
+  fi
+  
+  echo "[codex_entry] ✅ Found session-specific MarketBot config: ${session_env}" >&2
+  load_marketbot_env "$session_env"
+  return 0
 }
 
 load_marketbot_env() {
-  # Load MarketBot environment variables from a file into the current shell.
+  # Load MarketBot environment variables from session-specific env file.
   # This exports the variables so they're available to child processes.
+  # ⭐ SESSION-ISOLATED: Only loads from session-specific path, no legacy workspace paths
   
-  local env_file="${1:-/workspace/.marketbot.env}"
+  local env_file="${1}"
+  
+  if [[ -z "$env_file" ]]; then
+    echo "[codex_entry] ❌ ERROR: Env file path not provided" >&2
+    return 1
+  fi
   
   if [[ ! -f "$env_file" ]]; then
-    echo "[codex_entry] Warning: MarketBot env file not found: ${env_file}" >&2
+    echo "[codex_entry] ❌ ERROR: MarketBot env file not found: ${env_file}" >&2
     return 1
   fi
   
   echo "[codex_entry] Loading MarketBot environment variables from ${env_file}" >&2
   
   # Read the file line by line and export variables
+  local loaded_count=0
   while IFS= read -r line || [[ -n "$line" ]]; do
     # Skip empty lines and comments
     line="${line%%#*}"  # Remove comments
@@ -337,8 +342,8 @@ load_marketbot_env() {
       continue
     fi
     
-    # Only process MARKETBOT_* variables
-    if [[ "$line" =~ ^MARKETBOT_ ]]; then
+    # Process MARKETBOT_*, PRODUCTBOT_*, CODEX_SESSION_ID, and CODEX_JOB_ID variables
+    if [[ "$line" =~ ^(MARKETBOT_|PRODUCTBOT_|CODEX_SESSION_ID|CODEX_JOB_ID) ]]; then
       # Split on first = sign
       if [[ "$line" =~ ^([^=]+)=(.*)$ ]]; then
         local key="${BASH_REMATCH[1]}"
@@ -354,11 +359,13 @@ load_marketbot_env() {
         # This avoids issues with special characters in the value
         printf -v export_cmd "export %s=%q" "$key" "$value"
         eval "$export_cmd"
+        ((loaded_count++))
         echo "[codex_entry] Loaded ${key} from ${env_file}" >&2
       fi
     fi
   done < "$env_file"
   
+  echo "[codex_entry] ✅ Loaded ${loaded_count} environment variable(s) from ${env_file}" >&2
   return 0
 }
 
@@ -396,9 +403,8 @@ if [[ -n "${MARKETBOT_TEAM_ID:-}" ]]; then
 else
   echo "[codex_entry] MARKETBOT_TEAM_ID is NOT set in environment" >&2
 fi
-if [[ -f "/workspace/.marketbot.env" ]]; then
-  echo "[codex_entry] Found /workspace/.marketbot.env" >&2
-fi
+# ⭐ SESSION-ISOLATED: No longer check for legacy /workspace/.marketbot.env
+# All env vars must come from session-specific file: /opt/codex-home/sessions/{CODEX_SESSION_ID}/.env
 
 # Note: Transcription daemon is now a separate persistent service container
 # Started via scripts/start_transcription_service.ps1
