@@ -4,11 +4,22 @@ import json
 import os
 import readline  # noqa: F401 - history support on POSIX shells
 import sys
+from datetime import datetime
 
 import requests
 
 
 DEFAULT_TIMEOUT_MS = 300_000  # 5 minutes
+
+
+def timestamp():
+    """Return current timestamp in ISO format."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def log_with_timestamp(message, prefix="[codex-repl]"):
+    """Print a message with timestamp prefix."""
+    print(f"{prefix} [{timestamp()}] {message}")
 
 
 def pretty(obj):
@@ -136,14 +147,16 @@ def main():
         try:
             if cmd == "run":
                 if not remainder:
-                    print("Usage: run <prompt>")
+                    log_with_timestamp("Usage: run <prompt>")
                     continue
+                log_with_timestamp(f"🚀 Starting job: {remainder[:80]}..." if len(remainder) > 80 else f"🚀 Starting job: {remainder}")
                 result = post_completion(base, remainder, current_timeout_ms, session_id=current_session)
+                log_with_timestamp("✅ Job completed")
                 print(pretty(result))
                 gateway_session = result.get("gateway_session_id") or result.get("session_id")
                 if gateway_session:
                     current_session = gateway_session
-                    print(f"→ gateway_session_id: {gateway_session}")
+                    log_with_timestamp(f"📌 Pinned session set to {gateway_session}")
                 model_info = result.get("model")
                 usage_info = result.get("usage")
                 if model_info:
@@ -151,15 +164,20 @@ def main():
                 if usage_info is not None:
                     print(f"→ usage: {usage_info}")
             elif cmd == "list":
+                log_with_timestamp("📋 Fetching sessions list...")
                 result = get_sessions(base)
+                log_with_timestamp(f"✅ Found {len(result.get('sessions', []))} session(s)")
                 print(pretty(result))
             elif cmd == "show":
                 if not remainder:
-                    print("Usage: show <session-id> [events]")
+                    log_with_timestamp("Usage: show <session-id> [events]")
                     continue
                 session_id, _, flag = remainder.partition(" ")
-                include_events = flag.strip().lower() == "events"
+                flag_lower = flag.strip().lower()
+                include_events = flag_lower == "events"
+                log_with_timestamp(f"📄 Fetching session {session_id}..." + (f" (with {flag_lower})" if flag_lower else ""))
                 result = get_session_detail(base, session_id, include_events=include_events)
+                log_with_timestamp("✅ Session data retrieved")
                 print(pretty(result))
                 runs = result.get("runs") or []
                 for run in runs:
@@ -173,58 +191,60 @@ def main():
                         )
             elif cmd == "search":
                 if not remainder:
-                    print("Usage: search <session-id> <phrase> [--f]")
+                    log_with_timestamp("Usage: search <session-id> <phrase> [--f]")
                     continue
                 parts = remainder.split(" ")
                 if len(parts) < 2:
-                    print("Usage: search <session-id> <phrase> [--f]")
+                    log_with_timestamp("Usage: search <session-id> <phrase> [--f]")
                     continue
                 session_id = parts[0]
                 fuzzy = "--f" in parts[1:]
                 phrase_parts = [p for p in parts[1:] if p != "--f"]
                 phrase = " ".join(phrase_parts)
                 if not phrase:
-                    print("Usage: search <session-id> <phrase> [--f]")
+                    log_with_timestamp("Usage: search <session-id> <phrase> [--f]")
                     continue
                 result = search_session(base, session_id, phrase, fuzzy=fuzzy)
                 print(pretty(result))
             elif cmd == "prompt":
                 if not remainder:
-                    print("Usage: prompt <session-id> <text>")
+                    log_with_timestamp("Usage: prompt <session-id> <text>")
                     continue
                 session_id, _, prompt_text = remainder.partition(" ")
                 if not prompt_text:
-                    print("Usage: prompt <session-id> <text>")
+                    log_with_timestamp("Usage: prompt <session-id> <text>")
                     continue
+                log_with_timestamp(f"📝 Resuming session {session_id}: {prompt_text[:80]}..." if len(prompt_text) > 80 else f"📝 Resuming session {session_id}: {prompt_text}")
                 result = resume_prompt(base, session_id, prompt_text, current_timeout_ms)
+                log_with_timestamp("✅ Prompt completed")
                 print(pretty(result))
             elif cmd == "use":
                 if not remainder:
-                    print("Usage: use <session-id>")
+                    log_with_timestamp("Usage: use <session-id>")
                     continue
                 current_session = remainder.strip()
-                print(f"Pinned session set to {current_session}")
+                log_with_timestamp(f"📌 Pinned session set to {current_session}")
             elif cmd == "timeout":
                 if not remainder:
-                    print("Usage: timeout <seconds>")
+                    log_with_timestamp("Usage: timeout <seconds>")
                     continue
                 try:
                     seconds = float(remainder.strip())
                     if seconds <= 0:
                         raise ValueError
                 except ValueError:
-                    print("Timeout must be a positive number of seconds")
+                    log_with_timestamp("Timeout must be a positive number of seconds")
                     continue
                 current_timeout_ms = int(seconds * 1000)
-                print(f"Timeout updated to {seconds:.1f}s")
+                log_with_timestamp(f"⏱️ Timeout updated to {seconds:.1f}s")
             else:
-                print("Unknown command. Type 'help' for instructions.")
+                log_with_timestamp("Unknown command. Type 'help' for instructions.")
         except requests.HTTPError as err:
-            print(f"HTTP error {err.response.status_code}: {err.response.text}")
+            log_with_timestamp(f"❌ HTTP error {err.response.status_code}: {err.response.text}", prefix="[codex-repl]")
         except requests.RequestException as err:
-            print(f"Request failed: {err}")
+            log_with_timestamp(f"❌ Request failed: {err}", prefix="[codex-repl]")
         except Exception as err:
-            print(f"Error: {err}")
+            log_with_timestamp(f"❌ Error: {err}", prefix="[codex-repl]")
 
 
 if __name__ == "__main__":

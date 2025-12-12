@@ -25,12 +25,6 @@
 .PARAMETER Serve
     Start HTTP gateway on port 4000 (or -GatewayPort)
 
-.PARAMETER Monitor
-    Watch directory for file changes and trigger Codex with MONITOR.md template
-
-.PARAMETER UseWatchdog
-    Use Python watchdog for event-driven monitoring (faster, more efficient than default FileSystemWatcher)
-
 .PARAMETER ListSessions
     Show recent sessions with copyable resume commands, then exit
 
@@ -90,14 +84,6 @@
     codex-container -Exec "list python files"
     Run non-interactive command
 
-.EXAMPLE
-    codex-container -Monitor -WatchPath vhf_monitor
-    Monitor directory for changes
-
-.EXAMPLE
-    codex-container -Monitor -WatchPath vhf_monitor -UseWatchdog
-    Monitor directory using Python watchdog (event-driven, more efficient)
-
 .LINK
     https://github.com/DeepBlueDynamics/codex-container
 #>
@@ -110,11 +96,6 @@ param(
     [switch]$Login,
     [switch]$Run,
     [switch]$Serve,
-    [switch]$Watch,
-    [string]$WatchPath,
-    [switch]$Monitor,
-    [string]$MonitorPrompt = 'MONITOR.md',
-    [switch]$UseWatchdog,
     [switch]$NewSession,
     [string[]]$Exec,
     [switch]$Shell,
@@ -145,6 +126,10 @@ param(
     [string]$GatewaySecureDir,
     [string]$GatewaySecureToken,
     [int]$GatewayLogLevel,
+    [string]$GatewayWatchPaths,
+    [string]$GatewayWatchPattern,
+    [string]$GatewayWatchPromptFile,
+    [int]$GatewayWatchDebounceMs,
     [string]$TranscriptionServiceUrl = 'http://host.docker.internal:8765',
     [string]$SessionWebhookUrl,
     [string]$SessionWebhookAuthBearer,
@@ -1168,7 +1153,7 @@ function ConvertTo-ShellScript {
     return ($Commands -join '; ')
 }
 
-function Install-RunnerOnPath {
+ {
     param(
         $Context
     )
@@ -1420,435 +1405,20 @@ function Invoke-CodexServe {
     if ($LogLevel) {
         $envVars += "CODEX_GATEWAY_LOG_LEVEL=$LogLevel"
     }
+    if ($GatewayWatchPaths) {
+        $envVars += "CODEX_GATEWAY_WATCH_PATHS=$GatewayWatchPaths"
+    }
+    if ($GatewayWatchPattern) {
+        $envVars += "CODEX_GATEWAY_WATCH_PATTERN=$GatewayWatchPattern"
+    }
+    if ($GatewayWatchPromptFile) {
+        $envVars += "CODEX_GATEWAY_WATCH_PROMPT_FILE=$GatewayWatchPromptFile"
+    }
+    if ($GatewayWatchDebounceMs) {
+        $envVars += "CODEX_GATEWAY_WATCH_DEBOUNCE_MS=$GatewayWatchDebounceMs"
+    }
 
     Invoke-CodexContainer -Context $Context -CommandArgs @('node', '/usr/local/bin/codex_gateway.js') -AdditionalArgs @('-p', $publish) -AdditionalEnv $envVars -GatewayMode:$true
-}
-
-function Invoke-CodexMonitor {
-    param(
-        $Context,
-        [string]$WatchPath,
-        [string]$PromptFile,
-        [switch]$JsonOutput,
-        [string[]]$CodexArgs,
-        [switch]$UseWatchdog
-    )
-
-    Write-Host "DEBUG: Invoke-CodexMonitor called" -ForegroundColor Yellow
-    Write-Host "DEBUG: WatchPath = '$WatchPath'" -ForegroundColor Yellow
-    Write-Host "DEBUG: PromptFile = '$PromptFile'" -ForegroundColor Yellow
-    Write-Host "DEBUG: UseWatchdog = $UseWatchdog" -ForegroundColor Yellow
-
-    if (-not $WatchPath) {
-        $WatchPath = $Context.WorkspacePath
-    }
-
-    if (-not (Test-Path $WatchPath)) {
-        throw "Monitor watch path '$WatchPath' could not be resolved."
-    }
-
-    $resolvedWatch = (Resolve-Path -LiteralPath $WatchPath).ProviderPath
-
-    # Auto-detect prompt file if not specified
-    if (-not $PromptFile) {
-        # First check for MONITOR.md
-        $defaultPrompt = Join-Path $resolvedWatch 'MONITOR.md'
-        if (Test-Path $defaultPrompt) {
-            $PromptFile = 'MONITOR.md'
-        } else {
-            # Look for MONITOR_*.md pattern
-            $monitorFiles = Get-ChildItem -Path $resolvedWatch -Filter 'MONITOR_*.md' -File -ErrorAction SilentlyContinue
-            if ($monitorFiles -and $monitorFiles.Count -gt 0) {
-                $PromptFile = $monitorFiles[0].Name
-                Write-Host "Auto-detected prompt file: $PromptFile" -ForegroundColor Cyan
-            } else {
-                $PromptFile = 'MONITOR.md'  # Fallback, will error later if missing
-            }
-        }
-    }
-    $promptPath = Join-Path $resolvedWatch $PromptFile
-
-    # Use Python watchdog monitor running inside container
-    if ($UseWatchdog) {
-        Write-Host "🐍 Using Python watchdog monitor (event-driven, running in container)" -ForegroundColor Cyan
-
-        # Calculate relative path from workspace to watch directory
-        $watchRelative = $resolvedWatch.Substring($Context.WorkspacePath.Length).TrimStart('\', '/')
-        $containerWatchPath = if ($watchRelative) { "/workspace/$($watchRelative.Replace('\', '/'))" } else { "/workspace" }
-
-        Write-Host "   Watch path (host): $resolvedWatch" -ForegroundColor DarkGray
-        Write-Host "   Watch path (container): $containerWatchPath" -ForegroundColor DarkGray
-        Write-Host "   Prompt file: $PromptFile" -ForegroundColor DarkGray
-
-        # Build monitor command to run inside container
-        $monitorCmd = @(
-            "python3", "/opt/scripts/monitor.py",
-            "--watch-path", $containerWatchPath,
-            "--workspace", "/workspace",
-            "--codex-script", "codex",
-            "--monitor-prompt-file", $PromptFile
-        )
-
-        if ($Context.NewSession) {
-            $monitorCmd += "--new-session"
-        }
-
-        if ($JsonOutput) {
-            $jsonMode = if ($Context.JsonE) { "experimental" } else { "legacy" }
-            $monitorCmd += @("--json-mode", $jsonMode)
-        }
-
-        # Launch container with monitor running inside
-        Write-Host "Starting monitor in container..." -ForegroundColor Cyan
-        Invoke-CodexContainer -Context $Context -CommandArgs $monitorCmd
-        return
-    }
-
-    # Fall back to PowerShell FileSystemWatcher monitor
-    Write-Host "📁 Using PowerShell FileSystemWatcher monitor (polling-based)" -ForegroundColor Cyan
-
-    $logPath = Join-Path $resolvedWatch 'codex-monitor.log'
-    $sessionStatePath = Join-Path $resolvedWatch '.codex-monitor-session'
-
-    function Write-MonitorLog {
-        param([string]$Message)
-        $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-        $line = "[$timestamp] $Message"
-        Add-Content -LiteralPath $logPath -Value $line
-    }
-
-    function Get-MonitorSession {
-        if (Test-Path $sessionStatePath) {
-            try {
-                $sessionId = Get-Content $sessionStatePath -Raw -ErrorAction SilentlyContinue
-                return $sessionId.Trim()
-            } catch {
-                return $null
-            }
-        }
-        return $null
-    }
-
-    function Set-MonitorSession {
-        param([string]$SessionId)
-        if ($SessionId) {
-            Set-Content -Path $sessionStatePath -Value $SessionId -NoNewline
-        }
-    }
-
-    function Get-MonitorRelativePath {
-        param([string]$BasePath, [string]$TargetPath)
-        if (-not $TargetPath) { return '' }
-        try {
-            $baseWithSlash = if ($BasePath.TrimEnd() -match '[\\/]$') { $BasePath } else { $BasePath + [System.IO.Path]::DirectorySeparatorChar }
-            $baseUri = New-Object System.Uri($baseWithSlash)
-            $targetUri = New-Object System.Uri($TargetPath)
-            if ($baseUri.Scheme -ne $targetUri.Scheme) {
-                return $TargetPath
-            }
-            $relativeUri = $baseUri.MakeRelativeUri($targetUri).ToString()
-            $relative = [System.Uri]::UnescapeDataString($relativeUri).Replace('/', [System.IO.Path]::DirectorySeparatorChar)
-            if ([string]::IsNullOrEmpty($relative)) { return '.' }
-            return $relative
-        } catch {
-            return $TargetPath
-        }
-    }
-
-    function Format-MonitorPrompt {
-        param([string]$Template, [hashtable]$Values)
-        $result = $Template
-        foreach ($key in $Values.Keys) {
-            $token = "{{${key}}}"
-            $value = $Values[$key]
-            if ($null -eq $value) { $value = '' }
-            $result = $result.Replace($token, $value)
-        }
-        return $result
-    }
-
-    function Get-LatestSession {
-        param($Context)
-        $sessionsDir = Join-Path $Context.CodexHome ".codex/sessions"
-        if (-not (Test-Path $sessionsDir)) {
-            return $null
-        }
-
-        $allSessions = Get-ChildItem -Path $sessionsDir -Recurse -Filter "rollout-*.jsonl" -File -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-
-        if ($allSessions -and $allSessions.Name -match 'rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$') {
-            return $Matches[1]
-        }
-
-        return $null
-    }
-
-    Write-Host "Monitoring $resolvedWatch" -ForegroundColor Cyan
-    Write-Host "Prompt file: $promptPath" -ForegroundColor DarkGray
-    Write-Host "Log file:    $logPath" -ForegroundColor DarkGray
-    Write-Host 'Press Ctrl+C to stop.' -ForegroundColor DarkGray
-
-    # Check for existing monitor session (unless -NewSession specified)
-    $monitorSessionId = $null
-    if (-not $Context.NewSession) {
-        $monitorSessionId = Get-MonitorSession
-    }
-
-    if ($monitorSessionId) {
-        Write-Host "Monitor resuming session: $monitorSessionId" -ForegroundColor Cyan
-        Write-MonitorLog "Resuming session: $monitorSessionId"
-    } else {
-        if ($Context.NewSession) {
-            Write-Host "Monitor starting fresh session (forced by -NewSession)" -ForegroundColor Cyan
-            Write-MonitorLog "Starting fresh session (forced by -NewSession)"
-            # Clear any existing session file
-            if (Test-Path $sessionStatePath) {
-                Remove-Item $sessionStatePath -Force
-            }
-        } else {
-            Write-Host "Monitor starting new session" -ForegroundColor Cyan
-            Write-MonitorLog "Starting new session"
-        }
-    }
-
-    Write-MonitorLog "Started monitoring $resolvedWatch"
-
-    $ignored = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
-    $ignored.Add([System.IO.Path]::GetFileName($promptPath)) | Out-Null
-    $ignored.Add('codex-monitor.log') | Out-Null
-
-    $fsw = New-Object System.IO.FileSystemWatcher $resolvedWatch
-    $fsw.IncludeSubdirectories = $false
-    $fsw.EnableRaisingEvents = $true
-    $fsw.NotifyFilter = [System.IO.NotifyFilters]::FileName -bor [System.IO.NotifyFilters]::LastWrite
-
-    $sourceIds = @('CodexMonitorChanged','CodexMonitorCreated','CodexMonitorRenamed')
-    Register-ObjectEvent -InputObject $fsw -EventName Changed -SourceIdentifier $sourceIds[0] | Out-Null
-    Register-ObjectEvent -InputObject $fsw -EventName Created -SourceIdentifier $sourceIds[1] | Out-Null
-    Register-ObjectEvent -InputObject $fsw -EventName Renamed -SourceIdentifier $sourceIds[2] | Out-Null
-
-    $lastProcessed = @{}
-    $lastWriteStamp = @{}
-
-    try {
-        while ($true) {
-            $event = Wait-Event -SourceIdentifier * -Timeout 1
-            if (-not $event) { continue }
-
-            if (-not ($sourceIds -contains $event.SourceIdentifier)) {
-                Remove-Event -EventIdentifier $event.EventIdentifier
-                continue
-            }
-
-            try {
-                $fullPath = $event.SourceEventArgs.FullPath
-            } catch {
-                Remove-Event -EventIdentifier $event.EventIdentifier
-                continue
-            }
-
-            Remove-Event -EventIdentifier $event.EventIdentifier
-
-            if (-not $fullPath) { continue }
-            if (-not (Test-Path $fullPath)) {
-                continue
-            }
-
-            $name = [System.IO.Path]::GetFileName($fullPath)
-            if ($ignored.Contains($name)) {
-                continue
-            }
-
-            try {
-                $attributes = [System.IO.File]::GetAttributes($fullPath)
-                if (($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
-                    continue
-                }
-            } catch {}
-
-            $now = Get-Date
-            $lastWrite = $null
-            try {
-                $lastWrite = [System.IO.File]::GetLastWriteTimeUtc($fullPath)
-            } catch {}
-
-            if ($lastProcessed.ContainsKey($fullPath)) {
-                $delta = $now - $lastProcessed[$fullPath]
-                if ($delta.TotalSeconds -lt 1) {
-                    continue
-                }
-            }
-
-            if ($lastWrite -ne $null) {
-                if ($lastWriteStamp.ContainsKey($fullPath) -and $lastWriteStamp[$fullPath] -eq $lastWrite) {
-                    continue
-                }
-                $lastWriteStamp[$fullPath] = $lastWrite
-            }
-
-            $lastProcessed[$fullPath] = $now
-
-            # Always read full prompt template - agent needs full instructions every time
-            if (-not (Test-Path $promptPath)) {
-                $msg = "Prompt file missing; skipping event for ${fullPath}"
-                Write-Host $msg -ForegroundColor Yellow
-                Write-MonitorLog $msg
-                continue
-            }
-
-            try {
-                $promptText = Get-Content -LiteralPath $promptPath -Raw -ErrorAction Stop
-            } catch {
-                $msg = "Failed reading prompt file ${promptPath}: $($_.Exception.Message)"
-                Write-Host $msg -ForegroundColor Red
-                Write-MonitorLog $msg
-                continue
-            }
-
-            $changeType = $event.SourceEventArgs.ChangeType.ToString()
-            $oldFullPath = $null
-            if ($event.SourceEventArgs -is [System.IO.RenamedEventArgs]) {
-                $oldFullPath = $event.SourceEventArgs.OldFullPath
-            }
-
-            # Calculate relative path from the WATCH directory (for display)
-            $relativePath = Get-MonitorRelativePath -BasePath $resolvedWatch -TargetPath $fullPath
-            if ([string]::IsNullOrEmpty($relativePath)) { $relativePath = '.' }
-            $directoryRelative = [System.IO.Path]::GetDirectoryName($relativePath)
-            if ([string]::IsNullOrEmpty($directoryRelative)) { $directoryRelative = '.' }
-
-            # Calculate relative path from the WORKSPACE root (for container paths)
-            $relativeFromWorkspace = Get-MonitorRelativePath -BasePath $Context.WorkspacePath -TargetPath $fullPath
-            if ([string]::IsNullOrEmpty($relativeFromWorkspace)) { $relativeFromWorkspace = '.' }
-            
-            $relativeForContainer = $relativeFromWorkspace.Replace([System.IO.Path]::DirectorySeparatorChar, '/')
-            if ($relativeForContainer -eq '.') {
-                $relativeForContainer = ''
-            }
-            $containerPath = if ($relativeForContainer) { "/workspace/$relativeForContainer" } else { '/workspace' }
-            $containerDir = if ($relativeForContainer) {
-                $dirPart = [System.IO.Path]::GetDirectoryName($relativeFromWorkspace)
-                if ([string]::IsNullOrEmpty($dirPart)) { '/workspace' } else { "/workspace/" + ($dirPart.Replace([System.IO.Path]::DirectorySeparatorChar, '/')) }
-            } else { '/workspace' }
-
-            $oldRelativePath = if ($oldFullPath) { Get-MonitorRelativePath -BasePath $resolvedWatch -TargetPath $oldFullPath } else { '' }
-            $oldDirectoryRelative = if ($oldRelativePath) { [System.IO.Path]::GetDirectoryName($oldRelativePath) } else { '' }
-            if ([string]::IsNullOrEmpty($oldDirectoryRelative) -and $oldRelativePath) { $oldDirectoryRelative = '.' }
-
-            $oldRelativeForContainer = $oldRelativePath.Replace([System.IO.Path]::DirectorySeparatorChar, '/')
-            if ($oldRelativeForContainer -eq '.') { $oldRelativeForContainer = '' }
-            $oldContainerPath = if ($oldRelativeForContainer) { "/workspace/$oldRelativeForContainer" } else { '' }
-            $oldContainerDir = if ($oldRelativeForContainer) {
-                $oldDirPart = [System.IO.Path]::GetDirectoryName($oldRelativePath)
-                if ([string]::IsNullOrEmpty($oldDirPart)) { '/workspace' } else { "/workspace/" + ($oldDirPart.Replace([System.IO.Path]::DirectorySeparatorChar, '/')) }
-            } else { '' }
-
-            $values = @{
-                'file' = [System.IO.Path]::GetFileName($fullPath)
-                'filename' = [System.IO.Path]::GetFileName($fullPath)
-                'directory' = $directoryRelative
-                'dir' = $directoryRelative
-                'full_path' = $fullPath
-                'relative_path' = $relativePath
-                'container_path' = $containerPath
-                'container_dir' = $containerDir
-                'extension' = [System.IO.Path]::GetExtension($fullPath)
-                'action' = $changeType
-                'timestamp' = (Get-Date).ToString('o')
-                'watch_root' = $resolvedWatch
-                'old_full_path' = $oldFullPath
-                'old_relative_path' = $oldRelativePath
-                'old_container_path' = $oldContainerPath
-                'old_container_dir' = $oldContainerDir
-                'old_file' = if ($oldFullPath) { [System.IO.Path]::GetFileName($oldFullPath) } else { '' }
-                'old_filename' = if ($oldFullPath) { [System.IO.Path]::GetFileName($oldFullPath) } else { '' }
-                'old_directory' = $oldDirectoryRelative
-                'old_dir' = $oldDirectoryRelative
-            }
-
-            # Build payload - ALWAYS send full template with substitution
-            # Agent needs the full instructions every time to remember to check for duplicates
-            $payload = Format-MonitorPrompt -Template $promptText.TrimEnd() -Values $values
-
-            # If monitoring a subdirectory, fix paths for correct container mapping
-            if ($resolvedWatch -ne $Context.WorkspacePath) {
-                # Calculate the relative path from workspace to watch directory
-                $watchRelative = $resolvedWatch.Substring($Context.WorkspacePath.Length).TrimStart('\', '/')
-                $watchRelativeForContainer = $watchRelative.Replace('\', '/')
-
-                # Replace absolute Windows paths with correct container paths
-                # Files in the watched subdir need the subdirectory in their container path
-                $payload = $payload -replace [regex]::Escape($resolvedWatch.Replace('\', '/')), "/workspace/$watchRelativeForContainer"
-                $payload = $payload -replace [regex]::Escape($resolvedWatch), "/workspace/$watchRelativeForContainer"
-            }
-
-            # Build command arguments array
-            # IMPORTANT: Ensure payload is added as a single string element, not word-split
-            $cmdArgs = @()
-            # Add session resume if we have a persisted session
-            if ($monitorSessionId) {
-                $cmdArgs += 'resume'
-                $cmdArgs += $monitorSessionId
-            }
-            if ($CodexArgs) {
-                $cmdArgs += $CodexArgs
-            }
-            # Add the prompt payload as a single element (cast to ensure it's treated as one string)
-            $cmdArgs += [string]$payload
-
-            $logMessage = "Dispatching Codex run for ${fullPath}"
-            Write-Host $logMessage -ForegroundColor DarkGray
-            Write-MonitorLog $logMessage
-
-            # Debug logging
-            Write-Host "DEBUG: cmdArgs count = $($cmdArgs.Count)" -ForegroundColor Yellow
-            Write-Host "DEBUG: cmdArgs[0] length = $($cmdArgs[0].Length)" -ForegroundColor Yellow
-            if ($cmdArgs.Count -gt 1) {
-                Write-Host "DEBUG: cmdArgs has multiple elements!" -ForegroundColor Red
-                for ($i = 0; $i -lt [Math]::Min($cmdArgs.Count, 5); $i++) {
-                    Write-Host "DEBUG: cmdArgs[$i] = '$($cmdArgs[$i])'" -ForegroundColor Yellow
-                }
-            } else {
-                Write-Host "DEBUG: cmdArgs[0] first 100 chars = $($cmdArgs[0].Substring(0, [Math]::Min(100, $cmdArgs[0].Length)))" -ForegroundColor Yellow
-            }
-
-            try {
-                Invoke-CodexExec -Context $Context -Arguments $cmdArgs
-
-                # Capture and persist session ID for continuity
-                if (-not $monitorSessionId) {
-                    $latestSession = Get-LatestSession -Context $Context
-                    if ($latestSession) {
-                        $monitorSessionId = $latestSession
-                        Set-MonitorSession -SessionId $monitorSessionId
-                        Write-Host "Monitor persisted session: $monitorSessionId" -ForegroundColor Cyan
-                        Write-MonitorLog "Persisted session: $monitorSessionId"
-                    }
-                }
-
-                # Only mark as processed after successful completion
-                $lastProcessed[$fullPath] = $now
-                if ($lastWrite -ne $null) {
-                    $lastWriteStamp[$fullPath] = $lastWrite
-                }
-                Write-MonitorLog "Codex run completed for ${fullPath}"
-            } catch {
-                $err = "Codex run failed for ${fullPath}: $($_.Exception.Message)"
-                Write-Host $err -ForegroundColor Red
-                Write-MonitorLog $err
-                # Don't update lastProcessed on failure - allow retry
-            }
-        }
-    } finally {
-        foreach ($id in $sourceIds) {
-            Unregister-Event -SourceIdentifier $id -ErrorAction SilentlyContinue
-            Remove-Event -SourceIdentifier $id -ErrorAction SilentlyContinue
-        }
-        $fsw.Dispose()
-        Write-MonitorLog "Stopped monitoring $resolvedWatch"
-    }
 }
 
 function Test-CodexAuthenticated {
@@ -2047,7 +1617,7 @@ try {
     }
 
     # Check environment for actions that will run containers
-    if ($action -in @('Shell', 'Exec', 'Serve', 'Monitor', 'Run')) {
+    if ($action -in @('Shell', 'Exec', 'Serve', 'Run')) {
         if (-not (Test-CodexEnvironment -Context $context)) {
             Write-Host "`nFix the above issues before proceeding." -ForegroundColor Red
             Write-Host "Hint: Ensure Docker is running and ANTHROPIC_API_KEY is set" -ForegroundColor Yellow
@@ -2059,8 +1629,7 @@ try {
     'Install' {
         Invoke-DockerBuild -Context $context -PushImage:$Push
         Ensure-CodexCli -Context $context -Force
-        Install-RunnerOnPath -Context $context
-    }
+            }
     'Login' {
         Invoke-CodexLogin -Context $context
     }

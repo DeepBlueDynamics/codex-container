@@ -1,0 +1,18 @@
+version: "3.8"
+
+networks:
+  codex-network:
+    external: true
+
+services:
+  gnosis-callback:
+    image: node:18-alpine
+    container_name: gnosis-callback
+    working_dir: /app
+    command: ["node", "callback_server.js"]
+    networks:
+      - codex-network
+    ports:
+      - "8088:8088"
+    volumes:
+      - ./scripts/callback_server.js:/app/callback_server.js:ro

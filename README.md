@@ -28,24 +28,29 @@
 
 ## Quick start (Bash)
 ```bash
-# install/update image, register MCP tools
+# install/update image (registers MCP tools from MCP/)
 ./scripts/codex_container.sh --install
 
-# run a one-off prompt
+# one-off prompt (non-interactive)
 ./scripts/codex_container.sh --exec "list markdown files"
 
-# serve an HTTP gateway (chat-completions style) on port 4000
+# serve HTTP gateway on port 4000 (POST /completion)
 ./scripts/codex_container.sh --serve --gateway-port 4000
 
-# monitor a folder and react to file changes using MONITOR.md
+# legacy monitor mode (PowerShell FileSystemWatcher) using MONITOR.md
 ./scripts/codex_container.sh --monitor --watch-path ./recordings
+
+# gateway file watcher (preferred in serve mode):
+CODEX_GATEWAY_WATCH_PATHS=./temp \
+CODEX_GATEWAY_WATCH_PROMPT_FILE=./MONITOR.md \
+./scripts/codex_container.sh --serve --gateway-port 4000
+```
+PowerShell equivalents live in `scripts/codex_container.ps1` (`-Install`, `-Exec`, `-Serve`, `-Monitor`, etc.). For the watcher in PowerShell, use paths like `temp` (or `/workspace/temp`) instead of `./temp`.
 
 # start optional services
 ./scripts/start_transcription_service_docker.sh --build   # Whisper GPU @8765
 ./scripts/start_instructor_service_docker.sh --build       # Instructor-XL @8787
 ```
-
-PowerShell equivalents live in `scripts/codex_container.ps1` (`-Install`, `-Exec`, `-Serve`, `-Monitor`, etc.).
 
 ## Operating modes
 1) **Terminal / Exec** — `--exec "..."` or `--session-id <id>` to resume. Good for CI, scripts, quick runs.
@@ -90,6 +95,15 @@ PowerShell equivalents live in `scripts/codex_container.ps1` (`-Install`, `-Exec
 # POST /completion with {"prompt": "...", "model": "...", "workspace": "/workspace"}
 ```
 Env tweaks: `CODEX_GATEWAY_DEFAULT_MODEL`, `CODEX_GATEWAY_TIMEOUT_MS`, `CODEX_GATEWAY_EXTRA_ARGS`.
+
+- Gateway file watcher (serve mode): fire completions on file changes without using the legacy `--monitor` path. Set envs before `--serve`:
+  ```
+  CODEX_GATEWAY_WATCH_PATHS=./temp              # comma/semicolon separated; resolved relative to /workspace
+  CODEX_GATEWAY_WATCH_PATTERN=**/*              # optional glob (default **/*)
+  CODEX_GATEWAY_WATCH_PROMPT_FILE=./MONITOR.md  # optional; falls back to built-in prompt
+  CODEX_GATEWAY_WATCH_DEBOUNCE_MS=750           # optional
+  ```
+  PowerShell: use `temp` (or `/workspace/temp`); avoid leading `./`. On startup you should see `watcher configured: ...`; touching a file under the watched path triggers a completion using MONITOR.md (or built-in) prompt.
 
 ## Troubleshooting
 - `permission denied` to Docker: add your user to `docker` group, restart shell; verify `docker ps`.

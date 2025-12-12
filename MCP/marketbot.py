@@ -82,6 +82,16 @@ def _debug_info() -> Dict[str, Optional[str]]:
     }
 
 
+def _with_next_actions(resp: Dict[str, Any], actions: Optional[Sequence[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Ensure every response carries next_actions (default: empty list)."""
+
+    if actions is None:
+        actions = []
+    if isinstance(resp, dict) and "next_actions" not in resp:
+        resp["next_actions"] = list(actions)
+    return resp
+
+
 def _request(
     method: str,
     path: str,
@@ -146,14 +156,16 @@ async def marketbot_ping() -> Dict[str, Any]:
             response.setdefault("debug", _debug_info())
         else:
             response = {"success": True, "data": response, "debug": _debug_info()}
-        return response
+        return _with_next_actions(response)
     except Exception as err:
-        return {
-            "success": False,
-            "base_url": _resolve_setting("MARKETBOT_API_URL", _DEFAULT_BASE_URL),
-            "debug": _debug_info(),
-            "error": str(err),
-        }
+        return _with_next_actions(
+            {
+                "success": False,
+                "base_url": _resolve_setting("MARKETBOT_API_URL", _DEFAULT_BASE_URL),
+                "debug": _debug_info(),
+                "error": str(err),
+            }
+        )
 
 
 @mcp.tool()
@@ -171,14 +183,16 @@ async def marketbot_health() -> Dict[str, Any]:
             response.setdefault("debug", _debug_info())
         else:
             response = {"success": True, "data": response, "debug": _debug_info()}
-        return response
+        return _with_next_actions(response)
     except Exception as err:
-        return {
-            "success": False,
-            "error": str(err),
-            "base_url": _resolve_setting("MARKETBOT_API_URL", _DEFAULT_BASE_URL),
-            "debug": _debug_info(),
-        }
+        return _with_next_actions(
+            {
+                "success": False,
+                "error": str(err),
+                "base_url": _resolve_setting("MARKETBOT_API_URL", _DEFAULT_BASE_URL),
+                "debug": _debug_info(),
+            }
+        )
 
 
 @mcp.tool()
@@ -207,9 +221,9 @@ async def list_competitors(
         }
         payload = _request("GET", "/competitors", params=params)
         payload.setdefault("debug", _debug_info())
-        return payload
+        return _with_next_actions(payload)
     except Exception as err:
-        return {"success": False, "error": str(err), "debug": _debug_info()}
+        return _with_next_actions({"success": False, "error": str(err), "debug": _debug_info()})
 
 
 @mcp.tool()
@@ -247,9 +261,9 @@ async def create_competitor(
         }
         payload = _request("POST", "/competitors", body=body)
         payload.setdefault("debug", _debug_info())
-        return payload
+        return _with_next_actions(payload)
     except Exception as err:
-        return {"success": False, "error": str(err), "debug": _debug_info()}
+        return _with_next_actions({"success": False, "error": str(err), "debug": _debug_info()})
 
 
 @mcp.tool()
@@ -264,9 +278,9 @@ async def get_competitor_detail(competitor_id: str) -> Dict[str, Any]:
     try:
         payload = _request("GET", f"/competitors/{competitor_id}")
         payload.setdefault("debug", _debug_info())
-        return payload
+        return _with_next_actions(payload)
     except Exception as err:
-        return {"success": False, "error": str(err), "debug": _debug_info()}
+        return _with_next_actions({"success": False, "error": str(err), "debug": _debug_info()})
 
 
 @mcp.tool()
@@ -298,9 +312,9 @@ async def list_activities(
         }
         payload = _request("GET", "/activities", params=params)
         payload.setdefault("debug", _debug_info())
-        return payload
+        return _with_next_actions(payload)
     except Exception as err:
-        return {"success": False, "error": str(err), "debug": _debug_info()}
+        return _with_next_actions({"success": False, "error": str(err), "debug": _debug_info()})
 
 
 @mcp.tool()
@@ -344,9 +358,9 @@ async def create_activity(
         }
         payload = _request("POST", "/activities", body=body)
         payload.setdefault("debug", _debug_info())
-        return payload
+        return _with_next_actions(payload)
     except Exception as err:
-        return {"success": False, "error": str(err), "debug": _debug_info()}
+        return _with_next_actions({"success": False, "error": str(err), "debug": _debug_info()})
 
 
 @mcp.tool()
@@ -359,9 +373,9 @@ async def list_trends(limit: int = 10) -> Dict[str, Any]:
     try:
         payload = _request("GET", "/trends", params={"limit": limit})
         payload.setdefault("debug", _debug_info())
-        return payload
+        return _with_next_actions(payload)
     except Exception as err:
-        return {"success": False, "error": str(err), "debug": _debug_info()}
+        return _with_next_actions({"success": False, "error": str(err), "debug": _debug_info()})
 
 
 @mcp.tool()
@@ -380,9 +394,9 @@ async def recompute_trends(top_n: int = 25, lookback_days: int = 180) -> Dict[st
         body = {"top_n": top_n, "lookback_days": lookback_days}
         payload = _request("POST", "/trends", body=body)
         payload.setdefault("debug", _debug_info())
-        return payload
+        return _with_next_actions(payload)
     except Exception as err:
-        return {"success": False, "error": str(err), "debug": _debug_info()}
+        return _with_next_actions({"success": False, "error": str(err), "debug": _debug_info()})
 
 
 @mcp.tool()
@@ -396,9 +410,9 @@ async def list_alerts(unread_only: bool = False) -> Dict[str, Any]:
         params = {"unread_only": str(bool(unread_only)).lower()}
         payload = _request("GET", "/alerts", params=params)
         payload.setdefault("debug", _debug_info())
-        return payload
+        return _with_next_actions(payload)
     except Exception as err:
-        return {"success": False, "error": str(err), "debug": _debug_info()}
+        return _with_next_actions({"success": False, "error": str(err), "debug": _debug_info()})
 
 
 @mcp.tool()
@@ -408,9 +422,9 @@ async def update_alert(alert_id: str, is_read: bool = True) -> Dict[str, Any]:
         body = {"is_read": is_read}
         payload = _request("PATCH", f"/alerts/{alert_id}", body=body)
         payload.setdefault("debug", _debug_info())
-        return payload
+        return _with_next_actions(payload)
     except Exception as err:
-        return {"success": False, "error": str(err), "debug": _debug_info()}
+        return _with_next_actions({"success": False, "error": str(err), "debug": _debug_info()})
 
 
 if __name__ == "__main__":

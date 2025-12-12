@@ -67,6 +67,32 @@ const DEFAULT_TAIL_LINES = parseInt(process.env.CODEX_GATEWAY_DEFAULT_TAIL_LINES
 const MAX_TAIL_LINES = parseInt(process.env.CODEX_GATEWAY_MAX_TAIL_LINES || '2000', 10);
 const SIGNAL_CONTEXT_CHARS = parseInt(process.env.CODEX_GATEWAY_SIGNAL_CONTEXT || '160', 10);
 
+// Optional file-watcher configuration (serve mode can emit completions on file events)
+const WATCH_PATHS = (() => {
+  const raw = process.env.CODEX_GATEWAY_WATCH_PATHS || '';
+  if (!raw.trim()) return [];
+  return raw.split(/[;,]/).map((s) => s.trim()).filter(Boolean).map((p) => path.resolve(p));
+})();
+const WATCH_PATTERN = process.env.CODEX_GATEWAY_WATCH_PATTERN || '**/*';
+const WATCH_PROMPT_FILE = process.env.CODEX_GATEWAY_WATCH_PROMPT_FILE || null;
+const WATCH_DEBOUNCE_MS = parseInt(process.env.CODEX_GATEWAY_WATCH_DEBOUNCE_MS || '750', 10);
+const WATCH_USE_WATCHDOG = process.env.CODEX_GATEWAY_WATCH_USE_WATCHDOG === 'true';
+
+// Optional generic session webhook configuration
+const SESSION_WEBHOOK_URL = process.env.SESSION_WEBHOOK_URL || null;
+const SESSION_WEBHOOK_TIMEOUT_MS = parseInt(process.env.SESSION_WEBHOOK_TIMEOUT_MS || '5000', 10);
+const SESSION_WEBHOOK_AUTH_BEARER = process.env.SESSION_WEBHOOK_AUTH_BEARER || null;
+const SESSION_WEBHOOK_HEADERS = (() => {
+  const raw = process.env.SESSION_WEBHOOK_HEADERS_JSON;
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw);
+    return obj && typeof obj === 'object' ? obj : null;
+  } catch {
+    return null;
+  }
+})();
+
 // =============================================================================
 // Concurrency Limiter - Hard limit on concurrent Codex runs
 // Returns 429 (Too Many Requests) when at capacity instead of queuing forever
@@ -278,6 +304,70 @@ const logger = {
 // Log startup config at verbose level
 if (LOG_LEVEL >= 2) {
   console.log(`${LOG_PREFIX} Logger initialized at level ${LOG_LEVEL} (0=error, 1=info, 2=verbose, 3=debug)`);
+}
+
+// Generic session webhook (best effort)
+async function sendSessionWebhook(sessionId, sessionStatus, metadata = {}, metaHeaders = null) {
+  if (!SESSION_WEBHOOK_URL) {
+    logger.verbose('webhook not configured; skipping');
+    return;
+  }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SESSION_WEBHOOK_TIMEOUT_MS);
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (SESSION_WEBHOOK_AUTH_BEARER) {
+      headers.Authorization = `Bearer ${SESSION_WEBHOOK_AUTH_BEARER}`;
+    }
+    if (SESSION_WEBHOOK_HEADERS && typeof SESSION_WEBHOOK_HEADERS === 'object') {
+      Object.entries(SESSION_WEBHOOK_HEADERS).forEach(([k, v]) => {
+        if (k && v !== undefined && v !== null) headers[k] = String(v);
+      });
+    }
+    if (metadata && metadata.webhook_token) {
+      headers.Authorization = `Bearer ${metadata.webhook_token}`;
+    }
+    if (metaHeaders && typeof metaHeaders === 'object') {
+      Object.entries(metaHeaders).forEach(([k, v]) => {
+        if (k && v !== undefined && v !== null) headers[k] = String(v);
+      });
+    }
+
+    const payload = {
+      sessionId,
+      gatewaySessionId: sessionId,
+      codexSessionId: metadata.codexSessionId || null,
+      status: sessionStatus?.status || 'completed',
+      content: sessionStatus?.content || null,
+      toolCalls: sessionStatus?.tool_calls || [],
+      events: sessionStatus?.events || [],
+      completedAt: new Date().toISOString(),
+      metadata,
+    };
+
+    const response = await fetch(SESSION_WEBHOOK_URL, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      logger.warn(`webhook returned ${response.status}: ${text}`);
+    } else {
+      logger.info(`webhook sent for session ${sessionId}`);
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      logger.warn(`webhook timeout for session ${sessionId}`);
+    } else {
+      logger.warn(`webhook error for session ${sessionId}: ${error.message}`);
+    }
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function ensureDirSync(dir) {
@@ -716,6 +806,12 @@ class SessionStore {
     if (metadata.nudge_interval_ms) {
       meta.nudge_interval_ms = metadata.nudge_interval_ms;
     }
+    if (metadata.webhook_token) {
+      meta.webhook_token = metadata.webhook_token;
+    }
+    if (metadata.webhook_headers && typeof metadata.webhook_headers === 'object') {
+      meta.webhook_headers = metadata.webhook_headers;
+    }
     await this.saveMeta(resolved);
     await this.appendStdout(resolved, `\n\n===== RUN ${runId} START ${now} =====\n`);
     return { sessionId: resolved, runId, meta: JSON.parse(JSON.stringify(meta)) };
@@ -801,6 +897,22 @@ class SessionStore {
     await this.saveMeta(sessionId);
     if (payload.events) {
       await this.appendEvents(sessionId, payload.events, runId);
+    }
+
+    // Optional: send generic webhook on completed runs
+    if (payload.status === 'completed') {
+      sendSessionWebhook(sessionId, {
+        status: 'completed',
+        content: payload.content,
+        tool_calls: payload.tool_calls || [],
+        events: payload.events || [],
+      }, {
+        codexSessionId: payload.codexSessionId || meta.codex_session_id,
+        runId,
+        webhook_token: meta.webhook_token || null,
+      }, meta.webhook_headers || null).catch((err) => {
+        logger.warn(`webhook call failed in finishRun: ${err.message}`);
+      });
     }
   }
 
@@ -1237,6 +1349,7 @@ class SessionWorker extends EventEmitter {
       events: this.currentRun.events,
       codex_session_id: this.codexSessionId,
     };
+    const runId = this.currentRun.runId || null;
     if (extra.error) {
       result.error = extra.error;
     }
@@ -1248,6 +1361,33 @@ class SessionWorker extends EventEmitter {
     if (this.proc) {
       this.store.setWorkerState(this.sessionId, 'idle', { worker_pid: this.proc.pid });
       this.scheduleIdleTimer(this.options.idleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS);
+    }
+
+    // Optional: send generic webhook on completed runs
+    if (status === 'completed') {
+      let metaToken = null;
+      let metaHeaders = null;
+      try {
+        const meta = this.store.sessions.get(this.sessionId);
+        if (meta) {
+          metaToken = meta.webhook_token || null;
+          metaHeaders = meta.webhook_headers || null;
+        }
+      } catch (err) {
+        logger.warn(`finishCurrentRun: unable to read session metadata for webhook: ${err.message}`);
+      }
+      sendSessionWebhook(this.sessionId, {
+        status: 'completed',
+        content: result.content,
+        tool_calls: result.tool_calls || [],
+        events: result.events || [],
+      }, {
+        codexSessionId: this.codexSessionId,
+        runId,
+        webhook_token: metaToken,
+      }, metaHeaders).catch((err) => {
+        logger.warn(`webhook call failed in finishCurrentRun: ${err.message}`);
+      });
     }
   }
 
@@ -1745,6 +1885,204 @@ function parseHhMm(value, contextLabel) {
 }
 
 const TIMEZONE_FORMATTERS = new Map();
+
+function globToRegex(pattern) {
+  if (!pattern || pattern === '**/*') return null; // match everything
+  // Very small glob helper: *, ?, ** supported (no character classes)
+  let escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  escaped = escaped.replace(/\*\*/g, '.*');
+  escaped = escaped.replace(/\*/g, '[^/]*');
+  escaped = escaped.replace(/\?/g, '[^/]');
+  return new RegExp(`^${escaped}$`);
+}
+
+function buildDefaultWatchPrompt(info) {
+  const lines = [];
+  lines.push('A file event was observed by the gateway watcher.');
+  lines.push(`Event: ${info.event}`);
+  lines.push(`Absolute path: ${info.path}`);
+  lines.push(`Relative path: ${info.relative || '(n/a)'}`);
+  if (info.mtime) {
+    lines.push(`Modified: ${info.mtime.toISOString()}`);
+  }
+  if (info.size != null) {
+    lines.push(`Size: ${info.size} bytes`);
+  }
+  lines.push('---');
+  if (info.content) {
+    lines.push('File content (truncated):');
+    lines.push(info.content);
+  } else {
+    lines.push('No content available (binary, unreadable, or missing).');
+  }
+  return lines.join('\n');
+}
+
+async function setupFileWatcher(dispatchPrompt) {
+  if (!WATCH_PATHS.length) {
+    logger.info('watcher: no paths configured; file watching disabled');
+    return;
+  }
+
+  if (WATCH_USE_WATCHDOG) {
+    logger.warn('watcher: WATCH_USE_WATCHDOG requested but not implemented; falling back to fs.watch');
+  }
+
+  let promptTemplate = null;
+  if (WATCH_PROMPT_FILE) {
+    try {
+      promptTemplate = await fsp.readFile(path.resolve(WATCH_PROMPT_FILE), 'utf8');
+      logger.info('watcher: using prompt file', path.resolve(WATCH_PROMPT_FILE));
+    } catch (err) {
+      logger.warn(`watcher: failed to read prompt file ${WATCH_PROMPT_FILE}: ${err.message}`);
+    }
+  }
+
+  const regex = globToRegex(WATCH_PATTERN);
+  const debounceMs = Number.isFinite(WATCH_DEBOUNCE_MS) ? WATCH_DEBOUNCE_MS : 750;
+  const timers = new Map(); // key: abs path, value: timeout
+
+  async function handleEvent(eventType, absPath) {
+    if (regex && !regex.test(absPath.replace(/\\/g, '/'))) {
+      return;
+    }
+    // debounce per file
+    if (timers.has(absPath)) {
+      clearTimeout(timers.get(absPath));
+    }
+    timers.set(absPath, setTimeout(async () => {
+      timers.delete(absPath);
+      let stat = null;
+      let content = null;
+      try {
+        stat = await fsp.stat(absPath);
+        if (stat.isFile()) {
+          try {
+            const raw = await fsp.readFile(absPath);
+            const text = raw.toString('utf8');
+            content = text.length > 4000 ? `${text.slice(0, 4000)}\n...[truncated ${text.length} chars]` : text;
+          } catch (err) {
+            content = null;
+          }
+        }
+      } catch (err) {
+        logger.verbose(`watcher: stat failed for ${absPath}: ${err.message}`);
+      }
+
+      const rel = path.relative(process.cwd(), absPath);
+      const info = {
+        event: eventType,
+        path: absPath,
+        relative: rel && rel !== '' ? rel : null,
+        mtime: stat?.mtime || null,
+        size: stat?.size ?? null,
+        content,
+      };
+
+      const promptText = promptTemplate
+        ? promptTemplate
+            .replace(/\{\{\s*event\s*\}\}/gi, info.event || '')
+            .replace(/\{\{\s*path\s*\}\}/gi, info.path || '')
+            .replace(/\{\{\s*relative\s*\}\}/gi, info.relative || '')
+            .replace(/\{\{\s*mtime\s*\}\}/gi, info.mtime ? info.mtime.toISOString() : '')
+            .replace(/\{\{\s*size\s*\}\}/gi, info.size != null ? String(info.size) : '')
+            .replace(/\{\{\s*content\s*\}\}/gi, info.content || '')
+        : buildDefaultWatchPrompt(info);
+
+      const messages = [{ role: 'user', content: promptText }];
+      try {
+        await dispatchPrompt({
+          payload: {
+            model: DEFAULT_MODEL || undefined,
+            timeout_ms: DEFAULT_TIMEOUT_MS,
+            watch_event: {
+              event: info.event,
+              path: info.path,
+              relative: info.relative,
+            },
+          },
+          messages,
+          systemPrompt: '',
+          sessionId: null,
+        });
+      } catch (err) {
+        logger.warn(`watcher: dispatch failed for ${absPath}: ${err.message}`);
+      }
+    }, debounceMs));
+  }
+
+  // Use polling for Docker bind mount compatibility (fs.watch doesn't work reliably)
+  const POLL_INTERVAL = parseInt(process.env.CODEX_GATEWAY_WATCH_POLL_MS || '1000', 10);
+  const fileStates = new Map(); // path -> { mtime, size }
+
+  async function scanDirectory(dir) {
+    const files = [];
+    try {
+      const entries = await fsp.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          const subFiles = await scanDirectory(fullPath);
+          files.push(...subFiles);
+        } else if (entry.isFile()) {
+          files.push(fullPath);
+        }
+      }
+    } catch (err) {
+      // Directory might not exist or be inaccessible
+    }
+    return files;
+  }
+
+  async function pollDirectory(watchPath) {
+    const files = await scanDirectory(watchPath);
+    for (const filePath of files) {
+      try {
+        const stat = await fsp.stat(filePath);
+        const key = filePath;
+        const prev = fileStates.get(key);
+        const current = { mtime: stat.mtimeMs, size: stat.size };
+
+        if (!prev) {
+          // First time seeing this file - just record it
+          fileStates.set(key, current);
+        } else if (prev.mtime !== current.mtime || prev.size !== current.size) {
+          // File changed
+          fileStates.set(key, current);
+          handleEvent('change', filePath);
+        }
+      } catch (err) {
+        // File might have been deleted
+        if (fileStates.has(filePath)) {
+          fileStates.delete(filePath);
+        }
+      }
+    }
+  }
+
+  let configured = 0;
+  for (const rawPath of WATCH_PATHS) {
+    const p = path.resolve(rawPath);
+    if (!fs.existsSync(p)) {
+      logger.warn(`watcher: path does not exist, skipping: ${p}`);
+      continue;
+    }
+    try {
+      // Initial scan to populate file states
+      await pollDirectory(p);
+      // Start polling interval
+      setInterval(() => pollDirectory(p), POLL_INTERVAL);
+      logger.info(`watcher configured (polling): path=${p}, pattern=${WATCH_PATTERN}, poll=${POLL_INTERVAL}ms, debounce=${debounceMs}ms, prompt=${WATCH_PROMPT_FILE || 'built-in'}`);
+      configured += 1;
+    } catch (err) {
+      logger.warn(`watcher: failed to watch ${p}: ${err.message}`);
+    }
+  }
+
+  if (configured === 0) {
+    logger.warn('watcher: no valid paths configured; file watching not started');
+  }
+}
 
 function getTimeZoneFormatter(tzName) {
   const key = tzName || 'UTC';
@@ -2691,6 +3029,9 @@ if (require.main === module) {
   } else {
     logger.info('trigger scheduler disabled by configuration');
   }
+
+  setupFileWatcher((options) => runPromptWithWorker(options))
+    .catch((err) => logger.warn(`watcher setup failed: ${err.message}`));
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
