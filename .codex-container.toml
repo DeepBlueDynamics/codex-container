@@ -9,6 +9,8 @@ CODEX_GATEWAY_SECURE_SESSION_DIR = "/opt/codex-home/.codex/sessions/secure"
 
 # Example explicit env pushed into the container
 SOME_SERVICE_URL = "https://api.example.com"
+# Default character DB path (codex-home override for character saver/generator)
+CODEX_CHAR_DIR = "/workspace/characters"
 
 # Import these host env vars into the container if present
 env_imports = [

@@ -336,6 +336,8 @@ function Read-ProjectConfig {
 
     $envTable = @{}
     $envImports = @()
+    $inEnvImports = $false
+    $envImportBuffer = @()
     $mounts = @()
     $tools = @()
     $inEnv = $false
@@ -352,10 +354,31 @@ function Read-ProjectConfig {
         if ($inEnv -and $trim -match '^(?<k>[A-Za-z0-9_]+)\s*=\s*\"(?<v>[^\"]*)\"') {
             $envTable[$matches['k']] = $matches['v']
         }
-        if ($trim -match '^env_imports\s*=\s*\[(?<arr>.*)\]') {
-            $arr = $matches['arr']
-            $parts = $arr -split ',' | ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ }
-            $envImports += $parts
+        # Multiline-friendly env_imports parsing
+        if (-not $inEnvImports -and $trim -match '^env_imports\s*=\s*\[(?<rest>.*)$') {
+            $inEnvImports = $true
+            $envImportBuffer = @()
+            if ($matches['rest']) {
+                $envImportBuffer += $matches['rest']
+            }
+            if ($trim -match '\]') {
+                $inEnvImports = $false
+                $joined = ($envImportBuffer -join ' ')
+                $joined = $joined -replace '^\[','' -replace '\]$',''
+                $parts = $joined -split ',' | ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ }
+                $envImports += $parts
+            }
+            continue
+        }
+        if ($inEnvImports) {
+            $envImportBuffer += $trim
+            if ($trim -match '\]') {
+                $inEnvImports = $false
+                $joined = ($envImportBuffer -join ' ')
+                $joined = $joined -replace '^\[','' -replace '\]$',''
+                $parts = $joined -split ',' | ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ }
+                $envImports += $parts
+            }
         }
         if ($trim -match '^mounts\s*=\s*\[(?<arr>.*)\]') {
             $arr = $matches['arr']
@@ -742,8 +765,6 @@ function New-CodexContext {
         $runArgs += '--privileged'
     }
 
-    Write-Host ("DEBUG docker base run args: docker {0}" -f ($runArgs -join ' ')) -ForegroundColor Yellow
-
     # Pass ANTHROPIC_API_KEY if set in host environment
     if ($env:ANTHROPIC_API_KEY) {
         Write-Host "  Passing ANTHROPIC_API_KEY to container ($($env:ANTHROPIC_API_KEY.Length) chars)" -ForegroundColor DarkGray
@@ -1117,6 +1138,12 @@ function Invoke-CodexContainer {
         Write-Host "WARNING: Removed $($runArgs.Count - $cleanArgs.Count) empty/null arguments" -ForegroundColor Yellow
     }
 
+    # Print copy/paste-ready docker commands (full, final args)
+    $posixArgs = $cleanArgs | ForEach-Object { "'" + ($_ -replace "'", "'\'''") + "'" }
+    $psArgs    = $cleanArgs | ForEach-Object { '"' + ($_ -replace '"','`"') + '"' }
+    Write-Host ("[bash/zsh] docker {0}" -f ($posixArgs -join ' ')) -ForegroundColor Yellow
+    Write-Host ("[pwsh/cmd] docker {0}" -f ($psArgs -join ' ')) -ForegroundColor Yellow
+
     if ($env:CODEX_CONTAINER_TRACE) {
         Write-Host "docker $($cleanArgs -join ' ')" -ForegroundColor DarkGray
     }
@@ -1151,50 +1178,6 @@ function ConvertTo-ShellScript {
     )
 
     return ($Commands -join '; ')
-}
-
- {
-    param(
-        $Context
-    )
-
-    $binDir = Join-Path $Context.CodexHome 'bin'
-    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
-
-    # Direct invocation - no wrapper needed when using -Command
-    $repoScript = Join-Path $Context.CodexRoot 'scripts/codex_container.ps1'
-    $escapedRepoScript = $repoScript.Replace("'", "''")
-
-    $shimPath = Join-Path $binDir 'codex-container.cmd'
-    $shimContent = @"
-@echo off
-PowerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "& '$escapedRepoScript' @args"
-"@
-    Set-Content -Path $shimPath -Value $shimContent -Encoding ASCII
-
-    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
-    $pathEntries = @()
-    if ($userPath) {
-        $pathEntries = $userPath -split ';'
-    }
-    $hasEntry = $false
-    foreach ($entry in $pathEntries) {
-        if ($entry.TrimEnd('\') -ieq $binDir.TrimEnd('\')) {
-            $hasEntry = $true
-            break
-        }
-    }
-    if (-not $hasEntry) {
-        $newPath = if ($userPath) { "$userPath;$binDir" } else { $binDir }
-        [Environment]::SetEnvironmentVariable('PATH', $newPath, 'User')
-        Write-Host "Added $binDir to user PATH" -ForegroundColor DarkGray
-    }
-    if (-not (($env:PATH -split ';') | Where-Object { $_.TrimEnd('\') -ieq $binDir.TrimEnd('\') })) {
-        $env:PATH = if ($env:PATH) { "$env:PATH;$binDir" } else { $binDir }
-    }
-
-    Write-Host "Launcher installed to $shimPath" -ForegroundColor DarkGray
-    Write-Host "Invokes: $repoScript" -ForegroundColor DarkGray
 }
 
 $script:CodexUpdateCompleted = $false
@@ -1386,6 +1369,12 @@ function Invoke-CodexServe {
     if (-not $BindHost) {
         $BindHost = '127.0.0.1'
     }
+
+    # Default file watcher settings if not supplied
+    if (-not $GatewayWatchPaths) { $GatewayWatchPaths = './temp' }
+    if (-not $GatewayWatchPattern) { $GatewayWatchPattern = '**/*' }
+    if (-not $GatewayWatchPromptFile) { $GatewayWatchPromptFile = './MONITOR.md' }
+    if (-not $GatewayWatchDebounceMs) { $GatewayWatchDebounceMs = 750 }
 
     $publish = if ($BindHost) { "${BindHost}:${Port}:${Port}" } else { "${Port}:${Port}" }
 

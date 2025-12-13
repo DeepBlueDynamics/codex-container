@@ -2036,6 +2036,9 @@ async function setupFileWatcher(dispatchPrompt) {
 
   async function pollDirectory(watchPath) {
     const files = await scanDirectory(watchPath);
+    const seen = new Set(files);
+
+    // Detect adds / changes
     for (const filePath of files) {
       try {
         const stat = await fsp.stat(filePath);
@@ -2044,18 +2047,24 @@ async function setupFileWatcher(dispatchPrompt) {
         const current = { mtime: stat.mtimeMs, size: stat.size };
 
         if (!prev) {
-          // First time seeing this file - just record it
+          // New file - record and emit add
           fileStates.set(key, current);
+          handleEvent('add', filePath);
         } else if (prev.mtime !== current.mtime || prev.size !== current.size) {
           // File changed
           fileStates.set(key, current);
           handleEvent('change', filePath);
         }
       } catch (err) {
-        // File might have been deleted
-        if (fileStates.has(filePath)) {
-          fileStates.delete(filePath);
-        }
+        // ignore stat errors; deletion handled below
+      }
+    }
+
+    // Detect deletes
+    for (const key of Array.from(fileStates.keys())) {
+      if (!seen.has(key)) {
+        fileStates.delete(key);
+        handleEvent('delete', key);
       }
     }
   }
