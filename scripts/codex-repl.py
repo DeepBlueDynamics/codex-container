@@ -57,8 +57,19 @@ def print_debug_keys(result, watch_keys: List[str], enabled: bool):
         print("==================")
 
 
-def print_compact_events(events: List[dict]):
-    """Print reasoning/agent messages and command_execution outputs in compact form."""
+def _clip(text: str, limit: int = 500) -> str:
+    if text is None:
+        return ""
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...(truncated, {len(text)} chars)"
+
+
+def print_compact_events(events: List[dict], clip_len: int = 500):
+    """
+    Print compact summaries: reasoning, agent messages, and command execution output only.
+    Skips mcp_tool_call events and other noise.
+    """
     messages = []
     cmd_outputs = []
     for ev in events or []:
@@ -68,17 +79,16 @@ def print_compact_events(events: List[dict]):
         if ev.get("type") == "item.completed" and item.get("type") == "reasoning":
             text = item.get("text")
             if text:
-                messages.append(f"[reasoning] {text}")
+                messages.append(f"[reasoning] {_clip(text, clip_len)}")
         if ev.get("type") == "item.completed" and item.get("type") == "agent_message":
             text = item.get("text")
             if text:
-                messages.append(f"[agent] {text}")
+                messages.append(f"[agent] {_clip(text, clip_len)}")
         if ev.get("type") in {"item.started", "item.completed"} and item.get("type") == "command_execution":
             out = item.get("aggregated_output") or ""
             if out:
-                if len(out) > 800:
-                    out = out[:800] + "...(truncated)"
-                cmd_outputs.append(out)
+                cmd_outputs.append(_clip(out, clip_len))
+        # Skip mcp_tool_call and other verbose items in compact mode
     if messages:
         print("=== COMPACT EVENTS ===")
         for m in messages:
@@ -202,12 +212,14 @@ Commands:
   use <id>                    → pin a gateway session for future runs
   timeout <seconds>           → change default run timeout
   mode <full|compact>         → toggle display mode (compact shows reasoning/agent messages only)
+  debug <on|off>              → toggle debug keys (default: off)
   watch <keys...>             → set extra keys to display in compact mode (e.g., watch usage model); use 'watch clear' to reset
   clear                       → clear the console
   help                        → show this message
   exit | quit                 → leave console
 Pinned session: {pinned_session or "(none)"}
 Display mode: {display_mode}
+Debug: {'on' if DEFAULT_DEBUG_ON else 'off by default'}
 Env overrides: {len(env_overrides)} set
 Persistent workers auto-start whenever you run/prompt; adjust run duration with the `timeout` command.
 """
