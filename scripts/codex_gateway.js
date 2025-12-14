@@ -77,7 +77,22 @@ const WATCH_PATTERN = process.env.CODEX_GATEWAY_WATCH_PATTERN || '**/*';
 const WATCH_PROMPT_FILE = process.env.CODEX_GATEWAY_WATCH_PROMPT_FILE || null;
 const WATCH_DEBOUNCE_MS = parseInt(process.env.CODEX_GATEWAY_WATCH_DEBOUNCE_MS || '750', 10);
 const WATCH_USE_WATCHDOG = process.env.CODEX_GATEWAY_WATCH_USE_WATCHDOG === 'true';
-
+const WATCH_STATUS = {
+  enabled: false,
+  paths: [],
+  pattern: WATCH_PATTERN,
+  prompt_file: WATCH_PROMPT_FILE,
+  debounce_ms: WATCH_DEBOUNCE_MS,
+  poll_ms: parseInt(process.env.CODEX_GATEWAY_WATCH_POLL_MS || '1000', 10),
+  watcher_count: 0,
+  raw_env: {
+    CODEX_GATEWAY_WATCH_PATHS: process.env.CODEX_GATEWAY_WATCH_PATHS || '',
+    CODEX_GATEWAY_WATCH_PATTERN: process.env.CODEX_GATEWAY_WATCH_PATTERN || '',
+    CODEX_GATEWAY_WATCH_PROMPT_FILE: WATCH_PROMPT_FILE || '',
+    CODEX_GATEWAY_WATCH_DEBOUNCE_MS: process.env.CODEX_GATEWAY_WATCH_DEBOUNCE_MS || '',
+    CODEX_GATEWAY_WATCH_POLL_MS: process.env.CODEX_GATEWAY_WATCH_POLL_MS || '',
+  },
+};
 // Optional generic session webhook configuration
 const SESSION_WEBHOOK_URL = process.env.SESSION_WEBHOOK_URL || null;
 const SESSION_WEBHOOK_TIMEOUT_MS = parseInt(process.env.SESSION_WEBHOOK_TIMEOUT_MS || '5000', 10);
@@ -91,6 +106,20 @@ const SESSION_WEBHOOK_HEADERS = (() => {
   } catch {
     return null;
   }
+})();
+
+const WEBHOOK_STATUS = (() => {
+  const url = SESSION_WEBHOOK_URL || '';
+  const tail = url
+    ? (url.length <= 18 ? url : `…${url.slice(-18)}`)
+    : null;
+  return {
+    configured: Boolean(url),
+    url_tail: tail,
+    timeout_ms: SESSION_WEBHOOK_TIMEOUT_MS,
+    has_auth_bearer: Boolean(SESSION_WEBHOOK_AUTH_BEARER),
+    header_keys: SESSION_WEBHOOK_HEADERS ? Object.keys(SESSION_WEBHOOK_HEADERS) : [],
+  };
 })();
 
 // =============================================================================
@@ -2069,6 +2098,10 @@ async function setupFileWatcher(dispatchPrompt) {
     }
   }
 
+  WATCH_STATUS.enabled = true;
+  WATCH_STATUS.paths = [];
+  WATCH_STATUS.watcher_count = 0;
+
   let configured = 0;
   for (const rawPath of WATCH_PATHS) {
     const p = path.resolve(rawPath);
@@ -2082,6 +2115,8 @@ async function setupFileWatcher(dispatchPrompt) {
       // Start polling interval
       setInterval(() => pollDirectory(p), POLL_INTERVAL);
       logger.info(`watcher configured (polling): path=${p}, pattern=${WATCH_PATTERN}, poll=${POLL_INTERVAL}ms, debounce=${debounceMs}ms, prompt=${WATCH_PROMPT_FILE || 'built-in'}`);
+      WATCH_STATUS.paths.push(p);
+      WATCH_STATUS.watcher_count += 1;
       configured += 1;
     } catch (err) {
       logger.warn(`watcher: failed to watch ${p}: ${err.message}`);
@@ -2089,6 +2124,9 @@ async function setupFileWatcher(dispatchPrompt) {
   }
 
   if (configured === 0) {
+    WATCH_STATUS.enabled = false;
+    WATCH_STATUS.paths = [];
+    WATCH_STATUS.watcher_count = 0;
     logger.warn('watcher: no valid paths configured; file watching not started');
   }
 }
@@ -3058,8 +3096,17 @@ if (require.main === module) {
       if ((method === 'GET' || method === 'HEAD') && (normalizedPath === '/' || normalizedPath === '')) {
         sendJson(res, 200, {
           status: 'codex-gateway',
+          watcher: WATCH_STATUS,
+          webhook: WEBHOOK_STATUS,
+          env: {
+            CODEX_GATEWAY_SESSION_DIRS: (process.env.CODEX_GATEWAY_SESSION_DIRS || '').split(',').map((s) => s.trim()).filter(Boolean),
+            CODEX_GATEWAY_SECURE_SESSION_DIR: process.env.CODEX_GATEWAY_SECURE_SESSION_DIR || '',
+            CODEX_GATEWAY_EXTRA_ARGS: process.env.CODEX_GATEWAY_EXTRA_ARGS || '',
+            CODEX_SANDBOX_NETWORK_DISABLED: process.env.CODEX_SANDBOX_NETWORK_DISABLED || '',
+          },
           endpoints: {
             health: '/health',
+            status: '/status',
             completion: { path: '/completion', method: 'POST' },
             sessions: {
               list: { path: '/sessions', method: 'GET' },
@@ -3090,6 +3137,14 @@ if (require.main === module) {
           concurrency: status,
           uptime: process.uptime(),
           memory: process.memoryUsage(),
+          watcher: WATCH_STATUS,
+          webhook: WEBHOOK_STATUS,
+          env: {
+            CODEX_GATEWAY_SESSION_DIRS: (process.env.CODEX_GATEWAY_SESSION_DIRS || '').split(',').map((s) => s.trim()).filter(Boolean),
+            CODEX_GATEWAY_SECURE_SESSION_DIR: process.env.CODEX_GATEWAY_SECURE_SESSION_DIR || '',
+            CODEX_GATEWAY_EXTRA_ARGS: process.env.CODEX_GATEWAY_EXTRA_ARGS || '',
+            CODEX_SANDBOX_NETWORK_DISABLED: process.env.CODEX_SANDBOX_NETWORK_DISABLED || '',
+          },
         });
         return;
       }

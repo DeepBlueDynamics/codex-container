@@ -7,6 +7,10 @@ CODEX_GATEWAY_SECURE_SESSION_DIR = "/opt/codex-home/.codex/sessions/secure"
 # Uncomment to enforce secure-session token
 # CODEX_GATEWAY_SECURE_TOKEN = "choose-a-secret"
 
+CODEX_GATEWAY_WATCH_PATHS = "./temp"
+CODEX_GATEWAY_WATCH_PROMPT_FILE = "./MONITOR.md"
+CODEX_GATEWAY_WATCH_PATTERN = "**/*"
+
 # Example explicit env pushed into the container
 SOME_SERVICE_URL = "https://api.example.com"
 # Default character DB path (codex-home override for character saver/generator)
