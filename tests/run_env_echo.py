@@ -8,7 +8,7 @@ payload = {
     "messages": [
         {
             "role": "user",
-            "content": "Run a shell command to print SESSION_ID, CODEx envs, and ANTHROPIC_API_KEY length. Use: env | sort. Return as plain text."  # noqa: E501
+            "content": "Run a shell command to print SESSION_ID, CODEx envs, and ANTHROPIC_API_KEY length. Use: env | sort. Return as plain text. Also, list your mcp tools."  # noqa: E501
         }
     ],
     "env": {

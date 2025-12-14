@@ -5,11 +5,15 @@ import os
 import readline  # noqa: F401 - history support on POSIX shells
 import sys
 from datetime import datetime
+from typing import List
 
 import requests
 
 
 DEFAULT_TIMEOUT_MS = 300_000  # 5 minutes
+DISPLAY_MODES = {"full", "compact"}
+DEBUG_KEYS = ["gateway_session_id", "codex_session_id", "model", "usage", "tool_calls", "events"]
+WATCH_KEYS_DEFAULT: List[str] = []
 
 
 def timestamp():
@@ -24,6 +28,96 @@ def log_with_timestamp(message, prefix="[codex-repl]"):
 
 def pretty(obj):
     return json.dumps(obj, indent=2, ensure_ascii=False)
+
+
+def print_debug_keys(result, watch_keys: List[str]):
+    """Print common debug keys if present."""
+    out = []
+    for k in DEBUG_KEYS:
+        if k in result:
+            v = result.get(k)
+            if k == "events" and isinstance(v, list):
+                out.append(f"{k}: {len(v)} event(s)")
+            else:
+                out.append(f"{k}: {v}")
+    for k in watch_keys:
+        if k in result and k not in DEBUG_KEYS:
+            v = result.get(k)
+            if k == "events" and isinstance(v, list):
+                out.append(f"{k}: {len(v)} event(s)")
+            else:
+                out.append(f"{k}: {v}")
+    if out:
+        print("=== DEBUG KEYS ===")
+        for line in out:
+            print(line)
+        print("==================")
+
+
+def print_compact_events(events: List[dict]):
+    """Print reasoning/agent messages and command_execution outputs in compact form."""
+    messages = []
+    cmd_outputs = []
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        item = ev.get("item", {}) if isinstance(ev.get("item"), dict) else {}
+        if ev.get("type") == "item.completed" and item.get("type") == "reasoning":
+            text = item.get("text")
+            if text:
+                messages.append(f"[reasoning] {text}")
+        if ev.get("type") == "item.completed" and item.get("type") == "agent_message":
+            text = item.get("text")
+            if text:
+                messages.append(f"[agent] {text}")
+        if ev.get("type") in {"item.started", "item.completed"} and item.get("type") == "command_execution":
+            out = item.get("aggregated_output") or ""
+            if out:
+                if len(out) > 800:
+                    out = out[:800] + "...(truncated)"
+                cmd_outputs.append(out)
+    if messages:
+        print("=== COMPACT EVENTS ===")
+        for m in messages:
+            print(m)
+        print("======================")
+    if cmd_outputs:
+        print("=== COMMAND OUTPUT ===")
+        for co in cmd_outputs:
+            print(co)
+            print("----------------------")
+        print("======================")
+
+
+def extract_trigger_ids(events):
+    """Extract trigger IDs from events array."""
+    trigger_ids = []
+    if not isinstance(events, list):
+        return trigger_ids
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        item = event.get("item", {}) if isinstance(event.get("item"), dict) else {}
+        if event.get("type") == "item.completed" and item.get("type") == "mcp_tool_call" and item.get("tool") == "create_trigger":
+            result = item.get("result", {})
+            if isinstance(result, dict) and "content" in result:
+                for content_item in result["content"]:
+                    if content_item.get("type") != "text":
+                        continue
+                    try:
+                        data = json.loads(content_item["text"])
+                        if "trigger" in data and "id" in data["trigger"]:
+                            trigger_ids.append(
+                                {
+                                    "id": data["trigger"]["id"],
+                                    "title": data["trigger"].get("title", "Unknown"),
+                                    "tags": data["trigger"].get("tags", []),
+                                }
+                            )
+                    except Exception:
+                        continue
+    return trigger_ids
 
 
 def post_completion(base_url, prompt, timeout_ms, session_id=None):
@@ -86,7 +180,7 @@ def resume_prompt(base_url, session_id, prompt, timeout_ms):
     return resp.json()
 
 
-def print_help(base, timeout_ms, pinned_session):
+def print_help(base, timeout_ms, pinned_session, display_mode):
     help_text = f"""
 Connected to {base}
 Commands:
@@ -94,14 +188,19 @@ Commands:
   list                        → GET /sessions
   show <id>                   → GET /sessions/:id (tail=200)
   show <id> events            → include events
+  show <id> triggers          → include events + extract trigger IDs
+  watch <key1> <key2> ...     → set extra keys to display in compact mode (clear with `watch clear`)
   search <id> <phrase> [--f]  → search session text, add --f for fuzzy
   prompt <id> <text>          → resume Codex session with new text
   use <id>                    → pin a gateway session for future runs
   timeout <seconds>           → change default run timeout
+  mode <full|compact>         → toggle display mode (compact shows reasoning/agent messages only)
+  watch <keys...>             → set extra keys to display in compact mode (e.g., watch usage model); use 'watch clear' to reset
   clear                       → clear the console
   help                        → show this message
   exit | quit                 → leave console
 Pinned session: {pinned_session or "(none)"}
+Display mode: {display_mode}
 Persistent workers auto-start whenever you run/prompt; adjust run duration with the `timeout` command.
 """
     print(help_text.strip())
@@ -119,8 +218,10 @@ def main():
     base = args.base_url.rstrip("/")
     current_session = None
     current_timeout_ms = DEFAULT_TIMEOUT_MS
+    watch_keys: List[str] = WATCH_KEYS_DEFAULT.copy()
+    current_display_mode = "full"
 
-    print_help(base, current_timeout_ms, current_session)
+    print_help(base, current_timeout_ms, current_session, current_display_mode)
 
     while True:
         try:
@@ -135,7 +236,7 @@ def main():
             break
         lower = line.lower()
         if lower == "help":
-            print_help(base, current_timeout_ms, current_session)
+            print_help(base, current_timeout_ms, current_session, current_display_mode)
             continue
         if lower == "clear":
             os.system("cls" if os.name == "nt" else "clear")
@@ -152,11 +253,18 @@ def main():
                 log_with_timestamp(f"🚀 Starting job: {remainder[:80]}..." if len(remainder) > 80 else f"🚀 Starting job: {remainder}")
                 result = post_completion(base, remainder, current_timeout_ms, session_id=current_session)
                 log_with_timestamp("✅ Job completed")
-                print(pretty(result))
+                if current_display_mode == "compact":
+                    print("=== COMPACT RUN SUMMARY ===")
+                    print_compact_events(result.get("events", []))
+                    print("===========================")
+                else:
+                    print(pretty(result))
+                print_debug_keys(result, watch_keys)
                 gateway_session = result.get("gateway_session_id") or result.get("session_id")
                 if gateway_session:
                     current_session = gateway_session
                     log_with_timestamp(f"📌 Pinned session set to {gateway_session}")
+                    log_with_timestamp(f"→ gateway_session_id: {gateway_session}")
                 model_info = result.get("model")
                 usage_info = result.get("usage")
                 if model_info:
@@ -170,15 +278,35 @@ def main():
                 print(pretty(result))
             elif cmd == "show":
                 if not remainder:
-                    log_with_timestamp("Usage: show <session-id> [events]")
+                    log_with_timestamp("Usage: show <session-id> [events|triggers]")
                     continue
                 session_id, _, flag = remainder.partition(" ")
                 flag_lower = flag.strip().lower()
-                include_events = flag_lower == "events"
+                include_events = flag_lower in {"events", "triggers"}
                 log_with_timestamp(f"📄 Fetching session {session_id}..." + (f" (with {flag_lower})" if flag_lower else ""))
                 result = get_session_detail(base, session_id, include_events=include_events)
                 log_with_timestamp("✅ Session data retrieved")
-                print(pretty(result))
+
+                if flag_lower == "triggers":
+                    events = result.get("events", [])
+                    trigger_ids = extract_trigger_ids(events)
+                    if trigger_ids:
+                        print("\n📋 Trigger IDs found in this session:")
+                        for trigger in trigger_ids:
+                            print(f"  ID: {trigger['id']}")
+                            print(f"  Title: {trigger['title']}")
+                            if trigger["tags"]:
+                                print(f"  Tags: {', '.join(trigger['tags'])}")
+                            print()
+                    else:
+                        print("\n⚠️  No trigger IDs found in events")
+                    print("\n--- Full session data ---")
+
+                if current_display_mode == "compact" and include_events:
+                    print_compact_events(result.get("events", []))
+                else:
+                    print(pretty(result))
+                print_debug_keys(result, watch_keys)
                 runs = result.get("runs") or []
                 for run in runs:
                     usage = run.get("usage")
@@ -191,18 +319,18 @@ def main():
                         )
             elif cmd == "search":
                 if not remainder:
-                    log_with_timestamp("Usage: search <session-id> <phrase> [--f]")
+                    print("Usage: search <session-id> <phrase> [--f]")
                     continue
                 parts = remainder.split(" ")
                 if len(parts) < 2:
-                    log_with_timestamp("Usage: search <session-id> <phrase> [--f]")
+                    print("Usage: search <session-id> <phrase> [--f]")
                     continue
                 session_id = parts[0]
                 fuzzy = "--f" in parts[1:]
                 phrase_parts = [p for p in parts[1:] if p != "--f"]
                 phrase = " ".join(phrase_parts)
                 if not phrase:
-                    log_with_timestamp("Usage: search <session-id> <phrase> [--f]")
+                    print("Usage: search <session-id> <phrase> [--f]")
                     continue
                 result = search_session(base, session_id, phrase, fuzzy=fuzzy)
                 print(pretty(result))
@@ -226,19 +354,37 @@ def main():
                 log_with_timestamp(f"📌 Pinned session set to {current_session}")
             elif cmd == "timeout":
                 if not remainder:
-                    log_with_timestamp("Usage: timeout <seconds>")
+                    print("Usage: timeout <seconds>")
                     continue
                 try:
                     seconds = float(remainder.strip())
                     if seconds <= 0:
                         raise ValueError
                 except ValueError:
-                    log_with_timestamp("Timeout must be a positive number of seconds")
+                    print("Timeout must be a positive number of seconds")
                     continue
                 current_timeout_ms = int(seconds * 1000)
-                log_with_timestamp(f"⏱️ Timeout updated to {seconds:.1f}s")
+                print(f"Timeout updated to {seconds:.1f}s")
+            elif cmd == "mode":
+                choice = remainder.strip().lower()
+                if choice not in DISPLAY_MODES:
+                    print("Usage: mode <full|compact>")
+                    continue
+                current_display_mode = choice
+                log_with_timestamp(f"Display mode set to {current_display_mode}")
+            elif cmd == "watch":
+                if not remainder:
+                    print("Usage: watch <key1> <key2> ... | watch clear")
+                    continue
+                if remainder.strip().lower() == "clear":
+                    watch_keys = []
+                    log_with_timestamp("Watch keys cleared")
+                    continue
+                parts = remainder.split()
+                watch_keys = parts
+                log_with_timestamp(f"Watch keys set to: {', '.join(watch_keys)}")
             else:
-                log_with_timestamp("Unknown command. Type 'help' for instructions.")
+                print("Unknown command. Type 'help' for instructions.")
         except requests.HTTPError as err:
             log_with_timestamp(f"❌ HTTP error {err.response.status_code}: {err.response.text}", prefix="[codex-repl]")
         except requests.RequestException as err:

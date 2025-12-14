@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import os
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import aiohttp
 from mcp.server.fastmcp import FastMCP
@@ -284,48 +284,47 @@ async def _wraith_markdown(session: aiohttp.ClientSession, url: str, *, timeout:
         return f"(failed to fetch markdown: {e})"
 
 
-@mcp.tool()
-async def google_search_markdown(
+def _normalize_url(url: Optional[str]) -> str:
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(url.strip())
+        scheme = parts.scheme or "https"
+        netloc = parts.netloc.lower()
+        path = parts.path.rstrip("/") or "/"
+        return urlunsplit((scheme, netloc, path, parts.query, ""))
+    except Exception:
+        return url.strip()
+
+
+async def _build_markdown_from_results(
+    base: Dict[str, Any],
     query: str,
-    num: int = 10,
-    hl: str = "en",
-    gl: str = "us",
-    location: Optional[str] = None,
-    device: str = "desktop",
-    no_cache: bool = False,
+    num: int,
     fetch_pages_top_k: int = 0,
 ) -> Dict[str, Any]:
     """Run a Google search and return a Markdown-formatted summary.
-
     Optionally fetches Markdown for the top K result links via the remote
     Wraith service. Set fetch_pages_top_k > 0 to enable.
     """
-    base = await google_search(query, num=num, hl=hl, gl=gl, location=location, device=device, no_cache=no_cache)
-    if not base.get("success"):
-        return base
-
-    lines: List[str] = []
-    lines.append(f"# Google Search: {query}")
     info = base.get("search_information") or {}
     displayed = info.get("query_displayed") or query
     total_results = info.get("total_results")
+    lines: List[str] = [f"# Google Search: {displayed}"]
     if total_results is not None:
         lines.append(f"- Total results: {total_results}")
     lines.append("")
     lines.append("## Top Results")
 
-    organic = base.get("organic_results") or []
-    if not organic and base.get("news_results"):
-        organic = base.get("news_results") or []
-
-    for item in organic[: max(1, min(int(num), 100))]:
+    organic = base.get("organic_results") or base.get("news_results") or []
+    slice_count = max(1, min(int(num), 100))
+    for item in organic[:slice_count]:
         lines.append(_format_result_item(item))
 
-    # Optionally fetch Markdown from top K links
     k = max(0, min(int(fetch_pages_top_k), len(organic)))
     if k > 0:
         lines.append("")
-        lines.append("## Page Markdown (Top Results)")
+        lines.append(f"## Page Markdown (Top {k})")
         timeout_cfg = aiohttp.ClientTimeout(total=60)
         async with aiohttp.ClientSession(timeout=timeout_cfg) as session:
             for idx, item in enumerate(organic[:k], start=1):
@@ -339,14 +338,85 @@ async def google_search_markdown(
                 lines.append(f"Source: {link}")
                 lines.append("")
                 if md:
-                    # keep it bounded if extremely long
                     if len(md) > 8000:
                         md = md[:8000] + "\n\n… (truncated)"
                     lines.append(md)
                 else:
                     lines.append("(no markdown extracted)")
 
-    return {"success": True, "markdown": "\n".join(lines), "query": displayed}
+    return {"markdown": "\n".join(lines), "displayed_query": displayed, "organic": organic}
+
+
+@mcp.tool()
+async def google_search_markdown(
+    query: str,
+    num: int = 10,
+    hl: str = "en",
+    gl: str = "us",
+    location: Optional[str] = None,
+    device: str = "desktop",
+    no_cache: bool = False,
+    fetch_pages_top_k: int = 0,
+) -> Dict[str, Any]:
+    """Run a Google search and return a Markdown-formatted summary."""
+
+    base = await google_search(query, num=num, hl=hl, gl=gl, location=location, device=device, no_cache=no_cache)
+    if not base.get("success"):
+        return base
+
+    formatted = await _build_markdown_from_results(base, query, num, fetch_pages_top_k=fetch_pages_top_k)
+    return {"success": True, "markdown": formatted["markdown"], "query": formatted["displayed_query"]}
+
+
+@mcp.tool()
+async def google_search_structured(
+    query: str,
+    num: int = 10,
+    hl: str = "en",
+    gl: str = "us",
+    location: Optional[str] = None,
+    device: str = "desktop",
+    no_cache: bool = False,
+    fetch_pages_top_k: int = 0,
+) -> Dict[str, Any]:
+    """Run a search and return markdown plus structured URL list for deduplication."""
+
+    base = await google_search(query, num=num, hl=hl, gl=gl, location=location, device=device, no_cache=no_cache)
+    if not base.get("success"):
+        return base
+
+    formatted = await _build_markdown_from_results(base, query, num, fetch_pages_top_k=fetch_pages_top_k)
+    organic = base.get("organic_results") or base.get("news_results") or []
+
+    structured: List[Dict[str, Any]] = []
+    deduped: List[str] = []
+    seen: Set[str] = set()
+    slice_count = max(1, min(int(num), 100))
+
+    for item in organic[:slice_count]:
+        url = item.get("link") or item.get("url")
+        normalized = _normalize_url(url)
+        if url and normalized and normalized not in seen:
+            seen.add(normalized)
+            deduped.append(url)
+
+        structured.append(
+            {
+                "title": item.get("title") or item.get("name"),
+                "url": url,
+                "displayed_url": item.get("displayed_link") or item.get("source") or "",
+                "snippet": item.get("snippet") or item.get("description") or "",
+                "position": item.get("position"),
+            }
+        )
+
+    return {
+        "success": True,
+        "query": formatted["displayed_query"],
+        "markdown": formatted["markdown"],
+        "results": structured,
+        "deduped_urls": deduped,
+    }
 
 
 if __name__ == "__main__":

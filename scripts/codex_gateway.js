@@ -1837,6 +1837,12 @@ async function executeSessionRun({ payload, messages, systemPrompt, sessionId, r
   const resolvedSessionId = beginResult.sessionId;
   const runId = beginResult.runId;
   const runMeta = beginResult.meta;
+  logger.info('SESSION START', {
+    gateway_session_id: resolvedSessionId,
+    run_id: runId,
+    model: runOptions.model || null,
+    timeout_ms: runOptions.timeoutMs || DEFAULT_TIMEOUT_MS,
+  });
   const prompt = buildPrompt(messages, systemPrompt);
 
   // Retry loop for timeout/empty responses
@@ -2950,6 +2956,8 @@ async function handleCompletion(req, res) {
   }
 
   try {
+    logger.info('completion: system prompt preview', (systemPrompt || '').slice(0, 200));
+    logger.info('completion: user msg preview', messages && messages[0] && messages[0].content ? messages[0].content.slice(0, 200) : '');
     logger.verbose('request', requestId, 'executing, useWorker:', useWorker);
     if (useWorker) {
       const result = await runPromptWithWorker({

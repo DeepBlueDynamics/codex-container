@@ -58,6 +58,7 @@ Launches a Codex job.
   "workspace": "<path inside container, default /workspace>",
   "session_id": "<optional existing session>",
   "system_prompt": "<optional system message>",
+  "env": { "MY_VAR": "value" },
   "messages": [
     {"role": "user", "content": "..."},
     {"role": "assistant", "content": "..."}
@@ -74,6 +75,7 @@ Fields:
 - `workspace`: directory to use as Codex working dir (default `/workspace`).
 - `model`: override default model (falls back to `CODEX_GATEWAY_DEFAULT_MODEL`).
 - `session_id`: reuse existing session (otherwise new session is created).
+- `env`: optional per-run environment overrides (applies only to this Codex/MCP subprocess; does not persist).
 - `timeout_ms`: overrides request timeout (capped by `CODEX_GATEWAY_MAX_TIMEOUT_MS`).
 - `json_mode`: when true, adds `CODEX_GATEWAY_JSON_FLAG` (defaults to `--experimental-json`).
 - `metadata`: arbitrary object persisted with the run.
