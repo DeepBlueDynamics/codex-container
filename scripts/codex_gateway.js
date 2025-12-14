@@ -188,12 +188,21 @@ const concurrencyLimiter = new ConcurrencyLimiter(MAX_CONCURRENT_CODEX);
 class SpawnThrottler {
   constructor() {
     this.active = 0;
+    this.lastSpawnAt = 0;
   }
   async acquire() {
+    // Stagger spawns to reduce MCP cold-start contention (gnosis-crawl, etc.)
+    const now = Date.now();
+    const elapsed = now - this.lastSpawnAt;
+    const minGapMs = parseInt(process.env.CODEX_GATEWAY_SPAWN_MIN_GAP_MS || '10000', 10);
+    if (elapsed < minGapMs) {
+      await new Promise((resolve) => setTimeout(resolve, minGapMs - elapsed));
+    }
     this.active++;
   }
   release() {
     this.active = Math.max(0, this.active - 1);
+    this.lastSpawnAt = Date.now();
   }
 }
 

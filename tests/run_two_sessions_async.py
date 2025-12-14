@@ -19,8 +19,8 @@ async def post_completion(session_id: Optional[str] = None) -> dict:
     payload = {
         "messages": [{"role": "user", "content": PROMPT}],
         "model": MODEL,
-        # Force non-worker path so we get tool_calls/events inline.
-        "persistent": False,
+        # Keep worker warm so MCP servers stay alive.
+        "persistent": True,
         "timeout_ms": 60000,
         "return_session_url": True,
     }
@@ -90,7 +90,7 @@ def _sync_get(url: str) -> dict:
 async def main():
     print(f"[check] gateway={GATEWAY}")
     print(f"[check] prompt={PROMPT}")
-    # Launch two sessions concurrently
+    # Launch two sessions concurrently; gateway spawn throttling should stagger starts
     results = await asyncio.gather(
         post_completion(),
         post_completion(),
