@@ -419,5 +419,69 @@ async def google_search_structured(
     }
 
 
+@mcp.tool()
+async def google_image_search(
+    query: str,
+    num: int = 10,
+    hl: str = "en",
+    gl: str = "us",
+    safe: str = "active",
+    no_cache: bool = False,
+) -> Dict[str, Any]:
+    """Run a Google Images search via SerpAPI and return structured results.
+
+    Args:
+      - query: search query
+      - num: max image results (SerpAPI forwards; not guaranteed by Google)
+      - hl: interface language code
+      - gl: country code
+      - safe: safe search setting ("active" | "off")
+      - no_cache: if true, force fresh fetch on SerpAPI
+    """
+    if not query:
+        return {"success": False, "error": "Missing query"}
+    api_key = _get_serpapi_key()
+    if not api_key:
+        return {"success": False, "error": "SERPAPI_API_KEY not configured"}
+
+    try:
+        params = {
+            "engine": SERPAPI_ENGINE,
+            "q": query,
+            "tbm": "isch",  # image search
+            "num": max(1, min(int(num), 100)),
+            "hl": hl,
+            "gl": gl,
+            "safe": safe,
+            "api_key": api_key,
+        }
+        if no_cache:
+            params["no_cache"] = "true"
+
+        timeout_cfg = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout_cfg) as session:
+            async with session.get(SERPAPI_API_URL, params=params) as resp:
+                data = await resp.json(content_type=None)
+                if resp.status != 200:
+                    return {"success": False, "status": resp.status, "data": data}
+
+                images = data.get("images_results") or []
+                structured: List[Dict[str, Any]] = []
+                for item in images[: max(1, min(int(num), 100))]:
+                    structured.append(
+                        {
+                            "title": item.get("title"),
+                            "original": item.get("original"),
+                            "thumbnail": item.get("thumbnail"),
+                            "link": item.get("link"),
+                            "source": item.get("source"),
+                            "position": item.get("position"),
+                        }
+                    )
+                return {"success": True, "query": query, "images": structured}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
