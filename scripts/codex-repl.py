@@ -273,14 +273,14 @@ def main():
                 # Allow multiline paste when no inline prompt is given.
                 prompt_text = remainder
                 if not prompt_text:
-                    log_with_timestamp("Paste your prompt. End with a line containing only ```")
+                    log_with_timestamp("Paste your prompt. End with a line containing only '''")
                     lines: List[str] = []
                     while True:
                         try:
                             block_line = input()
                         except (EOFError, KeyboardInterrupt):
                             block_line = ""
-                        if block_line.strip() == "```":
+                        if block_line.strip() == "'''":
                             break
                         lines.append(block_line)
                     prompt_text = "\n".join(lines).strip()

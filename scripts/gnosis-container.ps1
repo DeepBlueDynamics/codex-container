@@ -126,9 +126,13 @@ param(
     [string]$GatewaySecureDir,
     [string]$GatewaySecureToken,
     [int]$GatewayLogLevel,
+    [Alias('WatchPaths')]
     [string]$GatewayWatchPaths,
+    [Alias('WatchPattern')]
     [string]$GatewayWatchPattern,
+    [Alias('WatchPromptFile')]
     [string]$GatewayWatchPromptFile,
+    [Alias('WatchDebounceMs')]
     [int]$GatewayWatchDebounceMs,
     [string]$TranscriptionServiceUrl = 'http://host.docker.internal:8765',
     [string]$SessionWebhookUrl,
@@ -1465,7 +1469,7 @@ function Invoke-CodexServe {
     # Default file watcher settings if not supplied
     if (-not $GatewayWatchPaths) { $GatewayWatchPaths = './temp' }
     if (-not $GatewayWatchPattern) { $GatewayWatchPattern = '**/*' }
-    if (-not $GatewayWatchPromptFile) { $GatewayWatchPromptFile = './MONITOR.md' }
+    # Do NOT set a default prompt file here; only use what the caller provides
     if (-not $GatewayWatchDebounceMs) { $GatewayWatchDebounceMs = 750 }
 
     $publish = if ($BindHost) { "${BindHost}:${Port}:${Port}" } else { "${Port}:${Port}" }

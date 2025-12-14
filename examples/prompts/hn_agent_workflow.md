@@ -1,6 +1,6 @@
 # Hacker News Crawl → Graph → Index Prompt
 
-```
+'''
 # Task
 Run a full Hacker News sweep and index it, prioritizing speed and reliability (no raw HTML output—use markdown/structured text only):
 - Crawl HN front page → extract {title, url} items
@@ -100,4 +100,4 @@ Run a full Hacker News sweep and index it, prioritizing speed and reliability (n
 
 # Ready to execute
 Begin at Step A with `gnosis-crawl.crawl_url` on FRONT_PAGE_URL.
-```
+'''

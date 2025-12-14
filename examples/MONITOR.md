@@ -10,7 +10,7 @@ This watcher triggers when a JSON profile in `temp/` changes (e.g., `temp/*.json
    - If the file is not JSON or not a company profile, skip.
 
 2) Fill missing fields conservatively (no guesses):
-   - If `logo_url` is null: use `serpapi-search.google_image_search` with query `"<name> logo site:<domain>"` and pick the first on-domain image (e.g., spycloud.com). Set logo_url to the on-domain original URL.
+   - If `logo_url` is null: use `serpapi-search.google_image_search` with query `"<name> logo site:<domain>"` and pick the first on-domain image (e.g., duo.com). Set logo_url to the on-domain original URL.
    - If `founded_year` is null: run `serpapi-search.google_search_structured` with `"<name> founded year"`; only accept if the snippet is consistent across multiple official/authoritative sources (company site, Crunchbase/PitchBook if allowed). If unsure, leave null.
    - If `funding` is null: check `processed_urls` for official funding/news pages; if missing, run `serpapi-search.google_search_structured` with `"<name> funding site:<domain>"` and pick on-domain results only.
    - If `revenue` is null: do not invent; only set if an official on-domain source states it. Otherwise leave null.
@@ -21,7 +21,7 @@ This watcher triggers when a JSON profile in `temp/` changes (e.g., `temp/*.json
    - If you must crawl, use `gnosis-crawl.crawl_url` only on official pages that are likely to contain the missing field (e.g., `/media-kit`, `/company/press`, `/company/about`, `/company/newsroom`). Max 2 crawls per run. Keep total processed URLs ≤ 8.
 
 4) Update the JSON file:
-   - Write the enriched JSON back to the same path with `gnosis-files-basic.file_write`.
+   - Edit the enriched JSON back into the same path with `gnosis-files-diff.file_patch` (learn it if unfamiliar; don’t give up).
    - Preserve existing fields; only fill missing ones.
    - Maintain `processed_urls` and append any new URLs you used.
 
