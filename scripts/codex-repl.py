@@ -253,13 +253,27 @@ def main():
 
         try:
             if cmd == "run":
-                if not remainder:
-                    log_with_timestamp("Usage: run <prompt>")
-                    continue
-                log_with_timestamp(f"🚀 Starting job: {remainder[:80]}..." if len(remainder) > 80 else f"🚀 Starting job: {remainder}")
+                # Allow multiline paste when no inline prompt is given.
+                prompt_text = remainder
+                if not prompt_text:
+                    log_with_timestamp("Paste your prompt. End with a line containing only ```")
+                    lines: List[str] = []
+                    while True:
+                        try:
+                            block_line = input()
+                        except (EOFError, KeyboardInterrupt):
+                            block_line = ""
+                        if block_line.strip() == "```":
+                            break
+                        lines.append(block_line)
+                    prompt_text = "\n".join(lines).strip()
+                    if not prompt_text:
+                        log_with_timestamp("No prompt provided; canceled.")
+                        continue
+                log_with_timestamp(f"🚀 Starting job: {prompt_text[:80]}..." if len(prompt_text) > 80 else f"🚀 Starting job: {prompt_text}")
                 result = post_completion(
                     base,
-                    remainder,
+                    prompt_text,
                     current_timeout_ms,
                     session_id=current_session,
                     env_overrides=current_env_overrides or None,

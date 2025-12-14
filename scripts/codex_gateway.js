@@ -194,7 +194,7 @@ class SpawnThrottler {
     // Stagger spawns to reduce MCP cold-start contention (gnosis-crawl, etc.)
     const now = Date.now();
     const elapsed = now - this.lastSpawnAt;
-    const minGapMs = parseInt(process.env.CODEX_GATEWAY_SPAWN_MIN_GAP_MS || '5000', 10);
+    const minGapMs = parseInt(process.env.CODEX_GATEWAY_SPAWN_MIN_GAP_MS || '8000', 10);
     if (elapsed < minGapMs) {
       await new Promise((resolve) => setTimeout(resolve, minGapMs - elapsed));
     }
