@@ -14,6 +14,7 @@ DEFAULT_TIMEOUT_MS = 300_000  # 5 minutes
 DISPLAY_MODES = {"full", "compact"}
 DEBUG_KEYS = ["gateway_session_id", "codex_session_id", "model", "usage", "tool_calls", "events"]
 WATCH_KEYS_DEFAULT: List[str] = []
+DEFAULT_DEBUG_ON = False
 
 
 def timestamp():
@@ -30,7 +31,9 @@ def pretty(obj):
     return json.dumps(obj, indent=2, ensure_ascii=False)
 
 
-def print_debug_keys(result, watch_keys: List[str]):
+def print_debug_keys(result, watch_keys: List[str], enabled: bool):
+    if not enabled:
+        return
     """Print common debug keys if present."""
     out = []
     for k in DEBUG_KEYS:
@@ -227,6 +230,8 @@ def main():
     current_env_overrides: Dict[str, str] = {}
     current_display_mode = "full"
 
+    debug_enabled = DEFAULT_DEBUG_ON
+
     print_help(base, current_timeout_ms, current_session, current_display_mode, current_env_overrides)
 
     while True:
@@ -285,7 +290,7 @@ def main():
                     print("===========================")
                 else:
                     print(pretty(result))
-                print_debug_keys(result, watch_keys)
+                print_debug_keys(result, watch_keys, debug_enabled or bool(watch_keys))
                 gateway_session = result.get("gateway_session_id") or result.get("session_id")
                 if gateway_session:
                     current_session = gateway_session
@@ -332,7 +337,7 @@ def main():
                     print_compact_events(result.get("events", []))
                 else:
                     print(pretty(result))
-                print_debug_keys(result, watch_keys)
+                print_debug_keys(result, watch_keys, debug_enabled or bool(watch_keys))
                 runs = result.get("runs") or []
                 for run in runs:
                     usage = run.get("usage")
@@ -416,6 +421,13 @@ def main():
                     continue
                 current_display_mode = choice
                 log_with_timestamp(f"Display mode set to {current_display_mode}")
+            elif cmd == "debug":
+                val = remainder.strip().lower()
+                if val not in {"on", "off"}:
+                    print("Usage: debug <on|off>")
+                    continue
+                debug_enabled = val == "on"
+                log_with_timestamp(f"Debug keys {'enabled' if debug_enabled else 'disabled'}")
             elif cmd == "watch":
                 if not remainder:
                     print("Usage: watch <key1> <key2> ... | watch clear")
