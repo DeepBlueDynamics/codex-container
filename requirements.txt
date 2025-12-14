@@ -27,6 +27,9 @@ google-genai
 # Gemini API SDK
 google-generativeai
 
+# OpenSearch client
+opensearch-py
+
 # Dog bark detection (YAMNet-based MCP)
 tensorflow
 librosa

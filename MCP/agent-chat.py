@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sys
 from typing import Dict, Optional
+import random
 
 try:
     import anthropic
@@ -23,6 +24,83 @@ mcp = FastMCP("agent-chat")
 
 # Default model
 DEFAULT_MODEL = os.getenv("AGENT_CHAT_MODEL", "claude-sonnet-4-5-20250929")
+
+# Compact hexagram table for quick persona seeding
+HEXAGRAMS = [
+    (1, "Ch'ien", "Creative power, leadership, initiating"),
+    (2, "K'un", "Receptive, nurturing, adaptive"),
+    (3, "Chun", "Difficulty at the beginning, growth through challenge"),
+    (5, "Hsü", "Waiting with preparation, timing matters"),
+    (6, "Sung", "Conflict, resolution through clarity"),
+    (11, "T'ai", "Peace, balance, harmonious order"),
+    (12, "P'i", "Standstill, stagnation, conserve energy"),
+    (26, "Ta Ch'u", "Taming power of the great, restrained strength"),
+    (43, "Kuai", "Breakthrough, decisive action"),
+    (46, "Shêng", "Pushing upward, steady ascent")
+]
+
+
+def _cast_hexagram() -> Dict[str, object]:
+    """Lightweight I Ching-style casting for persona seeding."""
+    num, name, meaning = random.choice(HEXAGRAMS)
+    return {"number": num, "name": name, "meaning": meaning}
+
+
+@mcp.tool()
+async def iching_agent(
+    question: str,
+    initial_prompt: Optional[str] = None,
+    role_prefix: str = "You are an oracle agent grounded in the cast hexagram.",
+    model: Optional[str] = None,
+    max_tokens: int = 512
+) -> Dict[str, object]:
+    """Cast a quick I Ching hexagram and return a Claude-ready persona prompt.
+
+    If initial_prompt is provided and Anthropic is available, we also generate
+    the first agent reply using the persona.
+    """
+    hexagram = _cast_hexagram()
+    system_prompt = (
+        f"{role_prefix}\n"
+        f"Hexagram {hexagram['number']} - {hexagram['name']}: {hexagram['meaning']}\n"
+        f"Channel this quality when responding."
+    )
+
+    result = {
+        "success": True,
+        "hexagram": hexagram,
+        "system_prompt": system_prompt,
+        "model_used": model or DEFAULT_MODEL,
+    }
+
+    if initial_prompt and ANTHROPIC_AVAILABLE:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            result.update({
+                "initial_reply": None,
+                "warning": "ANTHROPIC_API_KEY not set; returning persona only"
+            })
+            return result
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+            msg = client.messages.create(
+                model=model or DEFAULT_MODEL,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": initial_prompt}]
+            )
+            result["initial_reply"] = msg.content[0].text
+            result["usage"] = {
+                "input_tokens": msg.usage.input_tokens,
+                "output_tokens": msg.usage.output_tokens,
+            }
+        except Exception as e:
+            result.update({
+                "initial_reply": None,
+                "warning": f"failed to call Anthropic: {e}"
+            })
+
+    return result
 
 
 @mcp.tool()

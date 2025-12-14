@@ -1,0 +1,23 @@
+version: "3.8"
+
+networks:
+  codex-network:
+    external: true
+
+services:
+  copernicus-tiler:
+    build:
+      context: .
+      dockerfile: Dockerfile.copernicus_tiler
+    image: gnosis/copernicus-tiler:latest
+    container_name: copernicus-tiler
+    environment:
+      AWS_NO_SIGN_REQUEST: "YES"
+      GDAL_DISABLE_READDIR_ON_OPEN: "EMPTY_DIR"
+      VSI_CACHE: "TRUE"
+      VSI_CACHE_SIZE: "5000000"
+    networks:
+      - codex-network
+    ports:
+      - "8081:8081"
+    restart: unless-stopped

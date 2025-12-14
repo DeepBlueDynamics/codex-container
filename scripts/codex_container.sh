@@ -31,16 +31,6 @@ declare -a CONFIG_MOUNT_ARGS=()
 declare -a CONFIG_ENV_KVS=()
 declare -a CONFIG_ENV_IMPORTS=()
 PROJECT_CONFIG_PATH=""
-WATCH_PATH=""
-declare -a WATCH_PATTERNS=()
-WATCH_INTERVAL=""
-WATCH_TEMPLATE=""
-WATCH_INCLUDE_CONTENT=false
-WATCH_CONTENT_BYTES=""
-WATCH_STATE_FILE=""
-WATCH_ONCE=false
-WATCH_DEBOUNCE=""
-MONITOR_PROMPT_FILE="MONITOR.md"
 DEFAULT_SYSTEM_PROMPT_FILE="PROMPT.md"
 NEW_SESSION=false
 SESSION_ID=""
@@ -95,22 +85,6 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       ACTION="serve"
-      shift
-      ;;
-    --watch)
-      if [[ -n "$ACTION" && "$ACTION" != "watch" ]]; then
-        echo "Error: multiple actions specified" >&2
-        exit 1
-      fi
-      ACTION="watch"
-      shift
-      ;;
-    --monitor)
-      if [[ -n "$ACTION" && "$ACTION" != "monitor" ]]; then
-        echo "Error: multiple actions specified" >&2
-        exit 1
-      fi
-      ACTION="monitor"
       shift
       ;;
     --new-session)
@@ -267,86 +241,6 @@ while [[ $# -gt 0 ]]; do
       fi
       CODEX_GATEWAY_LOG_LEVEL="$1"
       export CODEX_GATEWAY_LOG_LEVEL
-      shift
-      ;;
-    --watch-path)
-      shift
-      if [[ $# -eq 0 ]]; then
-        echo "Error: --watch-path requires a value" >&2
-        exit 1
-      fi
-      WATCH_PATH="$1"
-      shift
-      ;;
-    --watch-pattern)
-      shift
-      if [[ $# -eq 0 ]]; then
-        echo "Error: --watch-pattern requires a value" >&2
-        exit 1
-      fi
-      WATCH_PATTERNS+=("$1")
-      shift
-      ;;
-    --watch-interval)
-      shift
-      if [[ $# -eq 0 ]]; then
-        echo "Error: --watch-interval requires a value" >&2
-        exit 1
-      fi
-      WATCH_INTERVAL="$1"
-      shift
-      ;;
-    --watch-template)
-      shift
-      if [[ $# -eq 0 ]]; then
-        echo "Error: --watch-template requires a value" >&2
-        exit 1
-      fi
-      WATCH_TEMPLATE="$1"
-      shift
-      ;;
-    --watch-include-content)
-      WATCH_INCLUDE_CONTENT=true
-      shift
-      ;;
-    --watch-content-bytes)
-      shift
-      if [[ $# -eq 0 ]]; then
-        echo "Error: --watch-content-bytes requires a value" >&2
-        exit 1
-      fi
-      WATCH_CONTENT_BYTES="$1"
-      shift
-      ;;
-    --watch-state-file)
-      shift
-      if [[ $# -eq 0 ]]; then
-        echo "Error: --watch-state-file requires a value" >&2
-        exit 1
-      fi
-      WATCH_STATE_FILE="$1"
-      shift
-      ;;
-    --watch-once)
-      WATCH_ONCE=true
-      shift
-      ;;
-    --watch-debounce)
-      shift
-      if [[ $# -eq 0 ]]; then
-        echo "Error: --watch-debounce requires a value" >&2
-        exit 1
-      fi
-      WATCH_DEBOUNCE="$1"
-      shift
-      ;;
-    --monitor-prompt)
-      shift
-      if [[ $# -eq 0 ]]; then
-        echo "Error: --monitor-prompt requires a value" >&2
-        exit 1
-      fi
-      MONITOR_PROMPT_FILE="$1"
       shift
       ;;
     --session-id)
@@ -702,12 +596,6 @@ maybe_inject_default_prompt() {
 
 maybe_inject_default_prompt
 
-if [[ "$ACTION" == "watch" && -z "$WATCH_PATH" ]]; then
-  WATCH_PATH="$WORKSPACE_PATH"
-fi
-if [[ "$ACTION" == "monitor" && -z "$WATCH_PATH" ]]; then
-  WATCH_PATH="$WORKSPACE_PATH"
-fi
 
 if [[ -z "$CODEX_HOME_OVERRIDE" && -n "${CODEX_CONTAINER_HOME:-}" ]]; then
   CODEX_HOME_OVERRIDE="$CODEX_CONTAINER_HOME"
@@ -1353,144 +1241,6 @@ invoke_codex_shell() {
   docker_run /bin/bash
 }
 
-invoke_codex_watch() {
-  ensure_codex_cli 0 0
-  local watcher="${CODEX_ROOT}/scripts/watch_directory.py"
-  local python_bin=""
-  if command -v python3 >/dev/null 2>&1; then
-    python_bin=$(command -v python3)
-  elif command -v python >/dev/null 2>&1; then
-    python_bin=$(command -v python)
-  else
-    echo "Error: python3 or python is required for --watch." >&2
-    exit 1
-  fi
-  if [[ ! -f "$watcher" ]]; then
-    echo "Error: watcher script not found at $watcher" >&2
-    exit 1
-  fi
-  if [[ -z "$WATCH_PATH" ]]; then
-    echo "Error: --watch requires --watch-path or a workspace" >&2
-    exit 1
-  fi
-  local -a cmd=("$python_bin" "$watcher" --path "$WATCH_PATH" --codex-script "${SCRIPT_DIR}/codex_container.sh" --workspace "$WORKSPACE_PATH" --json-mode "$JSON_MODE")
-  if [[ ${#WATCH_PATTERNS[@]} -gt 0 ]]; then
-    for pattern in "${WATCH_PATTERNS[@]}"; do
-      cmd+=(--pattern "$pattern")
-    done
-  fi
-  if [[ -n "$WATCH_INTERVAL" ]]; then
-    cmd+=(--interval "$WATCH_INTERVAL")
-  fi
-  if [[ -n "$WATCH_TEMPLATE" ]]; then
-    cmd+=(--template "$WATCH_TEMPLATE")
-  fi
-  if [[ "$WATCH_INCLUDE_CONTENT" == true ]]; then
-    cmd+=(--include-content)
-  fi
-  if [[ -n "$WATCH_CONTENT_BYTES" ]]; then
-    cmd+=(--content-bytes "$WATCH_CONTENT_BYTES")
-  fi
-  if [[ -n "$WATCH_STATE_FILE" ]]; then
-    cmd+=(--state-file "$WATCH_STATE_FILE")
-  fi
-  if [[ "$WATCH_ONCE" == true ]]; then
-    cmd+=(--once)
-  fi
-  if [[ -n "$WATCH_DEBOUNCE" ]]; then
-    cmd+=(--debounce "$WATCH_DEBOUNCE")
-  fi
-  if [[ ${#CODEX_ARGS[@]} -gt 0 ]]; then
-    for arg in "${CODEX_ARGS[@]}"; do
-      cmd+=(--codex-arg "$arg")
-    done
-  fi
-  if [[ ${#EXEC_ARGS[@]} -gt 0 ]]; then
-    for arg in "${EXEC_ARGS[@]}"; do
-      cmd+=(--exec-arg "$arg")
-    done
-  fi
-  exec "${cmd[@]}"
-}
-
-get_monitor_session() {
-  local session_file="$1"
-  if [[ -f "$session_file" ]]; then
-    cat "$session_file" 2>/dev/null | tr -d '\n'
-  fi
-}
-
-set_monitor_session() {
-  local session_file="$1"
-  local session_id="$2"
-  if [[ -n "$session_id" ]]; then
-    echo -n "$session_id" > "$session_file"
-  fi
-}
-
-invoke_codex_monitor() {
-  ensure_codex_cli 0 0
-  local monitor_dir="${WATCH_PATH}"
-  if [[ -z "$monitor_dir" ]]; then
-    echo "Error: --monitor requires --watch-path or a workspace." >&2
-    exit 1
-  fi
-  local prompt_path="${monitor_dir}/${MONITOR_PROMPT_FILE}"
-  if [[ ! -f "$prompt_path" ]]; then
-    echo "Error: Monitor prompt file '$prompt_path' not found." >&2
-    exit 1
-  fi
-
-  # Use Python-based monitor for better portability
-  local monitor_script="${SCRIPT_DIR}/monitor.py"
-  if [[ ! -f "$monitor_script" ]]; then
-    echo "Error: Monitor script not found at $monitor_script" >&2
-    exit 1
-  fi
-
-  # Find Python
-  local python_bin=""
-  if command -v python3 >/dev/null 2>&1; then
-    python_bin=$(command -v python3)
-  elif command -v python >/dev/null 2>&1; then
-    python_bin=$(command -v python)
-  else
-    echo "Error: python3 or python is required for monitor mode" >&2
-    exit 1
-  fi
-
-  # Build monitor command
-  local -a monitor_cmd=("$python_bin" "$monitor_script")
-  monitor_cmd+=(--watch-path "$monitor_dir")
-  monitor_cmd+=(--workspace "$WORKSPACE_PATH")
-  monitor_cmd+=(--codex-script "$0")
-  monitor_cmd+=(--monitor-prompt-file "$MONITOR_PROMPT_FILE")
-
-  if [[ "$NEW_SESSION" == "true" ]]; then
-    monitor_cmd+=(--new-session)
-  fi
-
-  if [[ "$JSON_MODE" == "legacy" ]]; then
-    monitor_cmd+=(--json-mode legacy)
-  elif [[ "$JSON_MODE" == "experimental" ]]; then
-    monitor_cmd+=(--json-mode experimental)
-  fi
-
-  if [[ ${#CODEX_ARGS[@]} -gt 0 ]]; then
-    for arg in "${CODEX_ARGS[@]}"; do
-      monitor_cmd+=(--codex-arg "$arg")
-    done
-  fi
-
-  if [[ ${#EXEC_ARGS[@]} -gt 0 ]]; then
-    for arg in "${EXEC_ARGS[@]}"; do
-      monitor_cmd+=(--exec-arg "$arg")
-    done
-  fi
-
-  # Execute Python monitor
-  exec "${monitor_cmd[@]}"
-}
 
 docker_build_image() {
   echo "Checking Docker daemon..." >&2
@@ -1538,7 +1288,6 @@ case "$ACTION" in
   install)
     docker_build_image
     ensure_codex_cli 1
-    install_runner_on_path
     ;;
   login)
     invoke_codex_login
@@ -1554,14 +1303,6 @@ case "$ACTION" in
   serve)
     ensure_codex_auth 0
     invoke_codex_server
-    ;;
-  watch)
-    ensure_codex_auth "$JSON_OUTPUT"
-    invoke_codex_watch
-    ;;
-  monitor)
-    ensure_codex_auth "$JSON_OUTPUT"
-    invoke_codex_monitor
     ;;
   list-sessions)
     show_recent_sessions
