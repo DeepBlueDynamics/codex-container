@@ -144,7 +144,7 @@ const WEBHOOK_STATUS = (() => {
 // Concurrency Limiter - Hard limit on concurrent Codex runs
 // Returns 429 (Too Many Requests) when at capacity instead of queuing forever
 // =============================================================================
-const MAX_CONCURRENT_CODEX = parseInt(process.env.CODEX_GATEWAY_MAX_CONCURRENT || '3', 10);
+const MAX_CONCURRENT_CODEX = parseInt(process.env.CODEX_GATEWAY_MAX_CONCURRENT || '2', 10);
 
 // Retry configuration for failed/empty Codex runs
 // Set MAX_RETRIES=0 to disable retries (default now for faster debugging)
@@ -194,7 +194,7 @@ class SpawnThrottler {
     // Stagger spawns to reduce MCP cold-start contention (gnosis-crawl, etc.)
     const now = Date.now();
     const elapsed = now - this.lastSpawnAt;
-    const minGapMs = parseInt(process.env.CODEX_GATEWAY_SPAWN_MIN_GAP_MS || '10000', 10);
+    const minGapMs = parseInt(process.env.CODEX_GATEWAY_SPAWN_MIN_GAP_MS || '5000', 10);
     if (elapsed < minGapMs) {
       await new Promise((resolve) => setTimeout(resolve, minGapMs - elapsed));
     }
@@ -215,24 +215,28 @@ const spawnThrottler = new SpawnThrottler();
 const LOG_LEVEL = parseInt(process.env.CODEX_GATEWAY_LOG_LEVEL || '1', 10);
 const LOG_PREFIX = '[codex-gateway]';
 
+function ts() {
+  return new Date().toISOString();
+}
+
 const logger = {
   // Always log errors
-  error: (...args) => console.error(LOG_PREFIX, ...args),
-  warn: (...args) => console.warn(LOG_PREFIX, ...args),
+  error: (...args) => console.error(ts(), LOG_PREFIX, ...args),
+  warn: (...args) => console.warn(ts(), LOG_PREFIX, ...args),
 
   // Info level (level >= 1) - basic operational logs
-  info: (...args) => { if (LOG_LEVEL >= 1) console.log(LOG_PREFIX, ...args); },
+  info: (...args) => { if (LOG_LEVEL >= 1) console.log(ts(), LOG_PREFIX, ...args); },
 
   // Verbose level (level >= 2) - detailed event/tool tracing
-  verbose: (...args) => { if (LOG_LEVEL >= 2) console.log(LOG_PREFIX, ...args); },
+  verbose: (...args) => { if (LOG_LEVEL >= 2) console.log(ts(), LOG_PREFIX, ...args); },
 
   // Debug level (level >= 3) - everything including raw data
-  debug: (...args) => { if (LOG_LEVEL >= 3) console.log(LOG_PREFIX, ...args); },
+  debug: (...args) => { if (LOG_LEVEL >= 3) console.log(ts(), LOG_PREFIX, ...args); },
 
   // Formatted verbose logs for specific event types
   event: (type, details) => {
     if (LOG_LEVEL < 2) return;
-    console.log(`${LOG_PREFIX} >>> ${type}:`, details);
+    console.log(ts(), `${LOG_PREFIX} >>> ${type}:`, details);
   },
 
   // Tool call logging with emoji indicators
