@@ -22,7 +22,10 @@ const CODEX_HOME_PATH = process.env.CODEX_GATEWAY_CODEX_HOME
   || process.env.CODEX_HOME
   || process.env.HOME
   || '/opt/codex-home';
-const DEFAULT_SESSION_ROOT = path.join(CODEX_HOME_PATH, 'sessions', 'gateway');
+const DEFAULT_SESSION_ROOTS = [
+  path.join(process.cwd(), '.codex-gateway-sessions'),
+  path.join(CODEX_HOME_PATH, 'sessions', 'gateway'),
+];
 
 function normalizeDirs(list) {
   const seen = new Set();
@@ -51,7 +54,7 @@ const SESSION_DIRS = (() => {
     candidates.push(process.env.CODEX_GATEWAY_SESSION_DIR);
   }
   if (candidates.length === 0) {
-    candidates.push(DEFAULT_SESSION_ROOT);
+    candidates.push(...DEFAULT_SESSION_ROOTS);
   }
   const legacy = path.join(process.cwd(), '.codex-gateway-sessions');
   candidates.push(legacy);
@@ -59,8 +62,10 @@ const SESSION_DIRS = (() => {
 })();
 
 const PRIMARY_SESSION_DIR = SESSION_DIRS[0];
-const SECURE_SESSION_DIR = path.resolve(process.env.CODEX_GATEWAY_SECURE_SESSION_DIR
-  || path.join(process.env.CODEX_HOME || process.env.HOME || '/opt/codex-home', 'sessions', 'secure-gateway'));
+const SECURE_SESSION_DIR = path.resolve(
+  process.env.CODEX_GATEWAY_SECURE_SESSION_DIR
+  || path.join(process.cwd(), '.codex-gateway-sessions', 'secure'),
+);
 const SECURE_SESSION_TOKEN = process.env.CODEX_GATEWAY_SECURE_TOKEN || null;
 const MAX_BODY_BYTES = parseInt(process.env.CODEX_GATEWAY_MAX_BODY_BYTES || '1048576', 10);
 const DEFAULT_TAIL_LINES = parseInt(process.env.CODEX_GATEWAY_DEFAULT_TAIL_LINES || '200', 10);
@@ -77,6 +82,12 @@ const WATCH_PATTERN = process.env.CODEX_GATEWAY_WATCH_PATTERN || '**/*';
 const WATCH_PROMPT_FILE = process.env.CODEX_GATEWAY_WATCH_PROMPT_FILE || null;
 const WATCH_DEBOUNCE_MS = parseInt(process.env.CODEX_GATEWAY_WATCH_DEBOUNCE_MS || '750', 10);
 const WATCH_USE_WATCHDOG = process.env.CODEX_GATEWAY_WATCH_USE_WATCHDOG === 'true';
+const WATCH_SKIP_INITIAL_SCAN = /^(1|true|on)$/i.test(process.env.CODEX_GATEWAY_WATCH_SKIP_INITIAL_SCAN || 'true');
+const PRUNE_BAD_SESSIONS = /^(1|true|on)$/i.test(process.env.CODEX_GATEWAY_PRUNE_BAD_SESSIONS || 'true');
+const DISABLE_DEFAULT_SYSTEM_PROMPT = /^(1|true|on)$/i.test(process.env.CODEX_DISABLE_DEFAULT_PROMPT || '');
+const DEFAULT_SYSTEM_PROMPT_PATH = path.resolve(process.env.CODEX_SYSTEM_PROMPT_FILE
+  ? process.env.CODEX_SYSTEM_PROMPT_FILE
+  : path.join(process.cwd(), 'PROMPT.md'));
 const WATCH_STATUS = {
   enabled: false,
   paths: [],
@@ -93,6 +104,13 @@ const WATCH_STATUS = {
     CODEX_GATEWAY_WATCH_POLL_MS: process.env.CODEX_GATEWAY_WATCH_POLL_MS || '',
   },
 };
+const WATCH_SYSTEM_PROMPT = [
+  'You are handling a single file event from the gateway watcher.',
+  'Act only on the provided event file/path.',
+  'Do NOT scan the whole workspace or run broad searches (no file_find_recent/file_list over root).',
+  'If the file is text and the user is communicating, edit that file directly using gnosis-files-basic.file_write/file_patch with an agent> reply.',
+  'Keep responses short and finish quickly.',
+].join(' ');
 // Optional generic session webhook configuration
 const SESSION_WEBHOOK_URL = process.env.SESSION_WEBHOOK_URL || null;
 const SESSION_WEBHOOK_TIMEOUT_MS = parseInt(process.env.SESSION_WEBHOOK_TIMEOUT_MS || '5000', 10);
@@ -330,6 +348,59 @@ const logger = {
   },
 };
 
+function loadDefaultSystemPrompt() {
+  if (DISABLE_DEFAULT_SYSTEM_PROMPT) {
+    logger.info('system prompt disabled via CODEX_DISABLE_DEFAULT_PROMPT');
+    return {
+      prompt: '',
+      enabled: false,
+      disabled: true,
+      path: null,
+      reason: 'disabled',
+    };
+  }
+  try {
+    const text = fs.readFileSync(DEFAULT_SYSTEM_PROMPT_PATH, 'utf8');
+    if (!text || text.trim().length === 0) {
+      logger.warn(`system prompt file ${DEFAULT_SYSTEM_PROMPT_PATH} is empty`);
+      return {
+        prompt: '',
+        enabled: false,
+        disabled: false,
+        path: DEFAULT_SYSTEM_PROMPT_PATH,
+        reason: 'empty',
+      };
+    }
+    logger.info(`loaded system prompt from ${DEFAULT_SYSTEM_PROMPT_PATH}`);
+    return {
+      prompt: text,
+      enabled: true,
+      disabled: false,
+      path: DEFAULT_SYSTEM_PROMPT_PATH,
+      reason: null,
+    };
+  } catch (error) {
+    const logFn = process.env.CODEX_SYSTEM_PROMPT_FILE ? logger.warn : logger.verbose;
+    logFn(`system prompt file ${DEFAULT_SYSTEM_PROMPT_PATH} not loaded: ${error.message}`);
+    return {
+      prompt: '',
+      enabled: false,
+      disabled: false,
+      path: DEFAULT_SYSTEM_PROMPT_PATH,
+      reason: 'missing',
+    };
+  }
+}
+
+const SYSTEM_PROMPT_STATUS = loadDefaultSystemPrompt();
+const GLOBAL_SYSTEM_PROMPT = SYSTEM_PROMPT_STATUS.prompt || '';
+const SYSTEM_PROMPT_META = {
+  enabled: SYSTEM_PROMPT_STATUS.enabled,
+  path: SYSTEM_PROMPT_STATUS.path,
+  disabled: SYSTEM_PROMPT_STATUS.disabled,
+  reason: SYSTEM_PROMPT_STATUS.reason,
+};
+
 // Log startup config at verbose level
 if (LOG_LEVEL >= 2) {
   console.log(`${LOG_PREFIX} Logger initialized at level ${LOG_LEVEL} (0=error, 1=info, 2=verbose, 3=debug)`);
@@ -484,6 +555,18 @@ function buildPrompt(messages, systemPrompt) {
 function extractPromptPreview(messages, systemPrompt) {
   const text = buildPrompt(messages, systemPrompt);
   return text.slice(0, 400);
+}
+
+function resolveSystemPrompt(userPrompt) {
+  const base = GLOBAL_SYSTEM_PROMPT || '';
+  const incoming = typeof userPrompt === 'string' ? userPrompt : '';
+  if (base && incoming) {
+    return `${base}\n\n${incoming}`;
+  }
+  if (base) {
+    return base;
+  }
+  return incoming || '';
 }
 
 function extractCodexSessionId(events) {
@@ -702,6 +785,15 @@ class SessionStore {
             }
           } catch (error) {
             logger.error(`failed to load session ${sessionId}:`, error.message);
+            if (PRUNE_BAD_SESSIONS) {
+              const sessionDir = path.join(root, entry.name);
+              try {
+                await fsp.rm(sessionDir, { recursive: true, force: true });
+                logger.warn(`pruned unreadable session ${sessionId} at ${sessionDir}`);
+              } catch (rmError) {
+                logger.warn(`unable to prune bad session ${sessionId} at ${sessionDir}: ${rmError.message}`);
+              }
+            }
           }
         }
       }
@@ -1856,7 +1948,8 @@ async function executeSessionRun({ payload, messages, systemPrompt, sessionId, r
 
 async function runPromptWithWorker({ payload, messages, systemPrompt, sessionId }) {
   await sessionStore.ready;
-  const promptPreview = extractPromptPreview(messages, systemPrompt);
+  const resolvedSystemPrompt = resolveSystemPrompt(systemPrompt);
+  const promptPreview = extractPromptPreview(messages, resolvedSystemPrompt);
 
   const resolvedSessionId = sessionId ? sessionStore.resolveSessionId(sessionId) : null;
   const existingMeta = resolvedSessionId ? await sessionStore.getMeta(resolvedSessionId) : null;
@@ -1869,7 +1962,7 @@ async function runPromptWithWorker({ payload, messages, systemPrompt, sessionId 
   const result = await executeSessionRun({
     payload: effectivePayload,
     messages,
-    systemPrompt,
+    systemPrompt: resolvedSystemPrompt,
     sessionId: resolvedSessionId || undefined,
     resumeSessionId: resumeCodexSessionId,
   });
@@ -2020,6 +2113,15 @@ async function setupFileWatcher(dispatchPrompt) {
 
       const messages = [{ role: 'user', content: promptText }];
       try {
+        logger.info(`watcher: dispatching event`, {
+          event: info.event,
+          path: info.path,
+          relative: info.relative,
+          size: info.size,
+          prompt_preview: promptText.slice(0, 200),
+          system_prompt_preview: (WATCH_SYSTEM_PROMPT || '').slice(0, 120),
+          timeout_ms: DEFAULT_TIMEOUT_MS,
+        });
         await dispatchPrompt({
           payload: {
             model: DEFAULT_MODEL || undefined,
@@ -2031,7 +2133,7 @@ async function setupFileWatcher(dispatchPrompt) {
             },
           },
           messages,
-          systemPrompt: '',
+          systemPrompt: WATCH_SYSTEM_PROMPT,
           sessionId: null,
         });
       } catch (err) {
@@ -2043,6 +2145,7 @@ async function setupFileWatcher(dispatchPrompt) {
   // Use polling for Docker bind mount compatibility (fs.watch doesn't work reliably)
   const POLL_INTERVAL = parseInt(process.env.CODEX_GATEWAY_WATCH_POLL_MS || '1000', 10);
   const fileStates = new Map(); // path -> { mtime, size }
+  const initialScanDone = new Set();
 
   async function scanDirectory(dir) {
     const files = [];
@@ -2066,6 +2169,7 @@ async function setupFileWatcher(dispatchPrompt) {
   async function pollDirectory(watchPath) {
     const files = await scanDirectory(watchPath);
     const seen = new Set(files);
+    const isInitial = WATCH_SKIP_INITIAL_SCAN && !initialScanDone.has(watchPath);
 
     // Detect adds / changes
     for (const filePath of files) {
@@ -2076,13 +2180,15 @@ async function setupFileWatcher(dispatchPrompt) {
         const current = { mtime: stat.mtimeMs, size: stat.size };
 
         if (!prev) {
-          // New file - record and emit add
           fileStates.set(key, current);
-          handleEvent('add', filePath);
+          if (!isInitial) {
+            handleEvent('add', filePath);
+          }
         } else if (prev.mtime !== current.mtime || prev.size !== current.size) {
-          // File changed
           fileStates.set(key, current);
-          handleEvent('change', filePath);
+          if (!isInitial) {
+            handleEvent('change', filePath);
+          }
         }
       } catch (err) {
         // ignore stat errors; deletion handled below
@@ -2093,8 +2199,14 @@ async function setupFileWatcher(dispatchPrompt) {
     for (const key of Array.from(fileStates.keys())) {
       if (!seen.has(key)) {
         fileStates.delete(key);
-        handleEvent('delete', key);
+        if (!isInitial) {
+          handleEvent('delete', key);
+        }
       }
+    }
+
+    if (WATCH_SKIP_INITIAL_SCAN && !initialScanDone.has(watchPath)) {
+      initialScanDone.add(watchPath);
     }
   }
 
@@ -2238,10 +2350,10 @@ function computeNextTriggerFire(record, referenceDate) {
   }
   const schedule = record.schedule || {};
   const modeRaw = typeof schedule.mode === 'string' ? schedule.mode.toLowerCase() : null;
-  const inferredMode = modeRaw
-    || (schedule.interval_minutes || schedule.minutes ? 'interval'
-      : schedule.time ? 'daily'
-        : 'once');
+    const inferredMode = modeRaw
+      || (schedule.interval_minutes || schedule.minutes ? 'interval'
+        : schedule.time ? 'daily'
+          : 'once');
   const now = referenceDate || new Date();
 
   if (inferredMode === 'once') {
@@ -2419,6 +2531,10 @@ class TriggerScheduler extends EventEmitter {
       cwd: typeof entry.cwd === 'string' && entry.cwd.trim().length > 0 ? entry.cwd.trim() : null,
       timeout_ms: entry.timeout_ms || entry.max_duration_ms || null,
       idle_timeout_ms: entry.idle_timeout_ms || null,
+      last_status: entry.last_status || null,
+      last_error: entry.last_error || null,
+      last_attempt_at: entry.last_attempt_at || null,
+      overdue: Boolean(entry.overdue) || false,
     };
     this.triggers.set(id, normalized);
     return normalized;
@@ -2427,12 +2543,40 @@ class TriggerScheduler extends EventEmitter {
   schedule(record) {
     this.cancel(record.id);
     let nextFire = null;
-    try {
-      nextFire = computeNextTriggerFire(record, new Date());
-    } catch (error) {
-      logger.error(`trigger ${record.id} scheduling error:`, error.message);
+    const isOnce = (record.schedule && typeof record.schedule.mode === 'string'
+      ? record.schedule.mode.toLowerCase() === 'once'
+      : true);
+    const now = new Date();
+
+    // Overdue once triggers (enabled, never fired, past target) get exactly one immediate dispatch
+    if (isOnce && record.enabled && !record.last_fired && !record.last_attempt_at) {
+      try {
+        const targetIso = record.schedule?.at || record.schedule?.time || record.created_at;
+        const target = parseIsoDate(targetIso, 'schedule.at');
+        if (target <= now) {
+          record.overdue = true;
+          nextFire = new Date(Date.now() + MIN_TRIGGER_DELAY_MS);
+        }
+      } catch (error) {
+        logger.error(`trigger ${record.id} scheduling error:`, error.message);
+      }
     }
+
+    // Normal scheduling path
+    if (!nextFire) {
+      try {
+        nextFire = computeNextTriggerFire(record, now);
+      } catch (error) {
+        logger.error(`trigger ${record.id} scheduling error:`, error.message);
+      }
+    }
+
     record.next_fire = nextFire ? nextFire.toISOString() : null;
+    if (isOnce && record.enabled && !record.last_fired && !nextFire) {
+      record.overdue = true;
+    } else {
+      record.overdue = false;
+    }
     this.triggers.set(record.id, record);
     if (!nextFire) {
       return;
@@ -2469,6 +2613,7 @@ class TriggerScheduler extends EventEmitter {
       return;
     }
     const nowIso = new Date().toISOString();
+    record.last_attempt_at = nowIso;
     const promptPayload = {
       payload: {
         timeout_ms: record.timeout_ms || undefined,
@@ -2505,20 +2650,43 @@ class TriggerScheduler extends EventEmitter {
       await this.updateTriggerRecord(record.id, {
         last_fired: nowIso,
         gateway_session_id: gatewaySessionId || null,
+        last_status: 'success',
+        last_error: null,
+        last_attempt_at: nowIso,
+        overdue: false,
       });
       record.last_fired = nowIso;
       record.gateway_session_id = gatewaySessionId || null;
+      record.last_status = 'success';
+      record.last_error = null;
+      record.last_attempt_at = nowIso;
+      record.overdue = false;
     } catch (error) {
       logger.error(`trigger ${record.id} run failed:`, error.message);
+      await this.updateTriggerRecord(record.id, {
+        last_status: 'error',
+        last_error: error.message,
+        last_attempt_at: nowIso,
+        overdue: false,
+      }).catch(() => {});
+      record.last_status = 'error';
+      record.last_error = error.message;
+      record.last_attempt_at = nowIso;
+      record.overdue = false;
     } finally {
-      if (runSucceeded && this.isOneShot(record)) {
-        logger.info(`removing completed one-shot trigger ${record.id}`);
-        await this.removeTriggerRecord(record.id);
-        this.triggers.delete(record.id);
-        this.jobs.delete(record.id);
-      } else {
-        this.schedule(record);
+      if (this.isOneShot(record)) {
+        if (runSucceeded) {
+          logger.info(`removing completed one-shot trigger ${record.id}`);
+          await this.removeTriggerRecord(record.id);
+          this.triggers.delete(record.id);
+          this.jobs.delete(record.id);
+        } else {
+          logger.warn(`one-shot trigger ${record.id} failed; not rescheduling`);
+        }
+        return;
       }
+
+      this.schedule(record);
     }
   }
 
@@ -3098,11 +3266,14 @@ if (require.main === module) {
           status: 'codex-gateway',
           watcher: WATCH_STATUS,
           webhook: WEBHOOK_STATUS,
+          system_prompt: SYSTEM_PROMPT_META,
           env: {
             CODEX_GATEWAY_SESSION_DIRS: (process.env.CODEX_GATEWAY_SESSION_DIRS || '').split(',').map((s) => s.trim()).filter(Boolean),
             CODEX_GATEWAY_SECURE_SESSION_DIR: process.env.CODEX_GATEWAY_SECURE_SESSION_DIR || '',
             CODEX_GATEWAY_EXTRA_ARGS: process.env.CODEX_GATEWAY_EXTRA_ARGS || '',
             CODEX_SANDBOX_NETWORK_DISABLED: process.env.CODEX_SANDBOX_NETWORK_DISABLED || '',
+            CODEX_SYSTEM_PROMPT_FILE: SYSTEM_PROMPT_META.path || '',
+            CODEX_DISABLE_DEFAULT_PROMPT: process.env.CODEX_DISABLE_DEFAULT_PROMPT || '',
           },
           endpoints: {
             health: '/health',
@@ -3139,11 +3310,14 @@ if (require.main === module) {
           memory: process.memoryUsage(),
           watcher: WATCH_STATUS,
           webhook: WEBHOOK_STATUS,
+          system_prompt: SYSTEM_PROMPT_META,
           env: {
             CODEX_GATEWAY_SESSION_DIRS: (process.env.CODEX_GATEWAY_SESSION_DIRS || '').split(',').map((s) => s.trim()).filter(Boolean),
             CODEX_GATEWAY_SECURE_SESSION_DIR: process.env.CODEX_GATEWAY_SECURE_SESSION_DIR || '',
             CODEX_GATEWAY_EXTRA_ARGS: process.env.CODEX_GATEWAY_EXTRA_ARGS || '',
             CODEX_SANDBOX_NETWORK_DISABLED: process.env.CODEX_SANDBOX_NETWORK_DISABLED || '',
+            CODEX_SYSTEM_PROMPT_FILE: SYSTEM_PROMPT_META.path || '',
+            CODEX_DISABLE_DEFAULT_PROMPT: process.env.CODEX_DISABLE_DEFAULT_PROMPT || '',
           },
         });
         return;

@@ -170,6 +170,7 @@ if (-not $OllamaHost -and $env:OLLAMA_HOST) {
 $script:ResolvedOssServerUrl = $OssServerUrl
 $script:ResolvedOllamaHost = $OllamaHost
 $DefaultSystemPromptFile = 'PROMPT.md'
+$script:DefaultSystemPromptContainerPath = $null
 
 function Resolve-WorkspacePath {
     param(
@@ -495,16 +496,71 @@ function Build-EnvImportArgs {
     return $envArgs
 }
 
+function Get-SystemPromptContainerPath {
+    param(
+        [string]$WorkspacePath
+    )
+
+    $candidates = @()
+    if ($env:CODEX_SYSTEM_PROMPT_FILE) {
+        $candidates += $env:CODEX_SYSTEM_PROMPT_FILE
+    }
+    $candidates += $DefaultSystemPromptFile
+
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+
+        $hostPath = $candidate
+        if (-not [System.IO.Path]::IsPathRooted($hostPath)) {
+            if (-not $WorkspacePath) {
+                continue
+            }
+            $hostPath = Join-Path $WorkspacePath $candidate
+        }
+
+        try {
+            $resolvedHost = (Resolve-Path $hostPath -ErrorAction Stop).Path
+        } catch {
+            continue
+        }
+
+        if (-not (Test-Path $resolvedHost)) {
+            continue
+        }
+
+        if (-not $WorkspacePath) {
+            continue
+        }
+
+        try {
+            $resolvedWorkspace = (Resolve-Path $WorkspacePath -ErrorAction Stop).Path
+        } catch {
+            continue
+        }
+
+        if (-not $resolvedHost.StartsWith($resolvedWorkspace, [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        $relative = $resolvedHost.Substring($resolvedWorkspace.Length).TrimStart('\', '/')
+        $containerPath = "/workspace/" + ($relative -replace '\\', '/')
+        return $containerPath
+    }
+
+    return $null
+}
+
 function Add-DefaultSystemPrompt {
     param(
         [string]$Action,
         [string]$WorkspacePath
     )
 
-    if ($SessionId) {
-        return
-    }
-    if ($Action -ne 'Serve') {
+    $script:DefaultSystemPromptContainerPath = $null
+    $eligibleActions = @('Serve', 'Exec', 'Run')
+    if ($eligibleActions -notcontains $Action) {
         return
     }
     if ($env:CODEX_DISABLE_DEFAULT_PROMPT -match '^(1|true|on)$') {
@@ -514,17 +570,12 @@ function Add-DefaultSystemPrompt {
         return
     }
 
-    $promptPath = Join-Path $WorkspacePath $DefaultSystemPromptFile
-    if (-not (Test-Path $promptPath)) {
+    $promptMapping = Get-SystemPromptContainerPath -WorkspacePath $WorkspacePath
+    if (-not $promptMapping) {
         return
     }
 
-    if ($CodexArgs -and ($CodexArgs | Where-Object { $_ -like '--system*' })) {
-        return
-    }
-
-    $containerPrompt = "/workspace/$DefaultSystemPromptFile"
-    $script:CodexArgs += @('--system-file', $containerPrompt)
+    $script:DefaultSystemPromptContainerPath = $promptMapping
 }
 
 function Test-HasModelFlag {
@@ -539,6 +590,28 @@ function Test-HasModelFlag {
     for ($i = 0; $i -lt $Args.Count; $i++) {
         $arg = $Args[$i]
         if ($arg -eq '--model' -or $arg -like '--model=*') {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Test-HasSystemFlag {
+    param(
+        [string[]]$Args
+    )
+
+    if (-not $Args) {
+        return $false
+    }
+
+    foreach ($arg in $Args) {
+        if (-not $arg) { continue }
+        if ($arg -eq '--system' -or $arg -like '--system=*') {
+            return $true
+        }
+        if ($arg -eq '--system-file' -or $arg -like '--system-file=*') {
             return $true
         }
     }
@@ -1263,6 +1336,16 @@ function Invoke-CodexRun {
             $cmd += @('--model', $CodexModel)
         }
     }
+
+    if ($script:DefaultSystemPromptContainerPath) {
+        $hasSystem = Test-HasSystemFlag -Args $cmd
+        if (-not $hasSystem -and $Arguments) {
+            $hasSystem = Test-HasSystemFlag -Args $Arguments
+        }
+        if (-not $hasSystem) {
+            $cmd += @('--system-file', $script:DefaultSystemPromptContainerPath)
+        }
+    }
     if ($Arguments) {
         $cmd += $Arguments
     }
@@ -1336,6 +1419,15 @@ function Invoke-CodexExec {
             $rest = $cmdArguments[1..($cmdArguments.Length - 1)]
         }
         $cmdArguments = @($first, '--model', $CodexModel) + $rest
+    }
+
+    if ($script:DefaultSystemPromptContainerPath -and -not (Test-HasSystemFlag -Args $cmdArguments)) {
+        $first = $cmdArguments[0]
+        $rest = @()
+        if ($cmdArguments.Length -gt 1) {
+            $rest = $cmdArguments[1..($cmdArguments.Length - 1)]
+        }
+        $cmdArguments = @($first, '--system-file', $script:DefaultSystemPromptContainerPath) + $rest
     }
 
     Invoke-CodexRun -Context $Context -Arguments $cmdArguments -Silent:($Json -or $JsonE)
@@ -1584,6 +1676,9 @@ try {
     }
 
     Add-DefaultSystemPrompt -Action $action -WorkspacePath $context.WorkspacePath
+    if ($script:DefaultSystemPromptContainerPath) {
+        $context.RunArgs = $context.RunArgs + @('-e', "CODEX_SYSTEM_PROMPT_FILE=$($script:DefaultSystemPromptContainerPath)")
+    }
 
     if ($action -ne 'Install') {
         if (-not (Ensure-DockerImage -Tag $context.Tag)) {

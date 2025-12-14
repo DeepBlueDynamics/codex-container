@@ -32,6 +32,8 @@ declare -a CONFIG_ENV_KVS=()
 declare -a CONFIG_ENV_IMPORTS=()
 PROJECT_CONFIG_PATH=""
 DEFAULT_SYSTEM_PROMPT_FILE="PROMPT.md"
+RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH=""
+RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH=""
 NEW_SESSION=false
 SESSION_ID=""
 TRANSCRIPTION_SERVICE_URL="http://host.docker.internal:8765"
@@ -573,28 +575,64 @@ has_system_prompt_flag() {
   return 1
 }
 
-maybe_inject_default_prompt() {
+resolve_system_prompt_container_path() {
+  RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH=""
   if [[ "${CODEX_DISABLE_DEFAULT_PROMPT:-}" =~ ^(1|true|on)$ ]]; then
     return
   fi
-  if [[ -n "$SESSION_ID" ]]; then
+  local candidate="${CODEX_SYSTEM_PROMPT_FILE:-$DEFAULT_SYSTEM_PROMPT_FILE}"
+  if [[ -z "$candidate" ]]; then
     return
   fi
-  if [[ "$ACTION" != "serve" ]]; then
+  local host_path="$candidate"
+  if [[ "$host_path" != /* ]]; then
+    if [[ -z "$WORKSPACE_PATH" ]]; then
+      return
+    fi
+    host_path="${WORKSPACE_PATH}/${candidate}"
+  fi
+  if [[ ! -f "$host_path" ]]; then
     return
   fi
-  local host_prompt="${WORKSPACE_PATH}/${DEFAULT_SYSTEM_PROMPT_FILE}"
-  if [[ ! -f "$host_prompt" ]]; then
+  local interpreter=""
+  if command -v python3 >/dev/null 2>&1; then
+    interpreter="python3"
+  elif command -v python >/dev/null 2>&1; then
+    interpreter="python"
+  fi
+  if [[ -z "$interpreter" ]]; then
     return
   fi
-  local container_prompt="/workspace/${DEFAULT_SYSTEM_PROMPT_FILE}"
-  if has_system_prompt_flag "${CODEX_ARGS[@]}"; then
+  local rel_path
+  rel_path="$($interpreter - "$WORKSPACE_PATH" "$host_path" <<'PY'
+import os
+import sys
+workspace = os.path.abspath(sys.argv[1])
+target = os.path.abspath(sys.argv[2])
+try:
+    common = os.path.commonpath([workspace, target])
+except ValueError:
+    print('')
+    raise SystemExit(0)
+if os.path.normcase(common) != os.path.normcase(workspace):
+    print('')
+else:
+    rel = os.path.relpath(target, workspace)
+    print(rel.replace('\\', '/'))
+PY
+)"
+  rel_path="${rel_path//$'\r'/}"
+  rel_path="${rel_path//$'\n'/}"
+  if [[ -z "$rel_path" ]]; then
     return
   fi
-  CODEX_ARGS+=("--system-file" "$container_prompt")
+  RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH="/workspace/${rel_path}"
 }
 
-maybe_inject_default_prompt
+resolve_system_prompt_container_path
+if [[ -n "$RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH" ]]; then
+  DOCKER_RUN_EXTRA_ENVS+=("CODEX_SYSTEM_PROMPT_FILE=${RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH}")
+fi
 
 
 if [[ -z "$CODEX_HOME_OVERRIDE" && -n "${CODEX_CONTAINER_HOME:-}" ]]; then
@@ -1097,8 +1135,17 @@ invoke_codex_run() {
       args+=("--model" "$CODEX_MODEL")
     fi
   fi
+  local inject_default_prompt=0
+  if [[ -n "$RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH" ]]; then
+    if ! has_system_prompt_flag "${args[@]}" && ! has_system_prompt_flag "${CODEX_ARGS[@]}"; then
+      inject_default_prompt=1
+    fi
+  fi
   if [[ ${#CODEX_ARGS[@]} -gt 0 ]]; then
     args+=("${CODEX_ARGS[@]}")
+  fi
+  if [[ $inject_default_prompt -eq 1 ]]; then
+    args+=("--system-file" "$RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH")
   fi
   if [[ ${#args[@]} -gt 0 ]]; then
     cmd+=("${args[@]}")
@@ -1185,6 +1232,15 @@ invoke_codex_exec() {
       remainder=("${exec_args[@]:1}")
     fi
     exec_args=("$first_token" "--model" "$CODEX_MODEL" "${remainder[@]}")
+  fi
+
+  if [[ -n "$RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH" ]] && ! has_system_prompt_flag "${exec_args[@]}"; then
+    local first_token="${exec_args[0]}"
+    local -a remainder=()
+    if [[ ${#exec_args[@]} -gt 1 ]]; then
+      remainder=("${exec_args[@]:1}")
+    fi
+    exec_args=("$first_token" "--system-file" "$RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH" "${remainder[@]}")
   fi
 
   local -a cmd=(codex "${exec_args[@]}")
