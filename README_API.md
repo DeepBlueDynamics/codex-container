@@ -156,3 +156,30 @@ If `SESSION_WEBHOOK_URL` is set, the gateway posts JSON payloads when sessions c
 - `CODEX_SANDBOX_NETWORK_DISABLED` (passed through to Codex CLI)
 
 Refer to `scripts/codex_gateway.js` for complete options and defaults.
+
+## CLI REPL (`scripts/codex-repl.py`)
+
+Interactive helper for calling the gateway:
+```bash
+python scripts/codex-repl.py http://localhost:4000
+```
+
+Commands:
+- `run <prompt>` — call `/completion`
+- `list` — list sessions
+- `show <id> events|triggers` — fetch a session (with events or trigger extraction)
+- `search <id> <phrase> [--f]` — search a session
+- `prompt <id> <text>` — resume a session
+- `use <id>` — pin a session for subsequent runs
+- `timeout <seconds>` — adjust default timeout
+- `mode <full|compact>` — toggle compact output (shows reasoning/agent messages and command output)
+- `watch <keys...>` — in compact mode, also show these top-level response keys (e.g., `watch usage model`); `watch clear` to reset
+- `help`, `clear`, `exit|quit`
+
+Examples:
+```
+codex> mode compact
+codex> watch usage model
+codex> run hello world
+```
+Compact mode prints reasoning/agent messages (and command outputs) instead of full JSON; watched keys are shown as a summary.

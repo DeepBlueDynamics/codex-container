@@ -5,7 +5,7 @@ import os
 import readline  # noqa: F401 - history support on POSIX shells
 import sys
 from datetime import datetime
-from typing import List
+from typing import Dict, List
 
 import requests
 
@@ -120,7 +120,7 @@ def extract_trigger_ids(events):
     return trigger_ids
 
 
-def post_completion(base_url, prompt, timeout_ms, session_id=None):
+def post_completion(base_url, prompt, timeout_ms, session_id=None, env_overrides=None):
     payload = {
         "messages": [{"role": "user", "content": prompt}],
         "timeout_ms": timeout_ms,
@@ -128,6 +128,8 @@ def post_completion(base_url, prompt, timeout_ms, session_id=None):
     }
     if session_id:
         payload["session_id"] = session_id
+    if env_overrides:
+        payload["env"] = env_overrides
     resp = requests.post(
         f"{base_url}/completion",
         json=payload,
@@ -169,8 +171,10 @@ def search_session(base_url, session_id, query, fuzzy=False):
     return resp.json()
 
 
-def resume_prompt(base_url, session_id, prompt, timeout_ms):
+def resume_prompt(base_url, session_id, prompt, timeout_ms, env_overrides=None):
     payload = {"prompt": prompt, "timeout_ms": timeout_ms}
+    if env_overrides:
+        payload["env"] = env_overrides
     resp = requests.post(
         f"{base_url}/sessions/{session_id}/prompt",
         json=payload,
@@ -180,7 +184,7 @@ def resume_prompt(base_url, session_id, prompt, timeout_ms):
     return resp.json()
 
 
-def print_help(base, timeout_ms, pinned_session, display_mode):
+def print_help(base, timeout_ms, pinned_session, display_mode, env_overrides: Dict[str, str]):
     help_text = f"""
 Connected to {base}
 Commands:
@@ -189,9 +193,9 @@ Commands:
   show <id>                   → GET /sessions/:id (tail=200)
   show <id> events            → include events
   show <id> triggers          → include events + extract trigger IDs
-  watch <key1> <key2> ...     → set extra keys to display in compact mode (clear with `watch clear`)
   search <id> <phrase> [--f]  → search session text, add --f for fuzzy
   prompt <id> <text>          → resume Codex session with new text
+  setenv                      → set env override for next runs (blank key cancels, 'clear' resets)
   use <id>                    → pin a gateway session for future runs
   timeout <seconds>           → change default run timeout
   mode <full|compact>         → toggle display mode (compact shows reasoning/agent messages only)
@@ -201,6 +205,7 @@ Commands:
   exit | quit                 → leave console
 Pinned session: {pinned_session or "(none)"}
 Display mode: {display_mode}
+Env overrides: {len(env_overrides)} set
 Persistent workers auto-start whenever you run/prompt; adjust run duration with the `timeout` command.
 """
     print(help_text.strip())
@@ -219,9 +224,10 @@ def main():
     current_session = None
     current_timeout_ms = DEFAULT_TIMEOUT_MS
     watch_keys: List[str] = WATCH_KEYS_DEFAULT.copy()
+    current_env_overrides: Dict[str, str] = {}
     current_display_mode = "full"
 
-    print_help(base, current_timeout_ms, current_session, current_display_mode)
+    print_help(base, current_timeout_ms, current_session, current_display_mode, current_env_overrides)
 
     while True:
         try:
@@ -236,7 +242,7 @@ def main():
             break
         lower = line.lower()
         if lower == "help":
-            print_help(base, current_timeout_ms, current_session, current_display_mode)
+            print_help(base, current_timeout_ms, current_session, current_display_mode, current_env_overrides)
             continue
         if lower == "clear":
             os.system("cls" if os.name == "nt" else "clear")
@@ -251,7 +257,13 @@ def main():
                     log_with_timestamp("Usage: run <prompt>")
                     continue
                 log_with_timestamp(f"🚀 Starting job: {remainder[:80]}..." if len(remainder) > 80 else f"🚀 Starting job: {remainder}")
-                result = post_completion(base, remainder, current_timeout_ms, session_id=current_session)
+                result = post_completion(
+                    base,
+                    remainder,
+                    current_timeout_ms,
+                    session_id=current_session,
+                    env_overrides=current_env_overrides or None,
+                )
                 log_with_timestamp("✅ Job completed")
                 if current_display_mode == "compact":
                     print("=== COMPACT RUN SUMMARY ===")
@@ -343,7 +355,13 @@ def main():
                     log_with_timestamp("Usage: prompt <session-id> <text>")
                     continue
                 log_with_timestamp(f"📝 Resuming session {session_id}: {prompt_text[:80]}..." if len(prompt_text) > 80 else f"📝 Resuming session {session_id}: {prompt_text}")
-                result = resume_prompt(base, session_id, prompt_text, current_timeout_ms)
+                result = resume_prompt(
+                    base,
+                    session_id,
+                    prompt_text,
+                    current_timeout_ms,
+                    env_overrides=current_env_overrides or None,
+                )
                 log_with_timestamp("✅ Prompt completed")
                 print(pretty(result))
             elif cmd == "use":
@@ -352,6 +370,18 @@ def main():
                     continue
                 current_session = remainder.strip()
                 log_with_timestamp(f"📌 Pinned session set to {current_session}")
+            elif cmd == "setenv":
+                key = input("Env key (blank to cancel, 'clear' to remove all): ").strip()
+                if not key:
+                    log_with_timestamp("Env update canceled")
+                    continue
+                if key.lower() == "clear":
+                    current_env_overrides = {}
+                    log_with_timestamp("Env overrides cleared")
+                    continue
+                value = input(f"Value for {key}: ")
+                current_env_overrides[key] = value
+                log_with_timestamp(f"Set env override {key}={'<empty>' if value == '' else value}")
             elif cmd == "timeout":
                 if not remainder:
                     print("Usage: timeout <seconds>")
