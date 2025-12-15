@@ -1469,7 +1469,26 @@ function Invoke-CodexServe {
     }
 
     # Default file watcher settings if not supplied
-    if (-not $GatewayWatchPaths) { $GatewayWatchPaths = './temp' }
+    $configWatchPaths = $null
+    if ($Context -and $Context.ProjectConfig -and $Context.ProjectConfig.env) {
+        if ($Context.ProjectConfig.env -is [hashtable]) {
+            $configWatchPaths = $Context.ProjectConfig.env['CODEX_GATEWAY_WATCH_PATHS']
+        } elseif ($Context.ProjectConfig.env -is [psobject]) {
+            $prop = $Context.ProjectConfig.env.PSObject.Properties['CODEX_GATEWAY_WATCH_PATHS']
+            if ($prop) { $configWatchPaths = $prop.Value }
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($GatewayWatchPaths)) {
+        if (-not [string]::IsNullOrWhiteSpace($configWatchPaths)) {
+            $GatewayWatchPaths = $configWatchPaths
+        } elseif (-not [string]::IsNullOrWhiteSpace($env:CODEX_GATEWAY_WATCH_PATHS)) {
+            $GatewayWatchPaths = $env:CODEX_GATEWAY_WATCH_PATHS
+        } else {
+            $GatewayWatchPaths = './temp'
+        }
+    }
+
     if (-not $GatewayWatchPattern) { $GatewayWatchPattern = '**/*' }
     # Do NOT set a default prompt file here; only use what the caller provides
     if (-not $GatewayWatchDebounceMs) { $GatewayWatchDebounceMs = 750 }
