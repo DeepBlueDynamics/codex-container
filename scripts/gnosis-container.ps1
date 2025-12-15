@@ -1341,15 +1341,16 @@ function Invoke-CodexRun {
         }
     }
 
-    if ($script:DefaultSystemPromptContainerPath) {
-        $hasSystem = Test-HasSystemFlag -Args $cmd
-        if (-not $hasSystem -and $Arguments) {
-            $hasSystem = Test-HasSystemFlag -Args $Arguments
-        }
-        if (-not $hasSystem) {
-            $cmd += @('--system-file', $script:DefaultSystemPromptContainerPath)
-        }
-    }
+    # Disabled: codex CLI doesn't support --system-file flag
+    # if ($script:DefaultSystemPromptContainerPath) {
+    #     $hasSystem = Test-HasSystemFlag -Args $cmd
+    #     if (-not $hasSystem -and $Arguments) {
+    #         $hasSystem = Test-HasSystemFlag -Args $Arguments
+    #     }
+    #     if (-not $hasSystem) {
+    #         $cmd += @('--system-file', $script:DefaultSystemPromptContainerPath)
+    #     }
+    # }
     if ($Arguments) {
         $cmd += $Arguments
     }
@@ -1425,14 +1426,15 @@ function Invoke-CodexExec {
         $cmdArguments = @($first, '--model', $CodexModel) + $rest
     }
 
-    if ($script:DefaultSystemPromptContainerPath -and -not (Test-HasSystemFlag -Args $cmdArguments)) {
-        $first = $cmdArguments[0]
-        $rest = @()
-        if ($cmdArguments.Length -gt 1) {
-            $rest = $cmdArguments[1..($cmdArguments.Length - 1)]
-        }
-        $cmdArguments = @($first, '--system-file', $script:DefaultSystemPromptContainerPath) + $rest
-    }
+    # Disabled: codex CLI doesn't support --system-file flag
+    # if ($script:DefaultSystemPromptContainerPath -and -not (Test-HasSystemFlag -Args $cmdArguments)) {
+    #     $first = $cmdArguments[0]
+    #     $rest = @()
+    #     if ($cmdArguments.Length -gt 1) {
+    #         $rest = $cmdArguments[1..($cmdArguments.Length - 1)]
+    #     }
+    #     $cmdArguments = @($first, '--system-file', $script:DefaultSystemPromptContainerPath) + $rest
+    # }
 
     Invoke-CodexRun -Context $Context -Arguments $cmdArguments -Silent:($Json -or $JsonE)
 }
