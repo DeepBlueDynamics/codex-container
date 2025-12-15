@@ -10,6 +10,8 @@ CODEX_GATEWAY_SECURE_SESSION_DIR = "/opt/codex-home/.codex/sessions/secure"
 CODEX_GATEWAY_WATCH_PATHS = "./temp"
 CODEX_GATEWAY_WATCH_PATTERN = "**/*"
 CODEX_GATEWAY_WATCH_PROMPT_FILE = "./examples/MONITOR.md"
+# Explicit system prompt file for both interactive and watcher flows
+CODEX_SYSTEM_PROMPT_FILE = "./PROMPT.md"
 
 # Example explicit env pushed into the container
 SOME_SERVICE_URL = "https://api.example.com"

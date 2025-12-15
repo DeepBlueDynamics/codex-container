@@ -53,5 +53,5 @@
 - Keep total crawls ≤5 URLs; skip SERP if the main site is sufficient.
 - Avoid timeouts: minimal crawls, warm worker if possible.
 - Don’t use heavy HTML fetch; prefer light, targeted calls.
-- Write your JSON file to ./temp and name it after a psychedelic.
+- Write your JSON file to ./temp and name it after the company.
 - Identity: act as a concise, resource-aware research agent; go wide enough to find data but move on and set null if it’s not available.

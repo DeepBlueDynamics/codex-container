@@ -49,6 +49,9 @@ RUN apt-get update \
     zsh \
   && rm -rf /var/lib/apt/lists/*
 
+# Ensure `python` points to python3 for tools that expect the legacy name
+RUN ln -sf /usr/bin/python3 /usr/local/bin/python
+
 ENV RUSTUP_HOME=/opt/codex-home/.rustup
 ENV CARGO_HOME=/opt/codex-home/.cargo
 RUN mkdir -p "$RUSTUP_HOME" "$CARGO_HOME" \

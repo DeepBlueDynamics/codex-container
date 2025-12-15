@@ -104,13 +104,7 @@ const WATCH_STATUS = {
     CODEX_GATEWAY_WATCH_POLL_MS: process.env.CODEX_GATEWAY_WATCH_POLL_MS || '',
   },
 };
-const WATCH_SYSTEM_PROMPT = [
-  'You are handling a single file event from the gateway watcher.',
-  'Act only on the provided event file/path.',
-  'Do NOT scan the whole workspace or run broad searches (no file_find_recent/file_list over root).',
-  'If the file is text and the user is communicating, edit that file directly using gnosis-files-basic.file_write/file_patch with an agent> reply.',
-  'Keep responses short and finish quickly.',
-].join(' ');
+
 // Optional generic session webhook configuration
 const SESSION_WEBHOOK_URL = process.env.SESSION_WEBHOOK_URL || null;
 const SESSION_WEBHOOK_TIMEOUT_MS = parseInt(process.env.SESSION_WEBHOOK_TIMEOUT_MS || '5000', 10);
@@ -413,6 +407,11 @@ const SYSTEM_PROMPT_META = {
   disabled: SYSTEM_PROMPT_STATUS.disabled,
   reason: SYSTEM_PROMPT_STATUS.reason,
 };
+
+// The watcher now reuses the same system prompt as the global prompt (e.g., PROMPT.md).
+// We previously had a hardcoded watcher-specific prompt; removing it defaults to the
+// user-provided system prompt file or the built-in fallback.
+const WATCH_SYSTEM_PROMPT = GLOBAL_SYSTEM_PROMPT;
 
 // Log startup config at verbose level
 if (LOG_LEVEL >= 2) {
@@ -1926,6 +1925,7 @@ async function executeSessionRun({ payload, messages, systemPrompt, sessionId, r
       });
       return {
         session_id: resolvedSessionId,
+        run_id: runId,
         codex_session_id: codexSessionId,
         content: result.content,
         tool_calls: result.tool_calls,
@@ -1988,6 +1988,7 @@ async function runPromptWithWorker({ payload, messages, systemPrompt, sessionId 
 
   return {
     gateway_session_id: result.session_id,
+    run_id: result.run_id || null,
     codex_session_id: result.codex_session_id,
     status: result.status,
     content: result.content,
@@ -2141,7 +2142,7 @@ async function setupFileWatcher(dispatchPrompt) {
           system_prompt_preview: (WATCH_SYSTEM_PROMPT || '').slice(0, 120),
           timeout_ms: DEFAULT_TIMEOUT_MS,
         });
-        await dispatchPrompt({
+        const result = await dispatchPrompt({
           payload: {
             model: DEFAULT_MODEL || undefined,
             timeout_ms: DEFAULT_TIMEOUT_MS,
@@ -2155,6 +2156,13 @@ async function setupFileWatcher(dispatchPrompt) {
           systemPrompt: WATCH_SYSTEM_PROMPT,
           sessionId: null,
         });
+        if (result && result.gateway_session_id) {
+          logger.info('watcher: session started', {
+            gateway_session_id: result.gateway_session_id,
+            run_id: result.run_id || null,
+            codex_session_id: result.codex_session_id || null,
+          });
+        }
       } catch (err) {
         logger.warn(`watcher: dispatch failed for ${absPath}: ${err.message}`);
       }
@@ -3011,6 +3019,7 @@ async function handleCompletion(req, res) {
     releaseSlot();
     sendJson(res, 200, {
       gateway_session_id: result.session_id,
+      run_id: result.run_id || null,
       codex_session_id: result.codex_session_id,
       status: result.status,
       content: result.content,
