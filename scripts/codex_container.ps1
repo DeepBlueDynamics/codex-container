@@ -515,8 +515,9 @@ function Add-DefaultSystemPrompt {
         return
     }
 
-    $containerPrompt = "/workspace/$DefaultSystemPromptFile"
-    $script:CodexArgs += @('--system-file', $containerPrompt)
+    # Disabled: codex CLI doesn't support --system-file flag
+    # $containerPrompt = "/workspace/$DefaultSystemPromptFile"
+    # $script:CodexArgs += @('--system-file', $containerPrompt)
 }
 
 function Test-HasModelFlag {

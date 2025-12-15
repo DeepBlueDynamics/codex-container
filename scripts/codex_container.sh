@@ -424,14 +424,14 @@ load_project_config() {
     return
   fi
   local json
-  json="$(python - <<'PYCODE'
+  json="$(python - "$cfg" <<'PYCODE'
 import json, sys, pathlib
 try:
     import tomllib
 except Exception:
     tomllib = None
 
-path = pathlib.Path(r"""'"$cfg"'""")
+path = pathlib.Path(sys.argv[1])
 data = {}
 if path.suffix.lower() == ".json":
     data = json.loads(path.read_text())
@@ -473,9 +473,9 @@ PYCODE
   # parse env
   while IFS= read -r line; do
     CONFIG_ENV_KVS+=("$line")
-  done < <(python - <<'PYCODE'
+  done < <(python - "$json" <<'PYCODE'
 import json, sys
-data=json.loads(r''''"$json"'""')
+data=json.loads(sys.argv[1])
 env=data.get("env",{}) or {}
 for k,v in env.items():
     if v is None:
@@ -486,9 +486,9 @@ PYCODE
   # parse env_imports
   while IFS= read -r line; do
     CONFIG_ENV_IMPORTS+=("$line")
-  done < <(python - <<'PYCODE'
+  done < <(python - "$json" <<'PYCODE'
 import json, sys
-data=json.loads(r''''"$json"'""')
+data=json.loads(sys.argv[1])
 imports=data.get("env_imports",[]) or []
 for name in imports:
     if name:
@@ -498,9 +498,9 @@ PYCODE
   # parse mounts
   while IFS= read -r line; do
     CONFIG_MOUNT_ARGS+=("$line")
-  done < <(python - <<'PYCODE'
+  done < <(python - "$json" <<'PYCODE'
 import json, sys, os
-data=json.loads(r''''"$json"'""')
+data=json.loads(sys.argv[1])
 mounts=data.get("mounts",[]) or []
 def norm(p):
     return None if p is None else p.replace("\\","/")
@@ -1137,16 +1137,17 @@ invoke_codex_run() {
   fi
   local inject_default_prompt=0
   if [[ -n "$RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH" ]]; then
-    if ! has_system_prompt_flag "${args[@]}" && ! has_system_prompt_flag "${CODEX_ARGS[@]}"; then
+    if ! has_system_prompt_flag "${args[@]+"${args[@]}"}" && ! has_system_prompt_flag "${CODEX_ARGS[@]+"${CODEX_ARGS[@]}"}"; then
       inject_default_prompt=1
     fi
   fi
   if [[ ${#CODEX_ARGS[@]} -gt 0 ]]; then
     args+=("${CODEX_ARGS[@]}")
   fi
-  if [[ $inject_default_prompt -eq 1 ]]; then
-    args+=("--system-file" "$RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH")
-  fi
+  # Disabled: codex CLI doesn't support --system-file flag
+  # if [[ $inject_default_prompt -eq 1 ]]; then
+  #   args+=("--system-file" "$RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH")
+  # fi
   if [[ ${#args[@]} -gt 0 ]]; then
     cmd+=("${args[@]}")
   fi
@@ -1234,14 +1235,15 @@ invoke_codex_exec() {
     exec_args=("$first_token" "--model" "$CODEX_MODEL" "${remainder[@]}")
   fi
 
-  if [[ -n "$RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH" ]] && ! has_system_prompt_flag "${exec_args[@]}"; then
-    local first_token="${exec_args[0]}"
-    local -a remainder=()
-    if [[ ${#exec_args[@]} -gt 1 ]]; then
-      remainder=("${exec_args[@]:1}")
-    fi
-    exec_args=("$first_token" "--system-file" "$RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH" "${remainder[@]}")
-  fi
+  # Disabled: codex CLI doesn't support --system-file flag
+  # if [[ -n "$RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH" ]] && ! has_system_prompt_flag "${exec_args[@]}"; then
+  #   local first_token="${exec_args[0]}"
+  #   local -a remainder=()
+  #   if [[ ${#exec_args[@]} -gt 1 ]]; then
+  #     remainder=("${exec_args[@]:1}")
+  #   fi
+  #   exec_args=("$first_token" "--system-file" "$RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH" "${remainder[@]}")
+  # fi
 
   local -a cmd=(codex "${exec_args[@]}")
   if [[ $silent -eq 1 ]]; then
