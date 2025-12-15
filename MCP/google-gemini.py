@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import os
 import base64
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from mcp.server.fastmcp import FastMCP
@@ -252,14 +253,15 @@ def gemini_chat(
 @mcp.tool()
 async def gemini_generate_image(
     prompt: str,
-    model: str = "models/imagen-4.0-generate-001",
+    model: str = "gemini-2.5-flash-image",
     sample_count: int = 1,
     output_path: str = "temp/nano_banana.png",
+    input_image_path: str = "",
 ) -> Dict[str, Any]:
     """
-    Generate an image via Gemini/Imagen predict endpoint and save to output_path.
+    Generate an image via Gemini image-capable model and save to output_path.
 
-    Default model uses Imagen 4.0; adjust as needed (e.g., models/gemini-2.5-flash-image-preview).
+    Uses the :generateContent endpoint with responseMimeType=image/png.
     Requires GOOGLE_API_KEY in env or .gemini.env.
     """
     if not prompt or not prompt.strip():
@@ -271,12 +273,25 @@ async def gemini_generate_image(
     import aiohttp  # type: ignore
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    # For Imagen endpoints, use predict; adjust for other image models if needed.
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:predict"
+    # Try generateContent for image models (non-prefixed model name, per SDK examples)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    parts = [{"text": prompt}]
+    if input_image_path:
+        try:
+            with open(input_image_path, "rb") as f:
+                img_bytes = f.read()
+            import mimetypes  # lazy import
+            mime, _ = mimetypes.guess_type(input_image_path)
+            mime = mime or "application/octet-stream"
+            parts.append({"inlineData": {"mimeType": mime, "data": base64.b64encode(img_bytes).decode("utf-8")}})
+        except Exception as e:
+            return {"success": False, "error": f"failed to read input_image_path: {e}"}
+
     payload = {
-        "instances": [{"prompt": prompt}],
-        "parameters": {"sampleCount": max(1, min(sample_count, 4))},
+        "contents": [{"role": "user", "parts": parts}],
     }
+    if sample_count and sample_count > 1:
+        payload["candidate_count"] = max(1, min(sample_count, 4))
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
@@ -287,39 +302,51 @@ async def gemini_generate_image(
             },
             json=payload,
         ) as resp:
+            body_text = await resp.text()
             if resp.status != 200:
-                return {"success": False, "status": resp.status}
-            data = await resp.json()
-
-    # Extract first image bytes if present
-    preds = data.get("predictions") or data.get("prediction") or []
-    if preds and isinstance(preds, list):
-        first = preds[0]
-        if isinstance(first, dict):
-            # Imagen predict returns bytesBase64Encoded; handle multiple aliases.
-            img_bytes_b64 = (
-                first.get("bytesBase64Encoded")
-                or first.get("imageBytes")
-                or first.get("b64")
-                or first.get("image", {}).get("imageBytes")
-                or first.get("image", {}).get("bytesBase64Encoded")
-            )
-            if img_bytes_b64:
                 try:
-                    raw = base64.b64decode(img_bytes_b64)
-                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                    with open(output_path, "wb") as f:
-                        f.write(raw)
-                    return {
-                        "success": True,
-                        "model": model,
-                        "output_path": output_path,
-                        "bytes": len(raw),
-                    }
-                except Exception as e:  # pragma: no cover
-                    return {"success": False, "error": f"decode_error: {e}"}
+                    err_json = json.loads(body_text)
+                except Exception:
+                    err_json = body_text
+                return {"success": False, "status": resp.status, "error": err_json}
+            try:
+                data = json.loads(body_text)
+            except Exception as e:
+                return {"success": False, "status": resp.status, "error": f"json_parse_error: {e}", "raw": body_text}
 
-    return {"success": False, "error": "no image bytes in response"}
+    # Extract inline image data from candidates
+    candidates = data.get("candidates") or []
+    if not candidates:
+        return {"success": False, "error": "no candidates in response", "raw": data}
+
+    first = candidates[0]
+    parts = first.get("content", {}).get("parts") or first.get("content", []) or []
+    img_b64 = None
+    for p in parts:
+        if isinstance(p, dict) and "inlineData" in p and p["inlineData"].get("data"):
+            img_b64 = p["inlineData"]["data"]
+            break
+        if isinstance(p, dict) and p.get("inline_data", {}).get("data"):
+            img_b64 = p["inline_data"]["data"]
+            break
+    if not img_b64:
+        return {"success": False, "error": "no inlineData image bytes in response", "raw": data}
+
+    try:
+        raw = base64.b64decode(img_b64)
+        output_path_dir = os.path.dirname(output_path)
+        if output_path_dir:
+            os.makedirs(output_path_dir, exist_ok=True)
+        with open(output_path, "wb") as f:
+            f.write(raw)
+        return {
+            "success": True,
+            "model": model,
+            "output_path": output_path,
+            "bytes": len(raw),
+        }
+    except Exception as e:  # pragma: no cover
+        return {"success": False, "error": f"decode_error: {e}", "raw": str(e)}
 
 
 if __name__ == "__main__":
