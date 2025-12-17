@@ -1,30 +1,86 @@
 # Codex Gateway API
 
-HTTP service implemented by `scripts/codex_gateway.js`. Default bind is `0.0.0.0:4000` (override with `CODEX_GATEWAY_PORT` and `CODEX_GATEWAY_BIND`). All endpoints speak JSON. Large requests are limited by `CODEX_GATEWAY_MAX_BODY_BYTES` (default 1 MiB).
+> HTTP service implemented by `scripts/codex_gateway.js`. Each request spawns a Codex process, returns when complete.
 
-## Authentication
-The gateway does not enforce authentication by default. You can front it with your own auth proxy or use the secure session directory/token (`CODEX_GATEWAY_SECURE_SESSION_DIR`, `CODEX_GATEWAY_SECURE_TOKEN`) for session replays.
+```
+┌──────────────────────────────────────────────────────────────┐
+│  POST /completion  →  spawns codex  →  returns result        │
+│  GET  /sessions    →  list past runs                         │
+│  GET  /status      →  concurrency, watcher, webhook info     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Start the gateway:**
+```powershell
+pwsh ./scripts/gnosis-container.ps1 -Serve -GatewayPort 4000
+```
+
+**Make a request:**
+```bash
+curl -X POST http://localhost:4000/completion \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "List files in workspace"}]}'
+```
+
+---
+
+## Quick Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Liveness probe |
+| `GET` | `/` | Gateway info, endpoints, config |
+| `GET` | `/status` | Concurrency, uptime, memory, watcher/webhook |
+| `POST` | `/completion` | Run a prompt |
+| `GET` | `/sessions` | List sessions |
+| `GET` | `/sessions/:id` | Session details |
+| `GET` | `/sessions/:id/search` | Search session logs |
+| `POST` | `/sessions/:id/prompt` | Continue a session |
+| `POST` | `/sessions/:id/nudge` | Replay with updated metadata |
+| `GET` | `/triggers` | List configured monitor triggers |
+| `POST` | `/triggers` | Create or replace trigger definitions |
+| `PATCH/DELETE` | `/triggers/:id` | Update or remove a trigger |
+
+---
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CODEX_GATEWAY_PORT` | 4000 | Server port |
+| `CODEX_GATEWAY_BIND` | 0.0.0.0 | Bind address |
+| `CODEX_GATEWAY_MAX_BODY_BYTES` | 1048576 | Max request size (1 MiB) |
+| `CODEX_GATEWAY_MAX_CONCURRENT` | 2 | Max parallel Codex runs |
+| `CODEX_GATEWAY_TIMEOUT_MS` | 120000 | Default execution timeout |
+| `CODEX_GATEWAY_MAX_TIMEOUT_MS` | 1800000 | Max allowed timeout (30 min) |
+| `CODEX_GATEWAY_DEFAULT_MODEL` | *(empty)* | Default model |
+
+**Authentication:** None by default. Use `CODEX_GATEWAY_SECURE_TOKEN` for secure sessions or front with your own auth proxy.
+
+---
 
 ## Endpoints
 
-### `GET /health`
-- Returns `{ "status": "ok" }`.
-- Useful for container liveness checks.
+### GET /health
 
-### `GET /`
-- Returns gateway metadata:
-  - watcher configuration (if file watcher active)
-  - webhook configuration summary
-  - current environment highlights (session dirs, sandbox flags)
-  - list of available endpoints
+Liveness check.
 
-Example response:
+```json
+{ "status": "ok" }
+```
+
+---
+
+### GET /
+
+Gateway metadata: watcher config, webhook config, environment, available endpoints.
+
 ```json
 {
   "status": "codex-gateway",
-  "watcher": { "enabled": false, ... },
-  "webhook": { "configured": false, ... },
-  "env": { "CODEX_GATEWAY_SESSION_DIRS": ["/opt/codex-home/.codex/sessions"], ... },
+  "watcher": { "enabled": false, "paths": [], "pattern": "**/*" },
+  "webhook": { "configured": false },
+  "env": { "CODEX_GATEWAY_SESSION_DIRS": ["/opt/codex-home/.codex/sessions"] },
   "endpoints": {
     "health": "/health",
     "status": "/status",
@@ -40,53 +96,68 @@ Example response:
 }
 ```
 
-### `GET /status`
-- Includes concurrency stats, uptime, memory usage, and same watcher/webhook/env summary as `/`.
-- Response includes:
-  - `concurrency.active`, `concurrency.max`, `concurrency.available`
-  - `uptime` (seconds)
-  - `memory` (NodeJS memoryUsage output)
+---
 
-### `POST /completion`
-Launches a Codex job.
+### GET /status
 
-**Request body:**
+Extended status with concurrency, uptime, memory.
+
 ```json
 {
-  "prompt": "<string>",
-  "model": "<optional model override>",
-  "workspace": "<path inside container, default /workspace>",
-  "session_id": "<optional existing session>",
-  "system_prompt": "<optional system message>",
-  "env": { "MY_VAR": "value" },
-  "messages": [
-    {"role": "user", "content": "..."},
-    {"role": "assistant", "content": "..."}
-  ],
-  "timeout_ms": 120000,
-  "json_mode": false,
-  "metadata": { ... }
+  "concurrency": { "active": 1, "max": 2, "available": 1 },
+  "uptime": 3600,
+  "memory": { "rss": 52428800, "heapTotal": 20971520, "heapUsed": 15728640 },
+  "watcher": { "enabled": true, "paths": ["/workspace/temp"] },
+  "webhook": { "configured": true, "url_tail": "...example.com/hook" }
 }
 ```
-Fields:
-- `prompt`: plain string prompt (ignored if `messages` provided).
-- `messages`: optional chat-style conversation. If provided, overrides `prompt`.
-- `system_prompt`: optional instructions prepended to the conversation.
-- `workspace`: directory to use as Codex working dir (default `/workspace`).
-- `model`: override default model (falls back to `CODEX_GATEWAY_DEFAULT_MODEL`).
-- `session_id`: reuse existing session (otherwise new session is created).
-- `env`: optional per-run environment overrides (applies only to this Codex/MCP subprocess; does not persist).
-- `timeout_ms`: overrides request timeout (capped by `CODEX_GATEWAY_MAX_TIMEOUT_MS`).
-- `json_mode`: when true, adds `CODEX_GATEWAY_JSON_FLAG` (defaults to `--experimental-json`).
-- `metadata`: arbitrary object persisted with the run.
+
+---
+
+### POST /completion
+
+Run a prompt through Codex.
+
+**Request:**
+```json
+{
+  "messages": [
+    { "role": "user", "content": "What files are in the workspace?" }
+  ],
+  "system_prompt": "You are a helpful assistant.",
+  "model": "gpt-4o-mini",
+  "workspace": "/workspace",
+  "session_id": "optional-existing-session",
+  "timeout_ms": 120000,
+  "json_mode": false,
+  "env": { "MY_VAR": "value" },
+  "metadata": { "source": "api" }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `messages` | array | Yes* | Chat-style messages with `role` and `content` |
+| `prompt` | string | Yes* | Plain string prompt (ignored if `messages` provided) |
+| `system_prompt` | string | No | System instructions |
+| `model` | string | No | Model override |
+| `workspace` | string | No | Working directory (default `/workspace`) |
+| `session_id` | string | No | Resume existing session |
+| `timeout_ms` | number | No | Execution timeout |
+| `json_mode` | boolean | No | Add `--experimental-json` flag |
+| `env` | object | No | Per-run environment variables |
+| `metadata` | object | No | Arbitrary data to persist with run |
+
+*Either `messages` or `prompt` required.
 
 **Response:**
 ```json
 {
-  "session_id": "session-123...",
-  "gateway_session_id": "session-123...",
+  "session_id": "session-abc123",
+  "gateway_session_id": "session-abc123",
+  "codex_session_id": "sess_xyz",
   "model": "gpt-4o-mini",
-  "output": "...",
+  "output": "The workspace contains...",
   "messages": [...],
   "usage": {
     "input_tokens": 1234,
@@ -94,92 +165,311 @@ Fields:
     "cached_input_tokens": 0,
     "total_tokens": 1555
   },
-  "logs_path": "/opt/codex-home/.codex/sessions/gateway/session-...",
-  "metadata": { ... }
+  "logs_path": "/opt/codex-home/.codex/sessions/gateway/session-abc123",
+  "metadata": { "source": "api" }
 }
 ```
-Errors:
-- `400` invalid payload or body too large.
-- `408` timeout (job exceeded timeout).
-- `429` concurrency limiter triggered (controlled by `CODEX_GATEWAY_MAX_CONCURRENT`).
-- `500` Codex execution failure.
 
-### `GET /sessions`
-Lists known gateway sessions. Query params:
-- `limit` (default 50, max 200)
-- `since` (ISO timestamp to filter sessions modified after time)
+**Error codes:**
+| Status | Meaning |
+|--------|---------|
+| 400 | Invalid payload or body too large |
+| 408 | Timeout exceeded |
+| 429 | At concurrency limit — retry later |
+| 500 | Codex execution failure |
 
-Response is a JSON array of session summaries (`session_id`, `dir`, `modified`, `metadata`, etc.).
-
-### `GET /sessions/:id`
-Returns detailed info for one session, including metadata, run history, and file paths. Accepts `tail_lines` query param (default `CODEX_GATEWAY_DEFAULT_TAIL_LINES`).
-
-### `GET /sessions/:id/search`
-Search within a session’s logs. Query params:
-- `q` (required search string)
-- `fuzzy=true` (optional)
-- `tail_lines` (cap log snippet length)
-
-Response lists matching log segments with context and file references.
-
-### `POST /sessions/:id/prompt`
-Send a follow-up prompt to an existing session. Request body:
+**Concurrency:** When `max_concurrent` is reached, returns 429:
 ```json
 {
-  "prompt": "...",
-  "system_prompt": "optional",
+  "error": "Too many concurrent requests",
+  "retry_after": 5,
+  "active": 2,
+  "max": 2
+}
+```
+
+---
+
+### GET /sessions
+
+List known sessions.
+
+**Query params:**
+| Param | Default | Description |
+|-------|---------|-------------|
+| `limit` | 50 | Max sessions (max 200) |
+| `since` | — | ISO timestamp, filter sessions modified after |
+
+**Response:**
+```json
+[
+  {
+    "session_id": "session-abc123",
+    "dir": "/path/to/session",
+    "modified": "2025-01-15T10:30:00Z",
+    "metadata": { ... }
+  }
+]
+```
+
+---
+
+### GET /sessions/:id
+
+Session details. Accepts gateway session ID or Codex session ID.
+
+**Query params:**
+| Param | Default | Description |
+|-------|---------|-------------|
+| `tail_lines` | 200 | Lines of logs to return |
+| `include_stderr` | false | Include stderr output |
+| `include_events` | false | Include raw event stream |
+
+**Response:**
+```json
+{
+  "session_id": "session-abc123",
+  "codex_session_id": "sess_xyz",
+  "status": "completed",
+  "created_at": "2025-01-15T10:30:00Z",
+  "updated_at": "2025-01-15T10:31:00Z",
+  "model": "gpt-4o-mini",
+  "runs": 1,
+  "stdout": { "tail": "...", "tail_lines": 200 },
+  "stderr": { "tail": "...", "tail_lines": 200 },
+  "events": [...]
+}
+```
+
+---
+
+### GET /sessions/:id/search
+
+Search within session logs.
+
+**Query params:**
+| Param | Required | Description |
+|-------|----------|-------------|
+| `q` | Yes | Search string |
+| `fuzzy` | No | Enable fuzzy matching |
+| `max_results` | No | Limit results (default 5) |
+| `tail_lines` | No | Cap log snippet length |
+
+**Response:**
+```json
+{
+  "session_id": "session-abc123",
+  "query": "error",
+  "signals": [
+    { "line": 42, "score": 0.95, "context": "...encountered an error..." }
+  ]
+}
+```
+
+---
+
+### POST /sessions/:id/prompt
+
+Continue an existing session with a new prompt.
+
+**Request:**
+```json
+{
+  "prompt": "Now summarize those files",
+  "system_prompt": "optional override",
   "timeout_ms": 60000
 }
 ```
-Response mirrors `/completion`.
 
-### `POST /sessions/:id/nudge`
-Re-run a session’s last prompt with optional updated metadata or messages. Body can include `prompt`, `messages`, or `metadata` to override.
+**Response:** Same as `/completion`.
 
-### `GET /sessions/:id/files` *(legacy)*
-If enabled in your config, this lists files under the session directory. Disabled by default.
+---
 
-### Watcher Events
-If `CODEX_GATEWAY_WATCH_PATHS` is set, the gateway monitors those paths (using either Node watchers or polling). File events spawn `/completion` requests using `WATCH_PROMPT_FILE` or a built-in prompt. Watcher status is exposed via `/` and `/status`.
+### POST /sessions/:id/nudge
 
-### Session Webhooks
-If `SESSION_WEBHOOK_URL` is set, the gateway posts JSON payloads when sessions complete. Payload includes `session_id`, `workspace`, `prompt`, `output`, `usage`, and any metadata. Configure headers via `SESSION_WEBHOOK_HEADERS_JSON`, bearer token via `SESSION_WEBHOOK_AUTH_BEARER`, timeout via `SESSION_WEBHOOK_TIMEOUT_MS`.
+Replay a session with optional updated metadata or messages.
 
-## Environment Variables Summary
-- `CODEX_GATEWAY_PORT`, `CODEX_GATEWAY_BIND`
-- `CODEX_GATEWAY_TIMEOUT_MS`, `CODEX_GATEWAY_MAX_TIMEOUT_MS`
-- `CODEX_GATEWAY_DEFAULT_MODEL`, `CODEX_GATEWAY_EXTRA_ARGS`, `CODEX_GATEWAY_JSON_FLAG`
-- `CODEX_GATEWAY_SESSION_DIRS`, `CODEX_GATEWAY_SECURE_SESSION_DIR`, `CODEX_GATEWAY_SECURE_TOKEN`
-- `CODEX_GATEWAY_MAX_BODY_BYTES`, `CODEX_GATEWAY_MAX_CONCURRENT`
-- `CODEX_GATEWAY_WATCH_*` (paths, pattern, prompt file, debounce, poll, watchdog toggle)
-- `SESSION_WEBHOOK_URL`, `SESSION_WEBHOOK_TIMEOUT_MS`, `SESSION_WEBHOOK_AUTH_BEARER`, `SESSION_WEBHOOK_HEADERS_JSON`
-- `CODEX_SANDBOX_NETWORK_DISABLED` (passed through to Codex CLI)
+**Request:**
+```json
+{
+  "prompt": "Try again with more detail",
+  "messages": [...],
+  "metadata": { "retry": true }
+}
+```
 
-Refer to `scripts/codex_gateway.js` for complete options and defaults.
+**Response:** Same as `/completion`.
 
-## CLI REPL (`scripts/codex-repl.py`)
+---
+
+## Trigger management (`/triggers`)
+
+Use the new trigger API instead of editing `.codex-monitor-triggers.json`. The gateway still watches that file by default, but you can now call the API on port 4000 to list, add, update, or delete scheduled prompts. Each request accepts an optional `trigger_file` query parameter (defaults to the configured file) when you need to target a different trigger document.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/triggers` | Return the parsed trigger array |
+| `POST` | `/triggers` | Add a trigger payload (`prompt_text` + `schedule` required) |
+| `PATCH` | `/triggers/:id` | Update trigger fields |
+| `DELETE` | `/triggers/:id` | Remove a trigger |
+
+Payloads mirror the scheduler schema:
+
+```json
+{
+  "id": "optional-id",
+  "title": "Friendly label",
+  "description": "Why this runs",
+  "prompt_text": "Run the latest monitor report",
+  "schedule": {
+    "mode": "daily",
+    "time": "14:00",
+    "timezone": "America/Chicago"
+  },
+  "enabled": true,
+  "tags": ["reports"]
+}
+```
+
+Each mutation persists to the trigger file and immediately refreshes the scheduler, so you can manage batches of triggers through HTTP without waiting on file-watch events.
+
+---
+
+## File Watcher
+
+When enabled, file changes automatically trigger `/completion` runs.
+
+**Enable with env vars before starting gateway:**
+```powershell
+$env:CODEX_GATEWAY_WATCH_PATHS = 'temp;inbox'
+$env:CODEX_GATEWAY_WATCH_PROMPT_FILE = './MONITOR.md'
+$env:CODEX_GATEWAY_WATCH_PATTERN = '**/*.txt'
+pwsh ./scripts/gnosis-container.ps1 -Serve -GatewayPort 4000
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CODEX_GATEWAY_WATCH_PATHS` | — | Paths to watch (comma/semicolon separated) |
+| `CODEX_GATEWAY_WATCH_PATTERN` | `**/*` | Glob pattern |
+| `CODEX_GATEWAY_WATCH_PROMPT_FILE` | — | Prompt template path |
+| `CODEX_GATEWAY_WATCH_DEBOUNCE_MS` | 750 | Debounce delay |
+| `CODEX_GATEWAY_WATCH_POLL_MS` | 1000 | Poll interval |
+| `CODEX_GATEWAY_WATCH_USE_WATCHDOG` | false | Use watchdog implementation |
+| `CODEX_GATEWAY_WATCH_SKIP_INITIAL_SCAN` | true | Skip initial file scan |
+
+**Prompt template variables:**
+| Variable | Description |
+|----------|-------------|
+| `{{file}}` | Changed file path |
+| `{{filename}}` | File name only |
+| `{{container_path}}` | Path inside container |
+| `{{event_type}}` | Type of change |
+
+Watcher status exposed via `/` and `/status`.
+
+---
+
+## Session Webhooks
+
+Get notified when sessions complete.
+
+| Variable | Description |
+|----------|-------------|
+| `SESSION_WEBHOOK_URL` | Webhook endpoint |
+| `SESSION_WEBHOOK_TIMEOUT_MS` | Request timeout (default 5000) |
+| `SESSION_WEBHOOK_AUTH_BEARER` | Bearer token |
+| `SESSION_WEBHOOK_HEADERS_JSON` | Additional headers as JSON |
+
+**Payload:**
+```json
+{
+  "session_id": "session-abc123",
+  "workspace": "/workspace",
+  "prompt": "...",
+  "output": "...",
+  "usage": { ... },
+  "metadata": { ... }
+}
+```
+
+---
+
+## Environment Variables
+
+### Gateway Core
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CODEX_GATEWAY_PORT` | 4000 | Server port |
+| `CODEX_GATEWAY_BIND` | 0.0.0.0 | Bind address |
+| `CODEX_GATEWAY_TIMEOUT_MS` | 120000 | Default timeout |
+| `CODEX_GATEWAY_MAX_TIMEOUT_MS` | 1800000 | Max timeout |
+| `CODEX_GATEWAY_DEFAULT_MODEL` | — | Default model |
+| `CODEX_GATEWAY_EXTRA_ARGS` | — | Extra Codex CLI args |
+| `CODEX_GATEWAY_JSON_FLAG` | `--experimental-json` | JSON mode flag |
+| `CODEX_GATEWAY_MAX_BODY_BYTES` | 1048576 | Max request size |
+| `CODEX_GATEWAY_MAX_CONCURRENT` | 2 | Max parallel runs |
+| `CODEX_GATEWAY_LOG_LEVEL` | 1 | Verbosity (0-3) |
+
+### Sessions
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CODEX_GATEWAY_SESSION_DIRS` | — | Session directories (comma-separated) |
+| `CODEX_GATEWAY_SECURE_SESSION_DIR` | `.codex-gateway-sessions/secure` | Secure session dir |
+| `CODEX_GATEWAY_SECURE_TOKEN` | — | Token for secure access |
+| `CODEX_GATEWAY_DEFAULT_TAIL_LINES` | 200 | Default log lines |
+| `CODEX_GATEWAY_MAX_TAIL_LINES` | 2000 | Max log lines |
+
+### Retries
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CODEX_GATEWAY_MAX_RETRIES` | 0 | Max retry attempts |
+| `CODEX_GATEWAY_RETRY_DELAY_MS` | 2000 | Base retry delay |
+| `CODEX_GATEWAY_RETRY_ON_EMPTY` | false | Retry on empty response |
+
+### Pass-through
+| Variable | Description |
+|----------|-------------|
+| `CODEX_SANDBOX_NETWORK_DISABLED` | Passed to Codex CLI |
+
+Full options in `scripts/codex_gateway.js`.
+
+---
+
+## CLI REPL
 
 Interactive helper for calling the gateway:
+
 ```bash
 python scripts/codex-repl.py http://localhost:4000
 ```
 
-Commands:
-- `run <prompt>` — call `/completion`
-- `list` — list sessions
-- `show <id> events|triggers` — fetch a session (with events or trigger extraction)
-- `search <id> <phrase> [--f]` — search a session
-- `prompt <id> <text>` — resume a session
-- `use <id>` — pin a session for subsequent runs
-- `timeout <seconds>` — adjust default timeout
-- `mode <full|compact>` — toggle compact output (shows reasoning/agent messages and command output)
-- `watch <keys...>` — in compact mode, also show these top-level response keys (e.g., `watch usage model`); `watch clear` to reset
-- `help`, `clear`, `exit|quit`
+**Commands:**
 
-Examples:
+| Command | Description |
+|---------|-------------|
+| `run <prompt>` | Call `/completion` |
+| `list` | List sessions |
+| `show <id> [events\|triggers]` | Fetch session details |
+| `search <id> <phrase> [--f]` | Search session (--f for fuzzy) |
+| `prompt <id> <text>` | Continue a session |
+| `use <id>` | Pin session for subsequent runs |
+| `timeout <seconds>` | Set default timeout |
+| `mode <full\|compact>` | Toggle output mode |
+| `watch <keys...>` | Show these keys in compact mode |
+| `watch clear` | Reset watched keys |
+| `setenv <KEY> <VALUE>` | Add/clear env overrides for future runs (`setenv clear` resets) |
+| `help` | Show help |
+| `clear` | Clear screen |
+| `exit` / `quit` | Exit |
+
+**Example session:**
 ```
 codex> mode compact
 codex> watch usage model
-codex> run hello world
+codex> setenv MY_VAR value
+codex> run list markdown files
+codex> use session-abc123
+codex> prompt continue with summaries
 ```
-Compact mode prints reasoning/agent messages (and command outputs) instead of full JSON; watched keys are shown as a summary.
+
+Compact mode prints reasoning/agent messages and command outputs instead of full JSON.

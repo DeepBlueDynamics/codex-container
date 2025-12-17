@@ -134,6 +134,8 @@ const WEBHOOK_STATUS = (() => {
   };
 })();
 
+let triggerSchedulerManager = null;
+
 // =============================================================================
 // Concurrency Limiter - Hard limit on concurrent Codex runs
 // Returns 429 (Too Many Requests) when at capacity instead of queuing forever
@@ -731,6 +733,80 @@ const EXTRA_TRIGGER_FILES = (process.env.CODEX_GATEWAY_TRIGGER_FILES || '')
   .map((entry) => entry.trim())
   .filter(Boolean)
   .map((entry) => path.resolve(entry));
+
+async function readTriggerConfig(triggerFile = DEFAULT_TRIGGER_FILE) {
+  const resolved = path.resolve(triggerFile || DEFAULT_TRIGGER_FILE);
+  try {
+    const raw = await fsp.readFile(resolved, 'utf8');
+    const parsed = JSON.parse(raw);
+    const triggers = Array.isArray(parsed.triggers) ? parsed.triggers : [];
+    return { config: { ...parsed, triggers }, file: resolved };
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return { config: { triggers: [] }, file: resolved };
+    }
+    throw error;
+  }
+}
+
+async function writeTriggerConfig(triggerFile, config) {
+  const resolved = path.resolve(triggerFile || DEFAULT_TRIGGER_FILE);
+  ensureDirSync(path.dirname(resolved));
+  const toWrite = {
+    ...config,
+    triggers: Array.isArray(config.triggers) ? config.triggers : [],
+    updated_at: config.updated_at || new Date().toISOString(),
+  };
+  await fsp.writeFile(resolved, `${JSON.stringify(toWrite, null, 2)}\n`, 'utf8');
+  return resolved;
+}
+
+function resolveTriggerFilePath(url) {
+  if (url && typeof url.searchParams === 'object') {
+    const override = url.searchParams.get('trigger_file') || url.searchParams.get('file');
+    if (override && override.trim().length > 0) {
+      return path.resolve(override.trim());
+    }
+  }
+  return DEFAULT_TRIGGER_FILE;
+}
+
+function buildNormalizedTrigger(entry = {}) {
+  const id = String(entry.id || entry.trigger_id || crypto.randomUUID());
+  const promptText = typeof entry.prompt_text === 'string' && entry.prompt_text.trim().length > 0
+    ? entry.prompt_text
+    : typeof entry.prompt === 'string'
+      ? entry.prompt
+      : '';
+  if (promptText.trim().length === 0) {
+    throw new Error(`Trigger ${id} missing prompt_text`);
+  }
+  const schedule = entry.schedule && typeof entry.schedule === 'object'
+    ? entry.schedule
+    : {};
+  const normalized = {
+    id,
+    title: typeof entry.title === 'string' && entry.title.trim().length > 0 ? entry.title.trim() : id,
+    description: typeof entry.description === 'string' ? entry.description : '',
+    schedule,
+    prompt_text: promptText,
+    created_at: entry.created_at || new Date().toISOString(),
+    enabled: entry.enabled !== false,
+    tags: Array.isArray(entry.tags) ? entry.tags : [],
+    last_fired: entry.last_fired || null,
+    gateway_session_id: entry.gateway_session_id || null,
+    system_prompt: typeof entry.system_prompt === 'string' ? entry.system_prompt : '',
+    env: entry.env && typeof entry.env === 'object' ? entry.env : null,
+    cwd: typeof entry.cwd === 'string' && entry.cwd.trim().length > 0 ? entry.cwd.trim() : null,
+    timeout_ms: entry.timeout_ms || entry.max_duration_ms || null,
+    idle_timeout_ms: entry.idle_timeout_ms || null,
+    last_status: entry.last_status || null,
+    last_error: entry.last_error || null,
+    last_attempt_at: entry.last_attempt_at || null,
+    overdue: Boolean(entry.overdue) || false,
+  };
+  return normalized;
+}
 
 class SessionStore {
   constructor(primaryDir, extraDirs = [], secureDir) {
@@ -2530,40 +2606,8 @@ class TriggerScheduler extends EventEmitter {
   }
 
   normalize(entry) {
-    const id = String(entry.id || entry.trigger_id || crypto.randomUUID());
-    const promptText = typeof entry.prompt_text === 'string' && entry.prompt_text.trim().length > 0
-      ? entry.prompt_text
-      : typeof entry.prompt === 'string'
-        ? entry.prompt
-        : '';
-    if (promptText.trim().length === 0) {
-      throw new Error(`Trigger ${id} missing prompt_text`);
-    }
-    const schedule = entry.schedule && typeof entry.schedule === 'object'
-      ? entry.schedule
-      : {};
-    const normalized = {
-      id,
-      title: typeof entry.title === 'string' && entry.title.trim().length > 0 ? entry.title.trim() : id,
-      description: typeof entry.description === 'string' ? entry.description : '',
-      schedule,
-      prompt_text: promptText,
-      created_at: entry.created_at || new Date().toISOString(),
-      enabled: entry.enabled !== false,
-      tags: Array.isArray(entry.tags) ? entry.tags : [],
-      last_fired: entry.last_fired || null,
-      gateway_session_id: entry.gateway_session_id || null,
-      system_prompt: typeof entry.system_prompt === 'string' ? entry.system_prompt : '',
-      env: entry.env && typeof entry.env === 'object' ? entry.env : null,
-      cwd: typeof entry.cwd === 'string' && entry.cwd.trim().length > 0 ? entry.cwd.trim() : null,
-      timeout_ms: entry.timeout_ms || entry.max_duration_ms || null,
-      idle_timeout_ms: entry.idle_timeout_ms || null,
-      last_status: entry.last_status || null,
-      last_error: entry.last_error || null,
-      last_attempt_at: entry.last_attempt_at || null,
-      overdue: Boolean(entry.overdue) || false,
-    };
-    this.triggers.set(id, normalized);
+    const normalized = buildNormalizedTrigger(entry);
+    this.triggers.set(normalized.id, normalized);
     return normalized;
   }
 
@@ -3259,8 +3303,136 @@ async function handleSessionNudge(req, res, sessionIdentifier, url) {
   }
 }
 
+async function handleTriggerList(req, res, url) {
+  const triggerFile = resolveTriggerFilePath(url);
+  try {
+    const { config, file } = await readTriggerConfig(triggerFile);
+    sendJson(res, 200, {
+      trigger_file: file,
+      triggers: config.triggers,
+    });
+  } catch (error) {
+    logger.error('trigger list error:', error.message);
+    sendError(res, 500, 'Unable to read trigger configuration');
+  }
+}
+
+async function handleTriggerCreate(req, res, url) {
+  const triggerFile = resolveTriggerFilePath(url);
+  const body = await readBody(req).catch((error) => {
+    logger.error('trigger create body error:', error.message);
+    return null;
+  });
+  if (body === null) {
+    sendError(res, 413, 'Payload too large');
+    return;
+  }
+  const parsed = safeJsonParse(body || '{}');
+  if (!parsed.ok) {
+    sendError(res, 400, 'Invalid JSON payload');
+    return;
+  }
+  let record;
+  try {
+    const input = parsed.value || {};
+    record = buildNormalizedTrigger(input);
+  } catch (error) {
+    sendError(res, 400, error.message);
+    return;
+  }
+
+  try {
+    const { config } = await readTriggerConfig(triggerFile);
+    if (config.triggers.some((existing) => existing.id === record.id)) {
+      sendError(res, 409, `Trigger '${record.id}' already exists`);
+      return;
+    }
+    config.triggers.push(record);
+    config.updated_at = new Date().toISOString();
+    await writeTriggerConfig(triggerFile, config);
+    await triggerSchedulerManager?.refreshSchedulers();
+    sendJson(res, 201, { trigger: record });
+  } catch (error) {
+    logger.error('trigger create error:', error.message);
+    sendError(res, 500, 'Failed to persist trigger');
+  }
+}
+
+async function handleTriggerUpdate(req, res, url, triggerId) {
+  if (!triggerId) {
+    sendError(res, 400, 'Trigger ID is required');
+    return;
+  }
+  const triggerFile = resolveTriggerFilePath(url);
+  const body = await readBody(req).catch((error) => {
+    logger.error('trigger update body error:', error.message);
+    return null;
+  });
+  if (body === null) {
+    sendError(res, 413, 'Payload too large');
+    return;
+  }
+  const parsed = safeJsonParse(body || '{}');
+  if (!parsed.ok) {
+    sendError(res, 400, 'Invalid JSON payload');
+    return;
+  }
+  const patch = parsed.value || {};
+  try {
+    const { config } = await readTriggerConfig(triggerFile);
+    const index = config.triggers.findIndex((entry) => entry.id === triggerId);
+    if (index === -1) {
+      sendError(res, 404, `Trigger '${triggerId}' not found`);
+      return;
+    }
+    const existing = config.triggers[index];
+    const merged = {
+      ...existing,
+      ...patch,
+      id: existing.id,
+      created_at: existing.created_at,
+    };
+    const normalized = buildNormalizedTrigger(merged);
+    normalized.last_fired = merged.last_fired || existing.last_fired || null;
+    normalized.last_attempt_at = merged.last_attempt_at || existing.last_attempt_at || null;
+    normalized.last_status = merged.last_status || existing.last_status || null;
+    normalized.last_error = merged.last_error || existing.last_error || null;
+    config.triggers[index] = normalized;
+    config.updated_at = new Date().toISOString();
+    await writeTriggerConfig(triggerFile, config);
+    await triggerSchedulerManager?.refreshSchedulers();
+    sendJson(res, 200, { trigger: normalized });
+  } catch (error) {
+    logger.error('trigger update error:', error.message);
+    sendError(res, 500, 'Failed to update trigger');
+  }
+}
+
+async function handleTriggerDelete(req, res, url, triggerId) {
+  if (!triggerId) {
+    sendError(res, 400, 'Trigger ID is required');
+    return;
+  }
+  const triggerFile = resolveTriggerFilePath(url);
+  try {
+    const { config } = await readTriggerConfig(triggerFile);
+    const filtered = config.triggers.filter((entry) => entry.id !== triggerId);
+    if (filtered.length === config.triggers.length) {
+      sendError(res, 404, `Trigger '${triggerId}' not found`);
+      return;
+    }
+    config.triggers = filtered;
+    config.updated_at = new Date().toISOString();
+    await writeTriggerConfig(triggerFile, config);
+    await triggerSchedulerManager?.refreshSchedulers();
+    sendJson(res, 200, { trigger_id: triggerId });
+  } catch (error) {
+    logger.error('trigger delete error:', error.message);
+    sendError(res, 500, 'Failed to delete trigger');
+  }
+}
+
 if (require.main === module) {
-  let triggerSchedulerManager = null;
   if (!DISABLE_TRIGGER_SCHEDULER) {
     triggerSchedulerManager = new TriggerSchedulerManager({
       defaultFile: DEFAULT_TRIGGER_FILE,
@@ -3376,6 +3548,31 @@ if (require.main === module) {
           await handleSessionNudge(req, res, sessionId, url);
           return;
         }
+      }
+
+      if (segments.length >= 1 && segments[0] === 'triggers') {
+        const triggerId = segments.length >= 2 ? decodeURIComponent(segments[1]) : null;
+        if (segments.length === 1) {
+          if (method === 'GET') {
+            await handleTriggerList(req, res, url);
+            return;
+          }
+          if (method === 'POST') {
+            await handleTriggerCreate(req, res, url);
+            return;
+          }
+        } else if (segments.length === 2) {
+          if (method === 'PATCH' || method === 'PUT') {
+            await handleTriggerUpdate(req, res, url, triggerId);
+            return;
+          }
+          if (method === 'DELETE') {
+            await handleTriggerDelete(req, res, url, triggerId);
+            return;
+          }
+        }
+        sendError(res, 405, 'Unsupported trigger method');
+        return;
       }
 
       sendError(res, 404, 'Not Found');
