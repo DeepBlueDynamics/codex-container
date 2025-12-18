@@ -204,52 +204,12 @@ ensure_codex_api_key() {
 }
 
 ensure_codex_env_policy() {
-  local config_dir="/opt/codex-home/.codex"
-  local config_path="${config_dir}/config.toml"
-  local mcp_python="/opt/mcp-venv/bin/python3"
-
-  if [[ "${CODEX_UNSAFE_ALLOW_NO_SANDBOX:-}" != "1" ]]; then
-    return
-  fi
-
-  if [[ ! -x "$mcp_python" ]]; then
-    echo "[codex_entry] MCP python not found; skipping env policy update" >&2
-    return
-  fi
-
-  # Use danger-full-access when CODEX_UNSAFE_ALLOW_NO_SANDBOX is set
-  if ! "$mcp_python" - <<'PY'
-from pathlib import Path
-
-import tomlkit
-
-config_path = Path("/opt/codex-home/.codex/config.toml")
-config_path.parent.mkdir(parents=True, exist_ok=True)
-
-if config_path.exists():
-    doc = tomlkit.parse(config_path.read_text(encoding="utf-8"))
-else:
-    doc = tomlkit.document()
-
-# Use danger-full-access to completely bypass sandbox
-# This ensures CODEX_SANDBOX_NETWORK_DISABLED=1 is NOT injected
-doc["sandbox_mode"] = "danger-full-access"
-
-# Also set approval_policy to never for full automation
-doc["approval_policy"] = "never"
-
-# Keep shell_environment_policy for env var passthrough
-shell_env = doc.get("shell_environment_policy")
-if shell_env is None or not isinstance(shell_env, tomlkit.items.Table):
-    shell_env = tomlkit.table()
-    doc["shell_environment_policy"] = shell_env
-shell_env["inherit"] = "all"
-shell_env["ignore_default_excludes"] = True
-
-config_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
-PY
-  then
-    echo "[codex_entry] Failed to update Codex env policy in config.toml" >&2
+  # Previously wrote sandbox config to /opt/codex-home/.codex/config.toml.
+  # We now rely on per-run flags/env only to avoid persisting danger mode.
+  if [[ "${CODEX_UNSAFE_ALLOW_NO_SANDBOX:-}" == "1" ]]; then
+    echo "[codex_entry] Danger mode: using per-run flags only (no config patch)" >&2
+  else
+    echo "[codex_entry] Safe mode: using default config (no config patch)" >&2
   fi
 }
 
