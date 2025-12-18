@@ -18,6 +18,10 @@ const CODEX_JSON_FLAG = process.env.CODEX_GATEWAY_JSON_FLAG || '--experimental-j
 const EXTRA_ARGS = (process.env.CODEX_GATEWAY_EXTRA_ARGS || '')
   .split(/\s+/)
   .filter(Boolean);
+const DANGER_CONFIG_OVERRIDES = [
+  'shell_environment_policy.inherit=all',
+  'shell_environment_policy.ignore_default_excludes=true'
+];
 const CODEX_HOME_PATH = process.env.CODEX_GATEWAY_CODEX_HOME
   || process.env.CODEX_HOME
   || process.env.HOME
@@ -683,6 +687,41 @@ function parseBoolean(value) {
   return false;
 }
 
+function isDangerMode() {
+  return parseBoolean(process.env.CODEX_UNSAFE_ALLOW_NO_SANDBOX);
+}
+
+function collectConfigOverrides(args) {
+  if (!isDangerMode()) {
+    return [];
+  }
+  const seenKeys = new Set();
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '-c' || arg === '--config') {
+      const value = args[i + 1];
+      if (typeof value === 'string' && value.includes('=')) {
+        seenKeys.add(value.split('=')[0]);
+      }
+      continue;
+    }
+    if (typeof arg === 'string' && arg.startsWith('-c=')) {
+      const value = arg.slice(3);
+      if (value.includes('=')) {
+        seenKeys.add(value.split('=')[0]);
+      }
+    }
+  }
+  const overrides = [];
+  for (const entry of DANGER_CONFIG_OVERRIDES) {
+    const key = entry.split('=')[0];
+    if (!seenKeys.has(key)) {
+      overrides.push('-c', entry);
+    }
+  }
+  return overrides;
+}
+
 function buildEnvSnapshot() {
   return {
     CODEX_UNSAFE_ALLOW_NO_SANDBOX: process.env.CODEX_UNSAFE_ALLOW_NO_SANDBOX || '<unset>',
@@ -1244,7 +1283,10 @@ class SessionWorker extends EventEmitter {
   }
 
   buildArgs(meta) {
-    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
+    const args = ['exec'];
+    if (isDangerMode()) {
+      args.push('--dangerously-bypass-approvals-and-sandbox');
+    }
     if (CODEX_JSON_FLAG && CODEX_JSON_FLAG.trim().length > 0) {
       args.push(CODEX_JSON_FLAG.trim());
     }
@@ -1255,6 +1297,7 @@ class SessionWorker extends EventEmitter {
     if (Array.isArray(EXTRA_ARGS) && EXTRA_ARGS.length > 0) {
       args.push(...EXTRA_ARGS);
     }
+    args.push(...collectConfigOverrides(args));
     args.push('-');
     return args;
   }
@@ -1598,7 +1641,7 @@ function buildRunOptions(payload, meta) {
 
 async function runCodex(prompt, model, options = {}) {
   const args = ['exec'];
-  if (parseBoolean(process.env.CODEX_UNSAFE_ALLOW_NO_SANDBOX) !== false) {
+  if (isDangerMode()) {
     args.push('--dangerously-bypass-approvals-and-sandbox');
   }
   if (CODEX_JSON_FLAG && CODEX_JSON_FLAG.trim().length > 0) {
@@ -1611,6 +1654,7 @@ async function runCodex(prompt, model, options = {}) {
   if (Array.isArray(EXTRA_ARGS) && EXTRA_ARGS.length > 0) {
     args.push(...EXTRA_ARGS);
   }
+  args.push(...collectConfigOverrides(args));
   if (options.resumeSessionId) {
     args.push('resume', options.resumeSessionId);
   }

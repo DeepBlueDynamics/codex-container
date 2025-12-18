@@ -203,6 +203,56 @@ ensure_codex_api_key() {
   fi
 }
 
+ensure_codex_env_policy() {
+  local config_dir="/opt/codex-home/.codex"
+  local config_path="${config_dir}/config.toml"
+  local mcp_python="/opt/mcp-venv/bin/python3"
+
+  if [[ "${CODEX_UNSAFE_ALLOW_NO_SANDBOX:-}" != "1" ]]; then
+    return
+  fi
+
+  if [[ ! -x "$mcp_python" ]]; then
+    echo "[codex_entry] MCP python not found; skipping env policy update" >&2
+    return
+  fi
+
+  # Use danger-full-access when CODEX_UNSAFE_ALLOW_NO_SANDBOX is set
+  if ! "$mcp_python" - <<'PY'
+from pathlib import Path
+
+import tomlkit
+
+config_path = Path("/opt/codex-home/.codex/config.toml")
+config_path.parent.mkdir(parents=True, exist_ok=True)
+
+if config_path.exists():
+    doc = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+else:
+    doc = tomlkit.document()
+
+# Use danger-full-access to completely bypass sandbox
+# This ensures CODEX_SANDBOX_NETWORK_DISABLED=1 is NOT injected
+doc["sandbox_mode"] = "danger-full-access"
+
+# Also set approval_policy to never for full automation
+doc["approval_policy"] = "never"
+
+# Keep shell_environment_policy for env var passthrough
+shell_env = doc.get("shell_environment_policy")
+if shell_env is None or not isinstance(shell_env, tomlkit.items.Table):
+    shell_env = tomlkit.table()
+    doc["shell_environment_policy"] = shell_env
+shell_env["inherit"] = "all"
+shell_env["ignore_default_excludes"] = True
+
+config_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+PY
+  then
+    echo "[codex_entry] Failed to update Codex env policy in config.toml" >&2
+  fi
+}
+
 ensure_baml_workspace() {
   local workspace="${BAML_WORKSPACE:-/opt/baml-workspace}"
   if [[ -z "${workspace}" ]]; then
@@ -239,10 +289,19 @@ fi
 # This keeps Whisper model loaded and avoids reloading on every Codex run
 
 # Handle --dangerously-bypass-approvals-and-sandbox flag
-if [[ "$1" == "--dangerously-bypass-approvals-and-sandbox" ]]; then
+# We need to:
+# 1. Set env vars for other scripts/processes
+# 2. Preserve the flag to pass to codex CLI
+CODEX_DANGER_FLAG=""
+if [[ "${1:-}" == "--dangerously-bypass-approvals-and-sandbox" ]]; then
   export CODEX_UNSAFE_ALLOW_NO_SANDBOX=1
+  export CODEX_SANDBOX_NETWORK_DISABLED=0
+  CODEX_DANGER_FLAG="--dangerously-bypass-approvals-and-sandbox"
+  echo "[codex_entry] Danger mode enabled (sandbox bypass)" >&2
   shift
 fi
+
+ensure_codex_env_policy
 
 # Allow the Docker CLI to pass "--" as a separator without providing a command.
 if [[ "$#" -eq 0 ]]; then
@@ -254,4 +313,22 @@ elif [[ "$1" == "--" ]]; then
   fi
 fi
 
-exec "$@"
+# If danger mode is enabled and we're running codex, inject the flag
+if [[ -n "$CODEX_DANGER_FLAG" ]]; then
+  # Check if the command is 'codex' (could be first arg or after path resolution)
+  case "$1" in
+    codex|*/codex)
+      # Insert the danger flag right after 'codex'
+      cmd="$1"
+      shift
+      echo "[codex_entry] Executing: $cmd $CODEX_DANGER_FLAG $*" >&2
+      exec "$cmd" "$CODEX_DANGER_FLAG" "$@"
+      ;;
+    *)
+      # Not codex, just run normally (env vars are already set)
+      exec "$@"
+      ;;
+  esac
+else
+  exec "$@"
+fi

@@ -148,7 +148,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $PSBoundParameters.ContainsKey('Danger')) {
-    $Danger = $true
+    $Danger = $false
 }
 
 if ($OssModel) {
