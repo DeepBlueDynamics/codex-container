@@ -22,6 +22,7 @@ CODEX_CHAR_DIR = "/workspace/characters"
 env_imports = [
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
+  "GOOGLE_API_KEY",
   "GH_TOKEN",
   "GITHUB_TOKEN",
   "OSS_API_KEY",

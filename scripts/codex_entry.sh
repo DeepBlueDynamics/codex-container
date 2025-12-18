@@ -315,8 +315,11 @@ if [[ -n "$CODEX_DANGER_FLAG" ]]; then
       # Insert the danger flag right after 'codex'
       cmd="$1"
       shift
-      echo "[codex_entry] Executing: $cmd $CODEX_DANGER_FLAG $*" >&2
-      exec "$cmd" "$CODEX_DANGER_FLAG" "$@"
+      echo "[codex_entry] Executing: $cmd $CODEX_DANGER_FLAG (with env passthrough) $*" >&2
+      exec "$cmd" "$CODEX_DANGER_FLAG" \
+        -c shell_environment_policy.inherit=all \
+        -c shell_environment_policy.ignore_default_excludes=true \
+        "$@"
       ;;
     *)
       # Not codex, just run normally (env vars are already set)

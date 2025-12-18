@@ -991,6 +991,9 @@ $logFile = Join-Path $logDir "build-$timestamp.log"
     $buildArgs = @(
         'build'
     )
+    # Enable BuildKit (avoids legacy deprecation noise) and force plain output for logging
+    if (-not $env:DOCKER_BUILDKIT) { $env:DOCKER_BUILDKIT = "1" }
+    $buildArgs += '--progress=plain'
     if ($NoCache) {
         $buildArgs += '--no-cache'
     }
@@ -1004,8 +1007,14 @@ $logFile = Join-Path $logDir "build-$timestamp.log"
     Write-Host "[build] $buildCommand" -ForegroundColor DarkGray
     Add-Content -Path $logFile -Value "[build] $buildCommand" -Encoding UTF8
 
-    docker @buildArgs 2>&1 | Tee-Object -FilePath $logFile -Append
-    $buildExitCode = $LASTEXITCODE
+    $previousEAP = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'  # Let docker stderr (warnings) flow without terminating
+        docker @buildArgs *>&1 | Tee-Object -FilePath $logFile -Append
+        $buildExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousEAP
+    }
 
     if ($buildExitCode -ne 0) {
         throw "docker build failed with exit code $buildExitCode. See $logFile for details."
