@@ -74,23 +74,25 @@ pwsh ./scripts/gnosis-container.ps1 -Serve -GatewayPort 4000
 .\scripts\gnosis-container.ps1 -Exec "list markdown files"
 
 # serve HTTP gateway on port 4000 (POST /completion)
-.\scripts\gnosis-container.ps1 -Serve -GatewayPort 4000
+# -Danger bypasses approval prompts and enables danger-full-access sandbox for unrestricted shell execution
+.\scripts\gnosis-container.ps1 -Serve -GatewayPort 4000 -Danger
 
 # gateway file watcher (preferred in serve mode)
 $env:CODEX_GATEWAY_WATCH_PATHS = 'temp'
 $env:CODEX_GATEWAY_WATCH_PROMPT_FILE = '.\\MONITOR.md'
-.\scripts\gnosis-container.ps1 -Serve -GatewayPort 4000
+.\scripts\gnosis-container.ps1 -Serve -GatewayPort 4000 -Danger
 ```
 
 ### macOS / Linux (PowerShell Core via `pwsh`)
 ```bash
 pwsh ./scripts/gnosis-container.ps1 -Install
 pwsh ./scripts/gnosis-container.ps1 -Exec "list markdown files"
-pwsh ./scripts/gnosis-container.ps1 -Serve -GatewayPort 4000
-pwsh ./scripts/gnosis-container.ps1 -Monitor -WatchPath ./recordings
+# -Danger bypasses approval prompts and enables danger-full-access sandbox for unrestricted shell execution
+pwsh ./scripts/gnosis-container.ps1 -Serve -GatewayPort 4000 -Danger
+pwsh ./scripts/gnosis-container.ps1 -Monitor -WatchPath ./recordings -Danger
 CODEX_GATEWAY_WATCH_PATHS=./temp \
   CODEX_GATEWAY_WATCH_PROMPT_FILE=./MONITOR.md \
-  pwsh ./scripts/gnosis-container.ps1 -Serve -GatewayPort 4000
+  pwsh ./scripts/gnosis-container.ps1 -Serve -GatewayPort 4000 -Danger
 ```
 Use paths like `temp` (or `/workspace/temp`) instead of `./temp` when running on Windows PowerShell because of watcher semantics.
 
@@ -125,7 +127,7 @@ Default mode (no extra switches) runs a single prompt with sandboxed permissions
 # elevated run (danger + privileged)
 .\scripts\gnosis-container.ps1 -Exec "read /opt/codex-home" -Danger -Privileged
 ```
-Use `-SessionId` (or `--session-id`) to resume. `-Danger` removes approval/sandbox prompts, and `-Privileged` runs the Docker container with `--privileged` (needed for file watchers or device access). Pair them only when you intentionally want full access.
+Use `-SessionId` (or `--session-id`) to resume. `-Danger` bypasses Codex approval prompts and enables unrestricted shell execution. `-Privileged` runs the Docker container with `--privileged` for device/filesystem access. Network access is available by default. Use `-Danger` and `-Privileged` together only when you need both unrestricted Codex sandbox AND Docker privileged mode.
 
 ### 2. API Gateway (`/completion`)
 Expose Codex over HTTP:
@@ -156,9 +158,10 @@ Use the `monitor-scheduler.*` MCP tools (`create_trigger`, `toggle_trigger`, etc
 - Override model: `--model <name>` (implies `--oss`) or `--codex-model <name>` (hosted). Env vars honored: `OSS_SERVER_URL`, `OLLAMA_HOST`, `OSS_API_KEY`, `CODEX_DEFAULT_MODEL`.
 
 ## Safety & security levels
-- **Default (sandboxed)**: No extra flags. Codex runs with workspace-write permissions, network allowed only inside Codex sandbox. Safe for automation.
-- **Danger mode (`-Danger`)**: Adds `CODEX_GATEWAY_EXTRA_ARGS=--sandbox danger-full-access` and `--dangerously-bypass-approvals-and-sandbox` when launching Codex. Use when you need unrestricted shell execution inside Codex.
-- **Privileged container (`-Privileged`)**: Runs Docker with `--privileged` so the container can watch host files/devices (needed for some file-watchers or specialized hardware access). Combine with `-Danger` only if you fully trust the prompt.
+- **Default (sandboxed)**: No extra flags. Codex runs with workspace-write permissions. Network access is available by default (container uses `--network codex-network`). Codex's internal sandbox may require approval for certain operations. Safe for automation.
+- **Danger mode (`-Danger`)**: Bypasses Codex approval prompts and sets `--sandbox danger-full-access` for unrestricted shell execution inside Codex. Use when you need unrestricted shell access. Note: Network access is available with or without this flag.
+- **Privileged container (`-Privileged`)**: Runs Docker with `--privileged` so the container can access host devices and use advanced file system features (needed for some file-watchers or specialized hardware access). This is separate from `-Danger` and controls Docker container privileges, not Codex sandbox behavior.
+- **Environment variable forwarding**: Use `env_imports` in `.codex-container.toml` to forward specific host environment variables into the container. Only variables listed in `env_imports` and present on the host will be forwarded (works with or without `-Danger`).
 - Allow/deny lists per tool; crawl depth/size/time caps; per-domain caps; rate/concurrency caps.
 - Logs and session history; trigger file with `last_fired`; backups/diffs via gnosis-files-diff.
 - Workspace-scoped tool config via `.codex-mcp.config` (one filename per line). Default lives in the image; override per workspace at `/workspace/.codex-mcp.config`.
