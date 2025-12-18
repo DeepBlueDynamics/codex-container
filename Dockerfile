@@ -69,7 +69,7 @@ RUN mkdir -p /usr/local/share/npm-global \
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH="${PATH}:/usr/local/share/npm-global/bin"
 
-ARG CODEX_CLI_VERSION=0.72.0
+ARG CODEX_CLI_VERSION=0.73.0
 ARG BAML_CLI_VERSION=0.211.2
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} \
   && npm cache clean --force \

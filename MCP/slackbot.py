@@ -36,7 +36,8 @@ logger = logging.getLogger("slackbot")
 mcp = FastMCP("slackbot")
 
 # Service URL - can be overridden via environment variable
-DEFAULT_API_URL = "http://localhost:8765"
+# Default service hostname for in-cluster resolution; override via SLACKBOT_API_URL if needed
+DEFAULT_API_URL = "http://gnosis-slackbot:8765"
 API_URL = os.getenv("SLACKBOT_API_URL", DEFAULT_API_URL)
 
 

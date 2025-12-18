@@ -20,7 +20,8 @@
 │  That's it. Everything else is just configuration.              │
 │                                                                 │
 │  SANDBOXED (default)     →  Safe. Workspace access only.        │
-│  -Privileged             →  Full shell access. AI goes wild.    │
+│  -Danger                 →  Bypasses approvals, full shell.     │
+│  -Privileged             →  Docker privileged mode.             │
 │  -Serve                  →  HTTP API. Other systems call in.    │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -31,7 +32,7 @@
 |------|---------|--------------|
 | **CLI** | `pwsh ./scripts/gnosis-container.ps1 -Exec "do something"` | One-shot prompt, exits when done |
 | **API** | `pwsh ./scripts/gnosis-container.ps1 -Serve -GatewayPort 4000` | HTTP server, each POST spawns a Codex run |
-| **Full power** | `pwsh ./scripts/gnosis-container.ps1 -Privileged` | Container gets `--privileged`, AI controls real shell |
+| **Full power** | `pwsh ./scripts/gnosis-container.ps1 -Danger -Privileged` | Unrestricted Codex sandbox + Docker privileged mode |
 
 ---
 
@@ -68,7 +69,7 @@ pwsh ./scripts/gnosis-container.ps1 -Exec "list all markdown files and summarize
 
 **Want the AI to have real power?**
 ```powershell
-pwsh ./scripts/gnosis-container.ps1 -Privileged
+pwsh ./scripts/gnosis-container.ps1 -Danger -Privileged
 ```
 
 ```
@@ -85,7 +86,7 @@ pwsh ./scripts/gnosis-container.ps1 -Privileged
     2 packets transmitted, 2 received, 0% packet loss, time 999ms
 ```
 
-That's it. Now the container runs with Docker's `--privileged` flag and the AI can do dangerous things in the shell it controls.
+That's it. Now the container runs with Docker's `--privileged` flag and unrestricted Codex sandbox, so the AI can do dangerous things.
 
 ---
 
@@ -148,10 +149,14 @@ pwsh ./scripts/gnosis-container.ps1 -Exec "install dependencies and run tests" -
 
 | Flag | Effect |
 |------|--------|
-| `-Danger` | Removes Codex sandbox/approval prompts. Adds `--dangerously-bypass-approvals-and-sandbox` when launching Codex. |
-| `-Privileged` | Runs Docker with `--privileged` (needed for file watchers or device access) |
+| `-Danger` | Bypasses Codex approval prompts and enables `danger-full-access` sandbox for unrestricted shell execution. Also auto-enables `-Privileged` for DNS/network compatibility (especially Windows). |
+| `-Privileged` | Runs Docker with `--privileged` mode (needed for file watchers, device access, and Windows DNS resolution). |
 
-Combine both when you want the AI to have unrestricted access. Pair them only when you fully trust the prompt.
+**Network access:** Available by default via `--network codex-network`. The `-Danger` flag controls Codex's *internal sandbox*, not network access.
+
+**Environment variables:** Use `env_imports` in `.codex-container.toml` to forward specific host environment variables into the container. Only variables listed in `env_imports` and present on the host will be forwarded (works with or without `-Danger`).
+
+Combine both `-Danger` and `-Privileged` when you want unrestricted access. Use only when you fully trust the prompt.
 
 ### 2. API Gateway — HTTP interface
 
@@ -231,9 +236,9 @@ workspace/
 
 | Level | Flags | What the AI can do |
 |-------|-------|-------------------|
-| **Sandboxed** | *(default)* | Write to workspace, network inside sandbox only. Safe for automation. |
-| **Danger** | `-Danger` | Unrestricted shell inside Codex, no approval prompts |
-| **Privileged** | `-Privileged` | Docker `--privileged` — host file/device access |
+| **Sandboxed** | *(default)* | Write to workspace, network available via `--network codex-network`. Codex may require approval for shell commands. Safe for automation. |
+| **Danger** | `-Danger` | Unrestricted shell inside Codex, no approval prompts. Auto-enables `-Privileged` for compatibility. |
+| **Privileged** | `-Privileged` | Docker `--privileged` mode — host file/device access, needed for Windows DNS resolution. |
 | **Full power** | `-Danger -Privileged` | Everything. Use only when you trust the prompt completely. |
 
 **Additional safety levers:**
@@ -329,7 +334,7 @@ Env vars: `OSS_SERVER_URL`, `OLLAMA_HOST`, `OSS_API_KEY`, `CODEX_DEFAULT_MODEL`.
 | `-Serve` | Start HTTP gateway |
 | `-GatewayPort N` | Port for gateway (default 4000) |
 | `-Privileged` | Docker `--privileged` mode |
-| `-Danger` | Bypass Codex sandbox/approvals |
+| `-Danger` | Bypass Codex sandbox/approvals (auto-enables `-Privileged`) |
 | `-Oss` | Use local/Ollama models |
 | `-Model name` | Specific model (implies `-Oss`) |
 | `-CodexModel name` | Hosted model override |

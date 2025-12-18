@@ -159,7 +159,13 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $PSBoundParameters.ContainsKey('Danger')) {
-    $Danger = $true
+    $Danger = $false
+}
+
+# When Danger mode is explicitly enabled, also enable Privileged unless explicitly set
+if ($Danger -and -not $PSBoundParameters.ContainsKey('Privileged')) {
+    $Privileged = $true
+    Write-Host "Danger mode enabled - automatically enabling Privileged mode" -ForegroundColor Yellow
 }
 
 if ($OssModel) {
@@ -351,6 +357,8 @@ function Read-ProjectConfig {
 
     $envTable = @{}
     $envImports = @()
+    $inEnvImports = $false
+    $envImportBuffer = @()
     $mounts = @()
     $tools = @()
     $inEnv = $false
@@ -367,10 +375,31 @@ function Read-ProjectConfig {
         if ($inEnv -and $trim -match '^(?<k>[A-Za-z0-9_]+)\s*=\s*\"(?<v>[^\"]*)\"') {
             $envTable[$matches['k']] = $matches['v']
         }
-        if ($trim -match '^env_imports\s*=\s*\[(?<arr>.*)\]') {
-            $arr = $matches['arr']
-            $parts = $arr -split ',' | ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ }
-            $envImports += $parts
+        # Multiline-friendly env_imports parsing
+        if (-not $inEnvImports -and $trim -match '^env_imports\s*=\s*\[(?<rest>.*)$') {
+            $inEnvImports = $true
+            $envImportBuffer = @()
+            if ($matches['rest']) {
+                $envImportBuffer += $matches['rest']
+            }
+            if ($trim -match '\]') {
+                $inEnvImports = $false
+                $joined = ($envImportBuffer -join ' ')
+                $joined = $joined -replace '^\[','' -replace '\]$',''
+                $parts = $joined -split ',' | ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ }
+                $envImports += $parts
+            }
+            continue
+        }
+        if ($inEnvImports) {
+            $envImportBuffer += $trim
+            if ($trim -match '\]') {
+                $inEnvImports = $false
+                $joined = ($envImportBuffer -join ' ')
+                $joined = $joined -replace '^\[','' -replace '\]$',''
+                $parts = $joined -split ',' | ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ }
+                $envImports += $parts
+            }
         }
         if ($trim -match '^mounts\s*=\s*\[(?<arr>.*)\]') {
             $arr = $matches['arr']

@@ -148,7 +148,13 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if (-not $PSBoundParameters.ContainsKey('Danger')) {
-    $Danger = $true
+    $Danger = $false
+}
+
+# When Danger mode is explicitly enabled, also enable Privileged unless explicitly set
+if ($Danger -and -not $PSBoundParameters.ContainsKey('Privileged')) {
+    $Privileged = $true
+    Write-Host "Danger mode enabled - automatically enabling Privileged mode" -ForegroundColor Yellow
 }
 
 if ($OssModel) {
