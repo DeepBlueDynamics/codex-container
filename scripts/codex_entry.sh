@@ -204,13 +204,47 @@ ensure_codex_api_key() {
 }
 
 ensure_codex_env_policy() {
-  # Previously wrote sandbox config to /opt/codex-home/.codex/config.toml.
-  # We now rely on per-run flags/env only to avoid persisting danger mode.
+  local mcp_python="/opt/mcp-venv/bin/python3"
+
+  # In danger mode, do nothing - CLI flag handles everything
   if [[ "${CODEX_UNSAFE_ALLOW_NO_SANDBOX:-}" == "1" ]]; then
-    echo "[codex_entry] Danger mode: using per-run flags only (no config patch)" >&2
-  else
-    echo "[codex_entry] Safe mode: using default config (no config patch)" >&2
+    return
   fi
+
+  # Safe mode: remove any conflicting danger settings from config
+  [[ -x "$mcp_python" ]] || return
+
+  "$mcp_python" - <<'PY'
+from pathlib import Path
+import tomlkit
+
+config_path = Path("/opt/codex-home/.codex/config.toml")
+if not config_path.exists():
+    exit(0)
+
+doc = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+changed = False
+
+# Remove danger-mode sandbox setting
+if doc.get("sandbox_mode") == "danger-full-access":
+    del doc["sandbox_mode"]
+    changed = True
+
+# Remove auto-approve setting
+if doc.get("approval_policy") == "never":
+    del doc["approval_policy"]
+    changed = True
+
+# Remove env passthrough settings
+shell_env = doc.get("shell_environment_policy")
+if shell_env and shell_env.get("ignore_default_excludes") == True:
+    del doc["shell_environment_policy"]
+    changed = True
+
+if changed:
+    config_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    print("[codex_entry] Removed conflicting danger-mode settings from config", flush=True)
+PY
 }
 
 ensure_baml_workspace() {
