@@ -37,7 +37,9 @@ RESOLVED_SYSTEM_PROMPT_CONTAINER_PATH=""
 NEW_SESSION=false
 SESSION_ID=""
 TRANSCRIPTION_SERVICE_URL="http://host.docker.internal:8765"
-DANGER_MODE=1
+DANGER_MODE=0
+PRIVILEGED_MODE=0
+PRIVILEGED_MODE_EXPLICIT=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -111,6 +113,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --safe|--no-danger|--no-dangerously-bypass-approvals-and-sandbox)
       DANGER_MODE=0
+      shift
+      ;;
+    --privileged)
+      PRIVILEGED_MODE=1
+      PRIVILEGED_MODE_EXPLICIT=1
       shift
       ;;
     --tag)
@@ -313,6 +320,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# When Danger mode is explicitly enabled, also enable Privileged unless explicitly set
+if [[ $DANGER_MODE -eq 1 && $PRIVILEGED_MODE_EXPLICIT -eq 0 ]]; then
+  PRIVILEGED_MODE=1
+  echo "Danger mode enabled - automatically enabling Privileged mode" >&2
+fi
 
 if [[ -z "$ACTION" ]]; then
   ACTION="run"
@@ -823,6 +836,9 @@ docker_run() {
   fi
 
   local -a args=(run --rm)
+  if [[ $PRIVILEGED_MODE -eq 1 ]]; then
+    args+=(--privileged)
+  fi
   if [[ $quiet -eq 1 ]]; then
     args+=(-i)
   else
