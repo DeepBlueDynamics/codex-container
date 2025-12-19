@@ -104,6 +104,16 @@ That's it. Now the container runs with Docker's `--privileged` flag and unrestri
 
 ---
 
+## Session Recording (asciinema)
+
+- Record: `pwsh ./scripts/gnosis-container.ps1 -Exec "<prompt>" -Record` (optional `-RecordDir <path>`)
+- List recordings: `pwsh ./scripts/gnosis-container.ps1 -ListRecordings`
+- Play: `pwsh ./scripts/gnosis-container.ps1 -PlayRecording codex-session-YYYYMMDD-HHMMSS.cast` (uses the codex image; no host asciinema needed)
+- Upload to asciinema.org: `pwsh ./scripts/gnosis-container.ps1 -UploadRecording codex-session-YYYYMMDD-HHMMSS.cast` (sanitizes header env for validation)
+- Files live in `.asciinema/` at the workspace root (git-ignored).
+
+---
+
 ## What's Inside
 
 | Capability | What it does |
