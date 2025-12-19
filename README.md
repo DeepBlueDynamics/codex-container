@@ -8,6 +8,10 @@
 
 > **An AI agent in a box.** One script launches a Docker container where Codex has access to 272 tools, can schedule its own runs, spawn sub-agents, crawl the web, watch files, and execute shell commands. You control how much power it gets.
 
+Quick demo (asciinema):
+
+[![asciicast](https://asciinema.org/a/aO32uIY4lgjDTUb4LhOSHi2aa.svg)](https://asciinema.org/a/aO32uIY4lgjDTUb4LhOSHi2aa)
+
 ---
 
 ## The Simple Mental Model
@@ -49,6 +53,16 @@ pwsh ./scripts/gnosis-container.ps1 -Install
 
 # 3. Run it
 pwsh ./scripts/gnosis-container.ps1 -Exec "list all markdown files and summarize them"
+
+# (Optional) Record Codex sessions
+# Add -Record to capture an asciinema cast in .asciinema/
+pwsh ./scripts/gnosis-container.ps1 -Exec "do something interesting" -Record
+# List recordings (host-side helper):
+pwsh ./scripts/gnosis-container.ps1 -ListRecordings
+# Play a recording (uses the codex image with asciinema installed):
+pwsh ./scripts/gnosis-container.ps1 -PlayRecording codex-session-YYYYMMDD-HHMMSS.cast
+# Upload a recording to asciinema.org (prints the URL):
+pwsh ./scripts/gnosis-container.ps1 -UploadRecording codex-session-YYYYMMDD-HHMMSS.cast
 ```
 
 **What you get:**

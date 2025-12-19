@@ -119,6 +119,9 @@ param(
     [switch]$Danger,
     [switch]$Record,
     [string]$RecordDir,
+    [switch]$ListRecordings,
+    [string]$PlayRecording,
+    [string]$UploadRecording,
     [int]$GatewayPort,
     [string]$GatewayHost,
     [int]$GatewayTimeoutMs,
@@ -1119,19 +1122,20 @@ function New-DockerRunArgs {
         if ($env:OSS_API_KEY) {
             $args += @('-e', "OSS_API_KEY=$($env:OSS_API_KEY)")
         }
-        if ($env:OSS_DISABLE_BRIDGE) {
-            $args += @('-e', "OSS_DISABLE_BRIDGE=$($env:OSS_DISABLE_BRIDGE)")
-        }
+    if ($env:OSS_DISABLE_BRIDGE) {
+        $args += @('-e', "OSS_DISABLE_BRIDGE=$($env:OSS_DISABLE_BRIDGE)")
     }
-    if ($TranscriptionServiceUrl) {
-        $args += @('-e', "TRANSCRIPTION_SERVICE_URL=$TranscriptionServiceUrl")
-    }
+}
+if ($TranscriptionServiceUrl) {
+    $args += @('-e', "TRANSCRIPTION_SERVICE_URL=$TranscriptionServiceUrl")
+}
     if ($AdditionalEnv) {
         foreach ($envPair in $AdditionalEnv) {
+            if (-not $envPair) { continue }
             $args += @('-e', $envPair)
         }
     }
-    if ($AdditionalArgs) {
+if ($AdditionalArgs) {
         $args += $AdditionalArgs
     }
     if ($Danger) {
@@ -1339,6 +1343,104 @@ function Get-RecordingEnv {
         }
     }
     return $envList
+}
+
+function Get-RecordingDir {
+    param($Context)
+    # Recordings live under the workspace root in .asciinema
+    return (Join-Path $Context.WorkspacePath '.asciinema')
+}
+
+function Sanitize-RecordingHeader {
+    param(
+        [string]$Path
+    )
+    if (-not (Test-Path $Path)) {
+        throw "Recording not found: $Path"
+    }
+    $dir = Split-Path -Parent $Path
+    $name = Split-Path -Leaf $Path
+    $sanitized = Join-Path $dir ("upload-" + $name)
+
+    $lines = Get-Content -Path $Path
+    if (-not $lines -or $lines.Count -lt 1) {
+        throw "Recording is empty: $Path"
+    }
+    try {
+        $header = $lines[0] | ConvertFrom-Json
+    } catch {
+        throw "Recording header is not valid JSON: $Path"
+    }
+    # Ensure env is a string map (or empty) to satisfy asciinema upload validation
+    $header.env = @{}
+    $lines[0] = ($header | ConvertTo-Json -Depth 10 -Compress)
+    Set-Content -Path $sanitized -Value $lines
+    return $sanitized
+}
+
+function List-Recordings {
+    param($Context)
+    $dir = Get-RecordingDir -Context $Context
+    if (-not (Test-Path $dir)) {
+        Write-Host "No recordings found (directory does not exist): $dir" -ForegroundColor Yellow
+        return
+    }
+    $files = Get-ChildItem -Path $dir -Filter '*.cast' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+    if (-not $files -or $files.Count -eq 0) {
+        Write-Host "No recordings found in $dir" -ForegroundColor Yellow
+        return
+    }
+    Write-Host "Recordings in $dir" -ForegroundColor Cyan
+    $idx = 0
+    foreach ($f in $files) {
+        $idx++
+        $sizeMb = [Math]::Round($f.Length / 1MB, 2)
+        Write-Host ("[{0}] {1}  ({2} MB)  {3}" -f $idx, $f.Name, $sizeMb, $f.LastWriteTime) -ForegroundColor Gray
+    }
+}
+
+function Play-Recording {
+    param(
+        $Context,
+        [string]$FileName
+    )
+    if (-not $FileName) {
+        throw "PlayRecording requires a filename (e.g., codex-session-YYYYMMDD-HHMMSS.cast)."
+    }
+    $dir = Get-RecordingDir -Context $Context
+    $resolved = Join-Path $dir $FileName
+    if (-not (Test-Path $resolved)) {
+        throw "Recording not found: $resolved"
+    }
+    $workspaceMount = Resolve-Path $Context.WorkspacePath
+    $volumeArg = ("{0}:/workspace" -f $workspaceMount)
+    $containerPath = "/workspace/.asciinema/$FileName"
+    Write-Host ("Playing recording: {0}" -f $resolved) -ForegroundColor Cyan
+    Write-Host ("Command: docker run --rm -it -v {0} gnosis/codex-service:dev asciinema play {1}" -f $volumeArg, $containerPath) -ForegroundColor DarkGray
+    docker run --rm -it -v "$volumeArg" gnosis/codex-service:dev asciinema play "$containerPath"
+}
+
+function Upload-Recording {
+    param(
+        $Context,
+        [string]$FileName
+    )
+    if (-not $FileName) {
+        throw "UploadRecording requires a filename (e.g., codex-session-YYYYMMDD-HHMMSS.cast)."
+    }
+    $dir = Get-RecordingDir -Context $Context
+    $resolved = Join-Path $dir $FileName
+    if (-not (Test-Path $resolved)) {
+        throw "Recording not found: $resolved"
+    }
+    # Sanitize header env to avoid upload validation errors (non-string env entries)
+    $sanitizedPath = Sanitize-RecordingHeader -Path $resolved
+    $workspaceMount = Resolve-Path $Context.WorkspacePath
+    $volumeArg = ("{0}:/workspace" -f $workspaceMount)
+    $containerPath = "/workspace/.asciinema/" + [System.IO.Path]::GetFileName($sanitizedPath)
+    Write-Host ("Uploading recording (sanitized env): {0}" -f $sanitizedPath) -ForegroundColor Cyan
+    Write-Host ("Command: docker run --rm -v {0} gnosis/codex-service:dev asciinema upload {1}" -f $volumeArg, $containerPath) -ForegroundColor DarkGray
+    docker run --rm -v "$volumeArg" gnosis/codex-service:dev asciinema upload "$containerPath"
 }
 
 function Invoke-CodexRun {
@@ -1840,13 +1942,27 @@ try {
             Show-RecentSessions -Context $context -Limit $RecentLimit -SinceDays $SinceDays
         }
 
-        # Build arguments - add session ID if provided
-        $runArgs = @()
-        if ($resolvedSessionId) {
-            $runArgs = @('resume', $resolvedSessionId)
-        }
+    # Build arguments - add session ID if provided
+    $runArgs = @()
+    if ($resolvedSessionId) {
+        $runArgs = @('resume', $resolvedSessionId)
+    }
         if ($CodexArgs) {
             $runArgs += $CodexArgs
+        }
+
+        # Handle utility modes for recordings
+        if ($ListRecordings) {
+            List-Recordings -Context $context
+            return
+        }
+        if ($PlayRecording) {
+            Play-Recording -Context $context -FileName $PlayRecording
+            return
+        }
+        if ($UploadRecording) {
+            Upload-Recording -Context $context -FileName $UploadRecording
+            return
         }
 
         Invoke-CodexRun -Context $context -Arguments $runArgs -Silent:($Json -or $JsonE) -AdditionalEnv (Get-RecordingEnv)
