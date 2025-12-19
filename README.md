@@ -140,8 +140,8 @@ sudo apt-get update && \
 # Sandboxed (safe)
 pwsh ./scripts/gnosis-container.ps1 -Exec "draft release notes"
 
-# Resume a session
-pwsh ./scripts/gnosis-container.ps1 -SessionId session-123 -Exec "continue"
+# Resume a session interactively (use last 5 characters of session ID)
+pwsh ./scripts/gnosis-container.ps1 -SessionId b0b57
 
 # Full access (dangerous)
 pwsh ./scripts/gnosis-container.ps1 -Exec "install dependencies and run tests" -Danger -Privileged
@@ -338,7 +338,7 @@ Env vars: `OSS_SERVER_URL`, `OLLAMA_HOST`, `OSS_API_KEY`, `CODEX_DEFAULT_MODEL`.
 | `-Oss` | Use local/Ollama models |
 | `-Model name` | Specific model (implies `-Oss`) |
 | `-CodexModel name` | Hosted model override |
-| `-SessionId id` | Resume existing session |
+| `-SessionId id` | Resume existing session (accepts full UUID or last 5 characters) |
 | `-Workspace path` | Mount different workspace |
 | `-CodexHome path` | Override Codex home (default `$HOME/.codex-service`) |
 | `-Tag image` | Custom image tag |
