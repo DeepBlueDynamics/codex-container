@@ -117,6 +117,8 @@ param(
     [switch]$Speaker,
     [int]$SpeakerPort = 8777,
     [switch]$Danger,
+    [switch]$Record,
+    [string]$RecordDir,
     [int]$GatewayPort,
     [string]$GatewayHost,
     [int]$GatewayTimeoutMs,
@@ -991,9 +993,20 @@ $logFile = Join-Path $logDir "build-$timestamp.log"
     $buildArgs = @(
         'build'
     )
-    # Enable BuildKit (avoids legacy deprecation noise) and force plain output for logging
-    if (-not $env:DOCKER_BUILDKIT) { $env:DOCKER_BUILDKIT = "1" }
-    $buildArgs += '--progress=plain'
+    # Prefer BuildKit for clearer logs; fall back if host forces legacy builder.
+    # Restore DOCKER_BUILDKIT after the build so we don't mutate the caller's env.
+    $prevBuildKit = $env:DOCKER_BUILDKIT
+    $useBuildKit = $true
+    if ($env:DOCKER_BUILDKIT -eq '0') {
+        $useBuildKit = $false
+    } else {
+        $env:DOCKER_BUILDKIT = "1"
+    }
+    if ($useBuildKit) {
+        $buildArgs += '--progress=plain'
+    } else {
+        Write-Host "  BuildKit disabled by DOCKER_BUILDKIT=0; skipping --progress flag" -ForegroundColor Yellow
+    }
     if ($NoCache) {
         $buildArgs += '--no-cache'
     }
@@ -1014,6 +1027,7 @@ $logFile = Join-Path $logDir "build-$timestamp.log"
         $buildExitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousEAP
+        $env:DOCKER_BUILDKIT = $prevBuildKit
     }
 
     if ($buildExitCode -ne 0) {
@@ -1316,11 +1330,23 @@ function Invoke-CodexLogin {
     Invoke-CodexContainer -Context $Context -CommandArgs @('/bin/bash', '-c', 'sed -i "s/\r$//" /workspace/scripts/codex_login.sh && /bin/bash /workspace/scripts/codex_login.sh') -ExposeLoginPort
 }
 
+function Get-RecordingEnv {
+    $envList = @()
+    if ($Record) {
+        $envList += 'CODEX_RECORD=1'
+        if ($RecordDir) {
+            $envList += "CODEX_RECORD_DIR=$RecordDir"
+        }
+    }
+    return $envList
+}
+
 function Invoke-CodexRun {
     param(
         $Context,
         [string[]]$Arguments,
-        [switch]$Silent
+        [switch]$Silent,
+        [string[]]$AdditionalEnv
     )
 
     Ensure-CodexCli -Context $Context -Silent:$Silent
@@ -1370,13 +1396,14 @@ function Invoke-CodexRun {
         $cmd += $Arguments
     }
 
-    Invoke-CodexContainer -Context $Context -CommandArgs $cmd
+    Invoke-CodexContainer -Context $Context -CommandArgs $cmd -AdditionalEnv $AdditionalEnv
 }
 
 function Invoke-CodexExec {
     param(
         $Context,
-        [string[]]$Arguments
+        [string[]]$Arguments,
+        [string[]]$AdditionalEnv
     )
 
     Write-Host "DEBUG Invoke-CodexExec: Received $($Arguments.Count) arguments" -ForegroundColor Cyan
@@ -1451,16 +1478,17 @@ function Invoke-CodexExec {
     #     $cmdArguments = @($first, '--system-file', $script:DefaultSystemPromptContainerPath) + $rest
     # }
 
-    Invoke-CodexRun -Context $Context -Arguments $cmdArguments -Silent:($Json -or $JsonE)
+    Invoke-CodexRun -Context $Context -Arguments $cmdArguments -Silent:($Json -or $JsonE) -AdditionalEnv $AdditionalEnv
 }
 
 function Invoke-CodexShell {
     param(
-        $Context
+        $Context,
+        [string[]]$AdditionalEnv
     )
 
     Ensure-CodexCli -Context $Context
-    Invoke-CodexContainer -Context $Context -CommandArgs @('/bin/bash')
+    Invoke-CodexContainer -Context $Context -CommandArgs @('/bin/bash') -AdditionalEnv $AdditionalEnv
 }
 
 function Invoke-CodexServe {
@@ -1758,11 +1786,11 @@ try {
         Invoke-CodexLogin -Context $context
     }
     'Shell' {
-        Invoke-CodexShell -Context $context
+        Invoke-CodexShell -Context $context -AdditionalEnv (Get-RecordingEnv)
     }
     'Exec' {
         Ensure-CodexAuthentication -Context $context -Silent:($Json -or $JsonE)
-        Invoke-CodexExec -Context $context -Arguments $Exec
+        Invoke-CodexExec -Context $context -Arguments $Exec -AdditionalEnv (Get-RecordingEnv)
     }
     'Serve' {
         Ensure-CodexAuthentication -Context $context
@@ -1821,7 +1849,7 @@ try {
             $runArgs += $CodexArgs
         }
 
-        Invoke-CodexRun -Context $context -Arguments $runArgs -Silent:($Json -or $JsonE)
+        Invoke-CodexRun -Context $context -Arguments $runArgs -Silent:($Json -or $JsonE) -AdditionalEnv (Get-RecordingEnv)
     }
 }
 }

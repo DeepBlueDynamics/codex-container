@@ -297,6 +297,30 @@ fi
 
 ensure_codex_env_policy
 
+record_session() {
+  local target_dir="${CODEX_RECORD_DIR:-/workspace/.asciinema}"
+  local ts
+  ts="$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$target_dir"
+
+  local target="${target_dir}/codex-session-${ts}.cast"
+  if ! command -v asciinema >/dev/null 2>&1; then
+    echo "[codex_entry] asciinema not found; running without recording" >&2
+    exec "$@"
+  fi
+
+  echo "[codex_entry] Recording session to ${target}" >&2
+  local cmd_string=""
+  local arg
+  for arg in "$@"; do
+    # Minimal shell-quoting: wrap each arg safely
+    cmd_string+="'${arg//\'/\'\"\'\"\'}' "
+  done
+  asciinema rec -q "$target" -c "$cmd_string" || { echo "[codex_entry] Recording failed; running without recording" >&2; exec "$@"; }
+  echo "[codex_entry] Recording saved: ${target}" >&2
+  return 0
+}
+
 # Allow the Docker CLI to pass "--" as a separator without providing a command.
 if [[ "$#" -eq 0 ]]; then
   set -- /bin/bash
@@ -316,16 +340,29 @@ if [[ -n "$CODEX_DANGER_FLAG" ]]; then
       cmd="$1"
       shift
       echo "[codex_entry] Executing: $cmd $CODEX_DANGER_FLAG (with env passthrough) $*" >&2
-      exec "$cmd" "$CODEX_DANGER_FLAG" \
+      full_cmd=("$cmd" "$CODEX_DANGER_FLAG" \
         -c shell_environment_policy.inherit=all \
         -c shell_environment_policy.ignore_default_excludes=true \
-        "$@"
+        "$@")
+      if [[ -n "${CODEX_RECORD:-}" ]]; then
+        record_session "${full_cmd[@]}"
+      else
+        exec "${full_cmd[@]}"
+      fi
       ;;
     *)
       # Not codex, just run normally (env vars are already set)
-      exec "$@"
+      if [[ -n "${CODEX_RECORD:-}" ]]; then
+        record_session "$@"
+      else
+        exec "$@"
+      fi
       ;;
   esac
 else
-  exec "$@"
+  if [[ -n "${CODEX_RECORD:-}" ]]; then
+    record_session "$@"
+  else
+    exec "$@"
+  fi
 fi

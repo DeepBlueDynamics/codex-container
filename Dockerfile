@@ -33,6 +33,7 @@ RUN apt-get update \
     ipset \
     iptables \
     jq \
+    asciinema \
     less \
     libssl-dev \
     man-db \

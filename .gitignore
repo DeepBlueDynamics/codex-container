@@ -107,6 +107,7 @@ credentials/
 tmp/
 temp/
 .codex-gateway-sessions/
+.asciinema/
 
 # Monitor session state files
 .codex-monitor-session
