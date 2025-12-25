@@ -289,6 +289,7 @@ async def gemini_generate_image(
 
     payload = {
         "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {"responseMimeType": "image/png"},
     }
     if sample_count and sample_count > 1:
         payload["candidate_count"] = max(1, min(sample_count, 4))
@@ -330,7 +331,18 @@ async def gemini_generate_image(
             img_b64 = p["inline_data"]["data"]
             break
     if not img_b64:
-        return {"success": False, "error": "no inlineData image bytes in response", "raw": data}
+        # Some models return text-only; surface any text for debugging.
+        text_fallback = None
+        for p in parts:
+            if isinstance(p, dict) and p.get("text"):
+                text_fallback = p.get("text")
+                break
+        return {
+            "success": False,
+            "error": "no inlineData image bytes in response",
+            "text": text_fallback,
+            "raw": data,
+        }
 
     try:
         raw = base64.b64decode(img_b64)

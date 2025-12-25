@@ -108,6 +108,7 @@ tmp/
 temp/
 .codex-gateway-sessions/
 .asciinema/
+pdf/
 
 # Monitor session state files
 .codex-monitor-session

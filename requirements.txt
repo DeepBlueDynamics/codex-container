@@ -37,3 +37,15 @@ numpy
 
 # File watching utilities
 watchdog
+
+# PDF / document parsing
+pypdf
+pdfplumber
+pymupdf
+
+# DOCX parsing
+python-docx
+docx2txt
+
+# XLSX parsing
+openpyxl
