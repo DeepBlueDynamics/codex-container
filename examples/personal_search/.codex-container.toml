@@ -4,6 +4,5 @@
 # Import host keys if present
 env_imports = [
   "SERPAPI_API_KEY",
-  "ANTHROPIC_API_KEY",
-  "INSTRUCTOR_SERVICE_URL"
+  "ANTHROPIC_API_KEY"
 ]
