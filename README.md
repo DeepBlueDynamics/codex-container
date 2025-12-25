@@ -152,7 +152,9 @@ sudo apt-get update && \
   sudo apt-get install -y powershell
 ```
 
-> The legacy Bash helper `scripts/gnosis-container.sh` remains for convenience on Unix-like systems, but feature parity is guaranteed through the PowerShell entrypoint.
+> PowerShell (`pwsh`) is the preferred entrypoint. Fear not — the legacy Bash helper `scripts/gnosis-container.sh` remains for convenience on Unix-like systems, but may lag behind current features. If you’re hesitant about adding `pwsh` as a “dependency,” remember Docker itself is already required, and adding `pwsh` on Unix is a reasonable, lightweight tradeoff for a more consistent, supported workflow.
+
+Below is the essence of this repo: a set of complementary scripts. The primary script builds and runs Codex inside a container (passing host env vars through), alongside a scheduled runner service in the same container. On top of that, you get a bunch of convenience Docker starters for common services.
 
 ---
 
