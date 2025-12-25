@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  instructor-service:
+    image: gnosis/instructor-service:latest
+    container_name: gnosis-instructor-service
+    build:
+      context: .
+      dockerfile: Dockerfile.instructor
+    ports:
+      - "8787:8787"
+    environment:
+      - HF_HOME=/opt/instructor-cache
+      - INSTRUCTOR_MODEL=hkunlp/instructor-xl
+      - MAX_TEXTS=64
+      - MAX_CHARS=8000
+    restart: unless-stopped
+    networks:
+      - codex-network
+    volumes:
+      - instructor-cache:/opt/instructor-cache
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8787/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  codex-network:
+    external: true
+    name: codex-network
+
+volumes:
+  instructor-cache:
+    driver: local

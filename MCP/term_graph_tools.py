@@ -51,7 +51,7 @@ _INSTRUCTOR_MODEL = None
 _INSTRUCTOR_MODEL_NAME: Optional[str] = None
 
 # Default to container-to-container DNS name on codex-network; override via env for host access
-INSTRUCTOR_SERVICE_URL = os.environ.get("INSTRUCTOR_SERVICE_URL", "http://instructor-service:8787/embed")
+INSTRUCTOR_SERVICE_URL = os.environ.get("INSTRUCTOR_SERVICE_URL", "http://gnosis-instructor-service:8787/embed")
 
 STOPWORDS: Set[str] = {
     "the",
@@ -838,7 +838,7 @@ async def save_page(
     if embed:
         backend = embedding_backend
         if backend == "instructor-xl":
-            svc = instructor_service_url or os.environ.get("INSTRUCTOR_SERVICE_URL", "http://instructor-service:8787/embed")
+            svc = instructor_service_url or os.environ.get("INSTRUCTOR_SERVICE_URL", "http://gnosis-instructor-service:8787/embed")
             try:
                 payload = {
                     "texts": [f"{url} {note or ''} {snippet}"],

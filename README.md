@@ -302,7 +302,7 @@ workspace/
 | **Data** | open-meteo weather, NOAA marine, time |
 | **Audio** | elevenlabs-tts, speaker-bridge, transcribe-wav, nuts-news |
 
-Doc search workflow (plain-language saving/searching) is documented in [`DOC_SEARCH.md`](DOC_SEARCH.md). Complete the setup in this README first, then follow the doc search guide.
+Doc search workflow (plain-language saving/searching) is documented in [`examples/personal_search/DOC_SEARCH.md`](examples/personal_search/DOC_SEARCH.md). Complete the setup in this README first, then follow the doc search guide.
 
 ## Using the Tools (Plain Language)
 

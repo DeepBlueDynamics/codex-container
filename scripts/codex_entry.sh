@@ -138,7 +138,7 @@ install_mcp_servers_runtime() {
   # Register tools in Codex config
   if [[ -f "$helper_script" && ${#copied_tools[@]} -gt 0 ]]; then
     "$mcp_python" "$helper_script" "$config_path" "$mcp_python" "${copied_tools[@]}" || true
-    echo "[codex_entry] Registered ${#copied_tools[@]} MCP tool(s)" >&2
+    echo "[codex_entry] Registered ${#copied_tools[@]} MCP server script(s) (each may expose multiple tools)" >&2
   fi
 
   # Save the list of installed tools

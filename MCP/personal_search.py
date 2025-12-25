@@ -13,7 +13,7 @@ Capabilities:
 Defaults:
 - URL log: temp/url_index.jsonl
 - Page log: temp/page_index.jsonl
-- Embedding service: INSTRUCTOR_SERVICE_URL env (default http://instructor-service:8787/embed)
+- Embedding service: INSTRUCTOR_SERVICE_URL env (default http://gnosis-instructor-service:8787/embed)
 
 Notes:
 - No crawling here; caller supplies text for pages.
@@ -49,7 +49,8 @@ except Exception:
     PdfReader = None
 
 # Embedding settings
-INSTRUCTOR_SERVICE_URL = os.environ.get("INSTRUCTOR_SERVICE_URL", "http://instructor-service:8787/embed")
+INSTRUCTOR_SERVICE_URL = os.environ.get("INSTRUCTOR_SERVICE_URL", "http://gnosis-instructor-service:8787/embed")
+GNOSIS_CRAWL_URL = os.environ.get("GNOSIS_CRAWL_BASE_URL", "http://gnosis-crawl:8080").rstrip("/")
 _INSTRUCTOR_MODEL = None
 _INSTRUCTOR_MODEL_NAME: Optional[str] = None
 try:
@@ -94,6 +95,56 @@ def _hash_embed(text: str, dim: int = 64) -> List[float]:
     while len(vec) < dim:
         vec.append(0.0)
     return vec[:dim]
+
+
+def _embedding_summary(vec: Optional[List[float]]) -> Optional[Dict[str, float]]:
+    if not vec:
+        return None
+    n = len(vec)
+    zero_count = sum(1 for v in vec if v == 0)
+    mean = sum(vec) / n
+    mean_abs = sum(abs(v) for v in vec) / n
+    var = sum((v - mean) ** 2 for v in vec) / n
+    std = var ** 0.5
+    return {
+        "length": float(n),
+        "zero_count": float(zero_count),
+        "zero_ratio": float(zero_count / n),
+        "mean": float(mean),
+        "std": float(std),
+        "min": float(min(vec)),
+        "max": float(max(vec)),
+        "mean_abs": float(mean_abs),
+    }
+
+
+def _strip_embedding_fields(entry: Dict[str, Any]) -> Dict[str, Any]:
+    if "embedding" not in entry:
+        return entry
+    vec = entry.get("embedding")
+    entry = dict(entry)
+    entry.pop("embedding", None)
+    summary = _embedding_summary(vec if isinstance(vec, list) else None)
+    if summary:
+        entry["embedding_summary"] = summary
+    return entry
+
+
+def _crawl_markdown(url: str, timeout_seconds: int) -> str:
+    payload = json.dumps({"url": url}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{GNOSIS_CRAWL_URL}/api/markdown",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+        body = resp.read().decode("utf-8")
+    try:
+        data = json.loads(body)
+        return data.get("markdown", "") or ""
+    except Exception:
+        return ""
 
 
 def _embed_text(text: str, backend: str, model_name: str, timeout: int, warnings: List[str]) -> List[float]:
@@ -196,7 +247,38 @@ def save_page(
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=True) + "\n")
-    return {"entry": entry, "log_path": str(p)}
+    return {"entry": _strip_embedding_fields(entry), "log_path": str(p)}
+
+
+@mcp.tool()
+def save_crawled_page(
+    url: str,
+    note: Optional[str] = None,
+    log_path: str = "temp/page_index.jsonl",
+    max_store_chars: int = 8000,
+    embed: bool = False,
+    embedding_backend: str = "hash",
+    embedding_model: str = "hkunlp/instructor-xl",
+    timeout_seconds: int = 30,
+) -> Dict[str, Any]:
+    """Crawl a URL via gnosis-crawl and save content to the page index."""
+    try:
+        markdown = _crawl_markdown(url, timeout_seconds)
+    except Exception as e:
+        return {"success": False, "error": f"crawl_failed: {e}", "url": url}
+    if not markdown:
+        return {"success": False, "error": "empty_crawl_result", "url": url}
+    return save_page(
+        url=url,
+        text=markdown,
+        note=note,
+        log_path=log_path,
+        max_store_chars=max_store_chars,
+        embed=embed,
+        embedding_backend=embedding_backend,
+        embedding_model=embedding_model,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def _get_pdf_page_count(pdf_path: str) -> int:
@@ -325,6 +407,14 @@ def save_pdf_pages(
         "pages_indexed": [e["pdf_page"] for e in entries],
         "log_path": str(index_path),
     }
+    if embed:
+        summaries = []
+        for e in entries:
+            summary = _embedding_summary(e.get("embedding") if isinstance(e.get("embedding"), list) else None)
+            if summary:
+                summaries.append({"page": e["pdf_page"], "embedding_summary": summary})
+        if summaries:
+            result["embedding_summaries"] = summaries
     if warnings:
         result["warnings"] = warnings
     return result
@@ -408,6 +498,7 @@ def search_saved_pages(
                 score = dot / (na * nb) if na and nb else 0.0
             matches.append({"score": score, "entry": entry})
     matches = sorted(matches, key=lambda x: x["score"], reverse=True)[:top_k]
+    matches = [{"score": m["score"], "entry": _strip_embedding_fields(m["entry"])} for m in matches]
     return {
         "matches": matches,
         "metadata": {
@@ -416,6 +507,7 @@ def search_saved_pages(
             "embedding_backend_effective": embedding_backend if not warnings else f"{embedding_backend} (fallback=hash)",
             "embedding_model": embedding_model,
             "warnings": warnings,
+            "hint": "If results are thin, check URL bookmarks or crawl/summarize URLs with save_page/save_pdf_pages to index content.",
         },
     }
 
