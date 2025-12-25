@@ -3,10 +3,10 @@
 [![License](https://img.shields.io/badge/license-BSD%20%2F%20Gnosis%20AI--Sovereign%20v1.3-blue.svg)](LICENSE.md)
 [![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
-[![MCP Tools](https://img.shields.io/badge/MCP%20tools-272-green.svg)](MCP/)
+[![MCP Tools](https://img.shields.io/badge/MCP%20tools-275%2B-green.svg)](MCP/)
 [![GPU](https://img.shields.io/badge/GPU-CUDA%20enabled-brightgreen.svg)](vibe/TRANSCRIPTION_SERVICE.md)
 
-> **An AI agent in a box.** One script launches a Docker container where Codex has access to 272 tools, can schedule its own runs, spawn sub-agents, crawl the web, watch files, and execute shell commands. You control how much power it gets.
+> **An AI agent in a box.** One script launches a Docker container where Codex has access to 275+ tools, can schedule its own runs, spawn sub-agents, crawl the web, watch files, and execute shell commands. You control how much power it gets — and can add or remove tools via config.
 
 Quick demo (asciinema):
 
@@ -34,9 +34,9 @@ Quick demo (asciinema):
 
 | Mode | Command | What happens |
 |------|---------|--------------|
-| **CLI** | `pwsh ./scripts/gnosis-container.ps1 -Exec "do something"` | One-shot prompt, exits when done |
+| **One Shot CLI** | `pwsh ./scripts/gnosis-container.ps1 -Exec "do something"` | One-shot prompt, exits when done |
 | **API** | `pwsh ./scripts/gnosis-container.ps1 -Serve -GatewayPort 4000` | HTTP server, each POST spawns a Codex run |
-| **Full power** | `pwsh ./scripts/gnosis-container.ps1 -Danger -Privileged` | Unrestricted Codex sandbox + Docker privileged mode |
+| **Full power interactive** | `pwsh ./scripts/gnosis-container.ps1 -Danger -Privileged` | Unrestricted Codex sandbox + Docker privileged mode |
 
 ---
 
@@ -51,7 +51,10 @@ docker network create codex-network
 # 2. Build the image
 pwsh ./scripts/gnosis-container.ps1 -Install
 
-# 3. Run it
+# 3. Authenticate
+pwsh ./scripts/gnosis-container.ps1 -Login
+
+# 4. Run it
 pwsh ./scripts/gnosis-container.ps1 -Exec "list all markdown files and summarize them"
 
 # (Optional) Record Codex sessions
@@ -81,7 +84,7 @@ pwsh ./scripts/gnosis-container.ps1 -UploadRecording codex-session-YYYYMMDD-HHMM
   100% context left · ? for shortcuts
 ```
 
-**Want the AI to have real power?**
+**Want the AI to have more power?**
 ```powershell
 pwsh ./scripts/gnosis-container.ps1 -Danger -Privileged
 ```
@@ -114,11 +117,20 @@ That's it. Now the container runs with Docker's `--privileged` flag and unrestri
 
 ---
 
+## Session Recording & Resume
+
+- List sessions: `pwsh ./scripts/gnosis-container.ps1 -ListSessions`
+- Resume a session: `pwsh ./scripts/gnosis-container.ps1 -SessionId <id>` (full UUID or last 5 chars)
+- New runs also print recent sessions automatically, so you can copy/paste a resume command.
+- Recordings cannot be merged. You can resume an older session and record again to capture a new segment.
+
+---
+
 ## What's Inside
 
 | Capability | What it does |
 |------------|--------------|
-| **272 MCP tools** | Web crawling, file ops, search, Gmail/Calendar/Drive, Slack, weather, scheduling, and more |
+| **275+ MCP tools** | Web crawling, file ops, search, Gmail/Calendar/Drive, Slack, weather, scheduling, and more |
 | **Self-scheduling** | Agent can create triggers to run itself later (daily, interval, one-shot) |
 | **Sub-agents** | `check_with_agent`, `agent_to_agent` — agents consulting other Claude instances |
 | **File watching** | Drop a file, trigger a Codex run automatically |
@@ -277,26 +289,37 @@ workspace/
 
 ---
 
-## MCP Tools (272 and counting)
+## MCP Tools (275+ and counting)
 
 | Category | Examples |
 |----------|----------|
 | **Web/Search** | `gnosis-crawl.*` (markdown/HTML, JS optional, caps/allowlists), `serpapi-search.*` (low num, filters) |
 | **Term Graph** | `oracle_walk_hint`, `sample_urls`, `build_term_graph`, `summarize_signals`, `save_page`/`search_saved_pages` |
-| **Files** | read, write, stat, exists, delete, copy, move, diff, backup, restore, patch, list, find, search, tree, recent |
-
-Doc search workflow (plain-language saving/searching) is documented in [`DOC_SEARCH.md`](DOC_SEARCH.md). Complete the setup in this README first, then follow the doc search guide.
+| **Files** | read/write/stat/exists/delete/copy/move/diff/backup/restore/patch/list/find/search/tree/recent |
 | **Scheduling** | `monitor-scheduler.*` — create/update/toggle/delete/list triggers; clock utilities |
 | **Orchestration** | `agent_to_agent`, `check_with_agent`, `recommend_tool` |
 | **Comms** | Gmail, Calendar, Drive, Slack, sticky notes, marketbot |
 | **Data** | open-meteo weather, NOAA marine, time |
 | **Audio** | elevenlabs-tts, speaker-bridge, transcribe-wav, nuts-news |
 
+Doc search workflow (plain-language saving/searching) is documented in [`DOC_SEARCH.md`](DOC_SEARCH.md). Complete the setup in this README first, then follow the doc search guide.
+
+## Using the Tools (Plain Language)
+
+You can use tools without naming them. Just ask:
+- “Save this page.”
+- “Search saved stuff for bradycardia on amlodipine.”
+- “Index the PDF `QC503F211839v3.pdf` pages 10–25.”
+- “Search sessions for ‘tini’.” → returns matching session IDs with resume hints.
+- “List my recent sessions and give me resume commands.”
+
+Codex will choose the right MCP tools (crawler, search index, PDF tools, session tools) and summarize the results back to you.
+
 **Manage tools:**
 
-Just ask the agent: "add the gnosis-crawl tools" or "remove serpapi" — it calls the MCP helpers (`mcp_add_tool`, `mcp_remove_tool`, `mcp_list_installed`, etc.) and updates the config for you.
+Just ask the agent: “add the gnosis-crawl tools” or “remove serpapi.” It calls the MCP helpers (`mcp_add_tool`, `mcp_remove_tool`, `mcp_list_installed`, etc.) and updates the config for you.
 
-You can get surprisingly specific — almost like writing code — and it still works:
+You can get specific too:
 ```
 > mcp_add_tool('my-custom-tool.py')
 > mcp_remove_tool('serpapi-search.py')
@@ -412,4 +435,4 @@ Release notes: https://github.com/openai/codex/releases/latest
 
 ---
 
-**This is agentic ops infrastructure.** Reproducible Docker images, safety levers, 272 tools, and the ability to run sandboxed or with full power. Everything logged, everything containerized. Swap between OpenAI and local models as needed.
+**This is agentic ops infrastructure.** Reproducible Docker images, safety levers, 275+ tools, and the ability to run sandboxed or with full power. Everything logged, everything containerized. Swap between OpenAI and local models as needed.

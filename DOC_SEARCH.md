@@ -6,6 +6,8 @@ Before using search, install and run Codex using the container-based workflow in
 
 This doc covers the search/index workflow (URLs + content + embeddings) and how to start the crawler service.
 
+Custom configs: see `examples/personal_search/` for a minimal `.codex-mcp.config`, `.serpapi.env`, and `.codex-container.toml`. Copy those into your workspace if you want a lightweight tool set focused on search.
+
 ## Overview
 The search stack is built around a small set of MCP tools:
 - `personal_search.save_page`: store a page (URL + text) in a JSONL index.
