@@ -282,6 +282,8 @@ workspace/
 | **Web/Search** | `gnosis-crawl.*` (markdown/HTML, JS optional, caps/allowlists), `serpapi-search.*` (low num, filters) |
 | **Term Graph** | `oracle_walk_hint`, `sample_urls`, `build_term_graph`, `summarize_signals`, `save_page`/`search_saved_pages` |
 | **Files** | read, write, stat, exists, delete, copy, move, diff, backup, restore, patch, list, find, search, tree, recent |
+
+Doc search workflow (plain-language saving/searching) is documented in [`DOC_SEARCH.md`](DOC_SEARCH.md). Complete the setup in this README first, then follow the doc search guide.
 | **Scheduling** | `monitor-scheduler.*` — create/update/toggle/delete/list triggers; clock utilities |
 | **Orchestration** | `agent_to_agent`, `check_with_agent`, `recommend_tool` |
 | **Comms** | Gmail, Calendar, Drive, Slack, sticky notes, marketbot |
