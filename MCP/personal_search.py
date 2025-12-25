@@ -5,6 +5,7 @@ MCP server: Personal search/index manager
 Capabilities:
 - save_url: log URLs (bookmark style) to JSONL
 - save_page: log page content with optional embeddings (instructor-xl service/local; hash fallback)
+- save_pdf_pages: index PDF pages (with page numbers) into the page index
 - search_saved_urls: simple substring search over saved URLs/notes
 - search_saved_pages: embedding search over saved pages
 - count_saved_urls / count_saved_pages: quick counts without returning payloads
@@ -37,6 +38,15 @@ import urllib.parse
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("personal-search")
+
+try:
+    import fitz  # PyMuPDF
+except Exception:
+    fitz = None
+try:
+    from pypdf import PdfReader  # type: ignore
+except Exception:
+    PdfReader = None
 
 # Embedding settings
 INSTRUCTOR_SERVICE_URL = os.environ.get("INSTRUCTOR_SERVICE_URL", "http://instructor-service:8787/embed")
@@ -147,7 +157,11 @@ def save_url(
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=True) + "\n")
-    return {"entry": entry, "log_path": str(p)}
+    return {
+        "entry": entry,
+        "log_path": str(p),
+        "hint": "To make this URL searchable by content, call save_page (or save_pdf_pages for PDFs).",
+    }
 
 
 @mcp.tool()
@@ -185,6 +199,137 @@ def save_page(
     return {"entry": entry, "log_path": str(p)}
 
 
+def _get_pdf_page_count(pdf_path: str) -> int:
+    if fitz is not None:
+        with fitz.open(pdf_path) as doc:
+            return doc.page_count
+    if PdfReader is not None:
+        reader = PdfReader(pdf_path)
+        return len(reader.pages)
+    raise RuntimeError("No PDF reader available; install PyMuPDF or pypdf.")
+
+
+def _extract_pdf_text(pdf_path: str, page_number: int) -> str:
+    if fitz is not None:
+        with fitz.open(pdf_path) as doc:
+            page = doc.load_page(page_number - 1)
+            return page.get_text("text") or ""
+    if PdfReader is not None:
+        reader = PdfReader(pdf_path)
+        page = reader.pages[page_number - 1]
+        return page.extract_text() or ""
+    raise RuntimeError("No PDF reader available; install PyMuPDF or pypdf.")
+
+
+@mcp.tool()
+def save_pdf_pages(
+    pdf_path: str,
+    source_url: Optional[str] = None,
+    pages: Optional[List[int]] = None,
+    start_page: Optional[int] = None,
+    end_page: Optional[int] = None,
+    note: Optional[str] = None,
+    log_path: str = "temp/page_index.jsonl",
+    max_store_chars: int = 8000,
+    embed: bool = False,
+    embedding_backend: str = "hash",
+    embedding_model: str = "hkunlp/instructor-xl",
+    timeout_seconds: int = 20,
+) -> Dict[str, Any]:
+    """Index one or more PDF pages into the page index with optional embeddings."""
+    warnings: List[str] = []
+    p = Path(pdf_path).expanduser()
+    if not p.exists():
+        candidate = Path("/workspace/pdf") / p
+        p = candidate
+    p = p.resolve()
+    if not p.exists():
+        return {"success": False, "error": "pdf_not_found", "pdf_path": str(p)}
+
+    try:
+        page_count = _get_pdf_page_count(str(p))
+    except Exception as e:
+        return {"success": False, "error": f"pdf_read_failed: {e}", "pdf_path": str(p)}
+
+    if pages:
+        page_numbers = sorted(set(int(n) for n in pages))
+    else:
+        start = int(start_page) if start_page else 1
+        end = int(end_page) if end_page else page_count
+        page_numbers = list(range(start, end + 1))
+
+    valid_pages = []
+    for n in page_numbers:
+        if 1 <= n <= page_count:
+            valid_pages.append(n)
+        else:
+            warnings.append(f"page_out_of_range:{n}")
+
+    if not valid_pages:
+        return {
+            "success": False,
+            "error": "no_valid_pages",
+            "pdf_path": str(p),
+            "page_count": page_count,
+            "warnings": warnings,
+        }
+
+    entries: List[Dict[str, Any]] = []
+    index_path = Path(log_path)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+
+    for n in valid_pages:
+        try:
+            text = _extract_pdf_text(str(p), n)
+        except Exception as e:
+            warnings.append(f"page_extract_failed:{n}:{e}")
+            continue
+
+        snippet = text[:max_store_chars]
+        url = source_url or f"pdf://{p}"
+        if source_url:
+            url = f"{source_url}#page={n}"
+        else:
+            url = f"pdf://{p}#page={n}"
+
+        entry: Dict[str, Any] = {
+            "url": _normalize_url(url),
+            "note": note,
+            "timestamp": datetime.utcnow().isoformat(),
+            "content": snippet,
+            "content_len": len(text),
+            "content_hash": blake2b(text.encode("utf-8"), digest_size=8).hexdigest(),
+            "pdf_path": str(p),
+            "pdf_page": n,
+            "pdf_page_count": page_count,
+        }
+
+        if embed:
+            entry["embedding"] = _embed_text(
+                f"{url} {note or ''} {snippet}",
+                embedding_backend,
+                embedding_model,
+                timeout_seconds,
+                warnings,
+            )
+            entry["embedding_backend"] = entry.get("embedding_backend", embedding_backend)
+
+        entries.append(entry)
+        with index_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=True) + "\n")
+
+    result: Dict[str, Any] = {
+        "success": True,
+        "pdf_path": str(p),
+        "page_count": page_count,
+        "pages_indexed": [e["pdf_page"] for e in entries],
+        "log_path": str(index_path),
+    }
+    if warnings:
+        result["warnings"] = warnings
+    return result
+
+
 @mcp.tool()
 def search_saved_urls(
     query: str,
@@ -209,7 +354,14 @@ def search_saved_urls(
             hay = (entry.get("url", "") + " " + (entry.get("note") or "")).lower()
             if q in hay:
                 matches.append(entry)
-    return {"matches": matches[:top_k], "metadata": {"log_path": str(p), "count": len(matches)}}
+    return {
+        "matches": matches[:top_k],
+        "metadata": {
+            "log_path": str(p),
+            "count": len(matches),
+            "hint": "URL bookmarks are not content-indexed; consider crawling and saving pages with save_page/save_pdf_pages.",
+        },
+    }
 
 
 @mcp.tool()
