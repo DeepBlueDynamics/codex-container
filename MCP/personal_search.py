@@ -563,5 +563,92 @@ def term_stats(
     }
 
 
+@mcp.tool()
+def delete_page_entries(
+    url: Optional[str] = None,
+    content_hash: Optional[str] = None,
+    match_text: Optional[str] = None,
+    log_path: str = "temp/page_index.jsonl",
+    dry_run: bool = False,
+    sample_limit: int = 5,
+) -> Dict[str, Any]:
+    """
+    Delete entries from the page index by url/content_hash or a text match.
+    """
+    if not any([url, content_hash, match_text]):
+        return {
+            "success": False,
+            "error": "Provide url, content_hash, or match_text to delete entries.",
+            "log_path": log_path,
+        }
+
+    p = Path(log_path)
+    if not p.exists():
+        return {"success": False, "error": "log_not_found", "log_path": str(p)}
+
+    kept_lines: List[str] = []
+    deleted_samples: List[Dict[str, Any]] = []
+    deleted_count = 0
+    total_count = 0
+
+    def _matches(entry: Dict[str, Any]) -> bool:
+        if url and entry.get("url") == url:
+            return True
+        if content_hash and entry.get("content_hash") == content_hash:
+            return True
+        if match_text:
+            hay = " ".join(
+                [
+                    str(entry.get("url", "")),
+                    str(entry.get("note", "")),
+                    str(entry.get("content", "")),
+                ]
+            ).lower()
+            return match_text.lower() in hay
+        return False
+
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
+            total_count += 1
+            raw = line.rstrip("\n")
+            if not raw.strip():
+                continue
+            try:
+                entry = json.loads(raw)
+            except Exception:
+                kept_lines.append(line)
+                continue
+
+            if _matches(entry):
+                deleted_count += 1
+                if len(deleted_samples) < sample_limit:
+                    deleted_samples.append(
+                        {
+                            "url": entry.get("url"),
+                            "content_hash": entry.get("content_hash"),
+                            "note": entry.get("note"),
+                        }
+                    )
+                continue
+
+            kept_lines.append(line)
+
+    if not dry_run:
+        with p.open("w", encoding="utf-8") as f:
+            for line in kept_lines:
+                f.write(line)
+
+    return {
+        "success": True,
+        "log_path": str(p),
+        "dry_run": dry_run,
+        "total_count": total_count,
+        "deleted_count": deleted_count,
+        "remaining_count": len(kept_lines),
+        "deleted_samples": deleted_samples,
+        "hint": "Use dry_run=true to preview matches before deleting.",
+    }
+
+
 if __name__ == "__main__":
     mcp.run()

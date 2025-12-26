@@ -289,7 +289,6 @@ async def gemini_generate_image(
 
     payload = {
         "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {"responseMimeType": "image/png"},
     }
     if sample_count and sample_count > 1:
         payload["candidate_count"] = max(1, min(sample_count, 4))
@@ -308,8 +307,62 @@ async def gemini_generate_image(
                 try:
                     err_json = json.loads(body_text)
                 except Exception:
-                    err_json = body_text
-                return {"success": False, "status": resp.status, "error": err_json}
+                    err_json = {"error": {"message": body_text}}
+                msg = ""
+                if isinstance(err_json, dict):
+                    msg = err_json.get("error", {}).get("message", "")
+                if "response_mime_type" in msg and "allowed mimetypes" in msg:
+                    payload_retry = {
+                        "contents": [{"role": "user", "parts": parts}],
+                        "generationConfig": {"responseModalities": ["IMAGE"]},
+                    }
+                    async with session.post(
+                        url,
+                        headers={
+                            "x-goog-api-key": api_key,
+                            "Content-Type": "application/json",
+                        },
+                        json=payload_retry,
+                    ) as resp2:
+                        body_text = await resp2.text()
+                        if resp2.status != 200:
+                            try:
+                                err_json = json.loads(body_text)
+                            except Exception:
+                                err_json = {"error": {"message": body_text}}
+                            msg2 = ""
+                            if isinstance(err_json, dict):
+                                msg2 = err_json.get("error", {}).get("message", "")
+                            if "response_mime_type" in msg2 and "allowed mimetypes" in msg2:
+                                payload_retry = {"contents": [{"role": "user", "parts": parts}]}
+                                async with session.post(
+                                    url,
+                                    headers={
+                                        "x-goog-api-key": api_key,
+                                        "Content-Type": "application/json",
+                                    },
+                                    json=payload_retry,
+                                ) as resp3:
+                                    body_text = await resp3.text()
+                                    if resp3.status != 200:
+                                        try:
+                                            err_json = json.loads(body_text)
+                                        except Exception:
+                                            err_json = {"error": {"message": body_text}}
+                                        return {"success": False, "status": resp3.status, "error": err_json}
+                                    try:
+                                        data = json.loads(body_text)
+                                    except Exception as e:
+                                        return {"success": False, "status": resp3.status, "error": f"json_parse_error: {e}", "raw": body_text}
+                            else:
+                                return {"success": False, "status": resp2.status, "error": err_json}
+                        else:
+                            try:
+                                data = json.loads(body_text)
+                            except Exception as e:
+                                return {"success": False, "status": resp2.status, "error": f"json_parse_error: {e}", "raw": body_text}
+                else:
+                    return {"success": False, "status": resp.status, "error": err_json}
             try:
                 data = json.loads(body_text)
             except Exception as e:
