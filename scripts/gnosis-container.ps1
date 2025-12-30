@@ -323,10 +323,12 @@ function Read-ProjectConfig {
     function Convert-ToConfigObject {
         param($data)
         return [pscustomobject]@{
-            env         = if ($data -and $data.env) { $data.env } else { @{} }
-            mounts      = if ($data -and $data.mounts) { $data.mounts } else { @() }
-            tools       = if ($data -and $data.tools) { $data.tools } else { @() }
-            env_imports = if ($data -and $data.env_imports) { $data.env_imports } else { @() }
+            env                  = if ($data -and $data.env) { $data.env } else { @{} }
+            mounts               = if ($data -and $data.mounts) { $data.mounts } else { @() }
+            tools                = if ($data -and $data.tools) { $data.tools } else { @() }
+            env_imports          = if ($data -and $data.env_imports) { $data.env_imports } else { @() }
+            workspace_mount_mode = if ($data -and $data.workspace_mount_mode) { $data.workspace_mount_mode } else { $null }
+            workspace_container  = if ($data -and $data.workspace_container) { $data.workspace_container } else { $null }
         }
     }
 
@@ -357,18 +359,60 @@ function Read-ProjectConfig {
     $mounts = @()
     $tools = @()
     $inEnv = $false
+    $inMountBlock = $false
+    $currentMount = $null
+    $workspaceMountMode = $null
+    $workspaceContainer = $null
+
+    $flushMount = {
+        if ($currentMount) {
+            $hasValue = $false
+            foreach ($key in @('host', 'container', 'mode')) {
+                if ($currentMount.ContainsKey($key) -and $currentMount[$key]) {
+                    $hasValue = $true
+                    break
+                }
+            }
+            if ($hasValue) {
+                $mounts += $currentMount
+            }
+        }
+        $currentMount = $null
+    }
 
     foreach ($line in $lines) {
         $trim = $line.Trim()
+        if ($trim -match '^\[\[mounts\]\]') {
+            if ($inMountBlock) {
+                & $flushMount
+            }
+            $currentMount = [ordered]@{}
+            $inMountBlock = $true
+            continue
+        }
         if ($trim -match '^\[env\]') {
             $inEnv = $true
             continue
         }
         if ($trim -match '^\[') {
             $inEnv = $false
+            if ($inMountBlock) {
+                & $flushMount
+                $inMountBlock = $false
+            }
         }
         if ($inEnv -and $trim -match '^(?<k>[A-Za-z0-9_]+)\s*=\s*\"(?<v>[^\"]*)\"') {
             $envTable[$matches['k']] = $matches['v']
+        }
+        if ($trim -match '^workspace_mount_mode\s*=\s*\"(?<v>[^\"]*)\"') {
+            $workspaceMountMode = $matches['v']
+        }
+        if ($trim -match '^workspace_container\s*=\s*\"(?<v>[^\"]*)\"') {
+            $workspaceContainer = $matches['v']
+        }
+        if ($inMountBlock -and $trim -match '^(host|container|mode)\s*=\s*\"(?<v>[^\"]*)\"') {
+            $currentMount[$matches[1]] = $matches['v']
+            continue
         }
         # Multiline-friendly env_imports parsing
         if (-not $inEnvImports -and $trim -match '^env_imports\s*=\s*\[(?<rest>.*)$') {
@@ -408,11 +452,17 @@ function Read-ProjectConfig {
         }
     }
 
+    if ($inMountBlock) {
+        & $flushMount
+    }
+
     return [pscustomobject]@{
-        env         = $envTable
-        env_imports = $envImports
-        mounts      = $mounts
-        tools       = $tools
+        env                  = $envTable
+        env_imports          = $envImports
+        mounts               = $mounts
+        tools                = $tools
+        workspace_mount_mode = $workspaceMountMode
+        workspace_container  = $workspaceContainer
     }
 }
 
@@ -513,7 +563,8 @@ function Build-EnvImportArgs {
 
 function Get-SystemPromptContainerPath {
     param(
-        [string]$WorkspacePath
+        [string]$WorkspacePath,
+        [string]$WorkspaceContainerPath
     )
 
     $candidates = @()
@@ -560,7 +611,11 @@ function Get-SystemPromptContainerPath {
         }
 
         $relative = $resolvedHost.Substring($resolvedWorkspace.Length).TrimStart('\', '/')
-        $containerPath = "/workspace/" + ($relative -replace '\\', '/')
+        $containerRoot = if ($WorkspaceContainerPath) { $WorkspaceContainerPath.TrimEnd('/') } else { '/workspace' }
+        if (-not $containerRoot.StartsWith('/')) {
+            $containerRoot = "/workspace/$containerRoot"
+        }
+        $containerPath = "$containerRoot/" + ($relative -replace '\\', '/')
         return $containerPath
     }
 
@@ -570,7 +625,8 @@ function Get-SystemPromptContainerPath {
 function Add-DefaultSystemPrompt {
     param(
         [string]$Action,
-        [string]$WorkspacePath
+        [string]$WorkspacePath,
+        [string]$WorkspaceContainerPath
     )
 
     $script:DefaultSystemPromptContainerPath = $null
@@ -585,7 +641,7 @@ function Add-DefaultSystemPrompt {
         return
     }
 
-    $promptMapping = Get-SystemPromptContainerPath -WorkspacePath $WorkspacePath
+    $promptMapping = Get-SystemPromptContainerPath -WorkspacePath $WorkspacePath -WorkspaceContainerPath $WorkspaceContainerPath
     if (-not $promptMapping) {
         return
     }
@@ -861,16 +917,6 @@ function New-CodexContext {
         Write-Host "  ANTHROPIC_API_KEY not set in PowerShell environment" -ForegroundColor DarkGray
     }
 
-    if ($workspacePath) {
-        # Docker's --mount parser on Windows prefers forward slashes. Convert drive roots like I:\\ to I:/.
-        $normalized = $workspacePath.Replace('\\', '/')
-        # Ensure drive letters have trailing slash (handles both I: and I:/ cases)
-        if ($normalized -match '^[A-Za-z]:/?$') {
-            $normalized = $normalized.TrimEnd('/') + '/'
-        }
-        $runArgs += @('-v', ("${normalized}:/workspace"), '-w', '/workspace')
-    }
-
     $config = Read-ProjectConfig -WorkspacePath $workspacePath
     # Handle env_imports declared inside [env] table (common TOML style)
     if ($config -and $config.env -and -not $config.env_imports) {
@@ -901,6 +947,37 @@ function New-CodexContext {
         } else {
             Write-Host "  Config env_imports: none" -ForegroundColor DarkGray
         }
+    }
+
+    $workspaceName = $null
+    if ($workspacePath) {
+        $workspaceName = [System.IO.Path]::GetFileName($workspacePath.TrimEnd('\', '/'))
+        if (-not $workspaceName) {
+            $workspaceName = 'workspace'
+        }
+    }
+    $workspaceContainerPath = $null
+    if ($config -and $config.workspace_container) {
+        $workspaceContainerPath = $config.workspace_container
+    } elseif ($config -and $config.workspace_mount_mode -and $config.workspace_mount_mode.ToLower() -eq 'named' -and $workspaceName) {
+        $workspaceContainerPath = "/workspace/$workspaceName"
+    }
+    if (-not $workspaceContainerPath) {
+        $workspaceContainerPath = '/workspace'
+    }
+    if (-not $workspaceContainerPath.StartsWith('/')) {
+        $workspaceContainerPath = "/workspace/$workspaceContainerPath"
+    }
+    $workspaceContainerPath = $workspaceContainerPath.TrimEnd('/')
+
+    if ($workspacePath) {
+        # Docker's --mount parser on Windows prefers forward slashes. Convert drive roots like I:\\ to I:/.
+        $normalized = $workspacePath.Replace('\\', '/')
+        # Ensure drive letters have trailing slash (handles both I: and I:/ cases)
+        if ($normalized -match '^[A-Za-z]:/?$') {
+            $normalized = $normalized.TrimEnd('/') + '/'
+        }
+        $runArgs += @('-v', ("${normalized}:${workspaceContainerPath}"), '-w', $workspaceContainerPath)
     }
 
     if ($config -and $config.mounts) {
@@ -958,6 +1035,7 @@ function New-CodexContext {
         GatewaySessionEnv = $gatewaySessionEnv
         ProjectConfig = $config
         WorkspacePath = $workspacePath
+        WorkspaceContainerPath = $workspaceContainerPath
         CurrentLocation = $currentLocation.ProviderPath
         RunArgs = $runArgs
         NewSession = $false  # Will be set by caller if needed
@@ -1845,7 +1923,7 @@ try {
         Write-Host "  Workspace:  $($context.WorkspacePath)" -ForegroundColor DarkGray
     }
 
-    Add-DefaultSystemPrompt -Action $action -WorkspacePath $context.WorkspacePath
+    Add-DefaultSystemPrompt -Action $action -WorkspacePath $context.WorkspacePath -WorkspaceContainerPath $context.WorkspaceContainerPath
     if ($script:DefaultSystemPromptContainerPath) {
         $context.RunArgs = $context.RunArgs + @('-e', "CODEX_SYSTEM_PROMPT_FILE=$($script:DefaultSystemPromptContainerPath)")
     }

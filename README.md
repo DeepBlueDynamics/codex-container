@@ -8,10 +8,6 @@
 
 > **An AI agent in a box.** One script launches a Docker container where Codex has access to 275+ tools, can schedule its own runs, spawn sub-agents, crawl the web, watch files, and execute shell commands. You control how much power it gets — and can add or remove tools via config.
 
-Quick demo (asciinema):
-
-[![asciicast](https://asciinema.org/a/aO32uIY4lgjDTUb4LhOSHi2aa.svg)](https://asciinema.org/a/aO32uIY4lgjDTUb4LhOSHi2aa)
-
 ---
 
 ## The Simple Mental Model
