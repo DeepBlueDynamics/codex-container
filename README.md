@@ -57,13 +57,19 @@ pwsh ./scripts/gnosis-container.ps1 -Login
 # 4. Run it
 pwsh ./scripts/gnosis-container.ps1 -Exec "list all markdown files and summarize them"
 
-# (Optional) Record Codex sessions
+# Resume a session (full UUID or last 5 chars)
+pwsh ./scripts/gnosis-container.ps1 -SessionId <id>
+
+# Record Codex sessions
 # Add -Record to capture an asciinema cast in .asciinema/
 pwsh ./scripts/gnosis-container.ps1 -Exec "do something interesting" -Record
+
 # List recordings (host-side helper):
 pwsh ./scripts/gnosis-container.ps1 -ListRecordings
+
 # Play a recording (uses the codex image with asciinema installed):
 pwsh ./scripts/gnosis-container.ps1 -PlayRecording codex-session-YYYYMMDD-HHMMSS.cast
+
 # Upload a recording to asciinema.org (prints the URL):
 pwsh ./scripts/gnosis-container.ps1 -UploadRecording codex-session-YYYYMMDD-HHMMSS.cast
 ```
@@ -119,9 +125,10 @@ That's it. Now the container runs with Docker's `--privileged` flag and unrestri
 
 ## Session Recording & Resume
 
-- List sessions: `pwsh ./scripts/gnosis-container.ps1 -ListSessions`
 - Resume a session: `pwsh ./scripts/gnosis-container.ps1 -SessionId <id>` (full UUID or last 5 chars)
+- List sessions: `pwsh ./scripts/gnosis-container.ps1 -ListSessions`
 - New runs also print recent sessions automatically, so you can copy/paste a resume command.
+- Recording is not session dependent. You can record any run, resumed or new.
 - Recordings cannot be merged. You can resume an older session and record again to capture a new segment.
 
 ---
@@ -142,7 +149,8 @@ That's it. Now the container runs with Docker's `--privileged` flag and unrestri
 ## Requirements
 
 - **Docker** (Desktop or Engine) — `docker network create codex-network` once
-- **PowerShell** — Windows has it; macOS/Linux install [PowerShell Core](https://learn.microsoft.com/powershell/scripting/install/installing-powershell) (`pwsh`)
+- **PowerShell** — Windows has it (no `pwsh` required if you already use Windows PowerShell); macOS/Linux install [PowerShell Core](https://learn.microsoft.com/powershell/scripting/install/installing-powershell) (`pwsh`)
+- Check PowerShell version: `powershell -Command "$PSVersionTable.PSVersion"` (Windows PowerShell) or `pwsh -Command "$PSVersionTable.PSVersion"`
 - **For Ollama/local models:** keep daemon running at `127.0.0.1:11434`; the helper bridges it into the container unless you set `OSS_SERVER_URL`
 - **For GPU services:** NVIDIA + CUDA drivers
 

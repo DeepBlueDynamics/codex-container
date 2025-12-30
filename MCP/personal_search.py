@@ -149,7 +149,7 @@ def _crawl_markdown(url: str, timeout_seconds: int) -> str:
 
 def _embed_text(text: str, backend: str, model_name: str, timeout: int, warnings: List[str]) -> List[float]:
     global _INSTRUCTOR_MODEL, _INSTRUCTOR_MODEL_NAME
-    if backend == "instructor-xl":
+    if backend in ("instructor", "instructor-xl"):
         svc = os.environ.get("INSTRUCTOR_SERVICE_URL", INSTRUCTOR_SERVICE_URL)
         if svc:
             try:
@@ -222,8 +222,8 @@ def save_page(
     note: Optional[str] = None,
     log_path: str = "temp/page_index.jsonl",
     max_store_chars: int = 8000,
-    embed: bool = False,
-    embedding_backend: str = "hash",
+    embed: bool = True,
+    embedding_backend: str = "instructor",
     embedding_model: str = "hkunlp/instructor-xl",
     timeout_seconds: int = 20,
 ) -> Dict[str, Any]:
@@ -256,8 +256,8 @@ def save_crawled_page(
     note: Optional[str] = None,
     log_path: str = "temp/page_index.jsonl",
     max_store_chars: int = 8000,
-    embed: bool = False,
-    embedding_backend: str = "hash",
+    embed: bool = True,
+    embedding_backend: str = "instructor",
     embedding_model: str = "hkunlp/instructor-xl",
     timeout_seconds: int = 30,
 ) -> Dict[str, Any]:
@@ -313,8 +313,8 @@ def save_pdf_pages(
     note: Optional[str] = None,
     log_path: str = "temp/page_index.jsonl",
     max_store_chars: int = 8000,
-    embed: bool = False,
-    embedding_backend: str = "hash",
+    embed: bool = True,
+    embedding_backend: str = "instructor",
     embedding_model: str = "hkunlp/instructor-xl",
     timeout_seconds: int = 20,
 ) -> Dict[str, Any]:
@@ -459,19 +459,26 @@ def search_saved_pages(
     query: str,
     log_path: str = "temp/page_index.jsonl",
     top_k: int = 10,
-    embedding_backend: str = "hash",
+    embedding_backend: str = "instructor",
     embedding_model: str = "hkunlp/instructor-xl",
     max_query_chars: int = 2000,
 ) -> Dict[str, Any]:
     """Search saved pages by semantic similarity (embeds on the fly if missing)."""
+    start_time = time.time()
     p = Path(log_path)
     if not p.exists():
         return {"matches": [], "metadata": {"log_path": str(p), "error": "log_not_found"}}
     warnings: List[str] = []
+    q_embed_start = time.time()
     q_embed = _embed_text(query[:max_query_chars], embedding_backend, embedding_model, 20, warnings)
+    q_embed_ms = int((time.time() - q_embed_start) * 1000)
     matches: List[Dict[str, Any]] = []
+    total_entries = 0
+    embeddings_used = 0
+    embeddings_generated = 0
     with p.open("r", encoding="utf-8") as f:
         for line in f:
+            total_entries += 1
             line = line.strip()
             if not line:
                 continue
@@ -481,11 +488,13 @@ def search_saved_pages(
                 continue
             if "embedding" in entry:
                 e_embed = entry["embedding"]
+                embeddings_used += 1
             else:
                 text_blob = " ".join(
                     filter(None, [entry.get("url", ""), entry.get("note") or "", (entry.get("content") or "")[:max_query_chars]])
                 )
                 e_embed = _embed_text(text_blob, embedding_backend, embedding_model, 20, warnings)
+                embeddings_generated += 1
             # cosine similarity
             a = q_embed
             b = e_embed
@@ -497,6 +506,8 @@ def search_saved_pages(
                 nb = sum(y * y for y in b) ** 0.5
                 score = dot / (na * nb) if na and nb else 0.0
             matches.append({"score": score, "entry": entry})
+            if time.time() - start_time > 55:
+                break
     matches = sorted(matches, key=lambda x: x["score"], reverse=True)[:top_k]
     matches = [{"score": m["score"], "entry": _strip_embedding_fields(m["entry"])} for m in matches]
     return {
@@ -508,6 +519,12 @@ def search_saved_pages(
             "embedding_model": embedding_model,
             "warnings": warnings,
             "hint": "If results are thin, check URL bookmarks or crawl/summarize URLs with save_page/save_pdf_pages to index content.",
+            "total_entries_scanned": total_entries,
+            "embeddings_used": embeddings_used,
+            "embeddings_generated": embeddings_generated,
+            "query_embed_ms": q_embed_ms,
+            "search_ms": int((time.time() - start_time) * 1000),
+            "timed_out": (time.time() - start_time) > 55,
         },
     }
 
