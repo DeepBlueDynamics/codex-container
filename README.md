@@ -59,7 +59,7 @@ pwsh ./scripts/gnosis-container.ps1 -Exec "list all markdown files and summarize
 pwsh ./scripts/gnosis-container.ps1 -SessionId <id>
 
 # Record Codex sessions
-# Add -Record to capture an asciinema cast in .asciinema/
+# Add -Record to capture a recording in .asciinema/
 pwsh ./scripts/gnosis-container.ps1 -Exec "do something interesting" -Record
 
 # List recordings (host-side helper):
@@ -111,23 +111,25 @@ That's it. Now the container runs with Docker's `--privileged` flag and unrestri
 
 ---
 
-## Session Recording (asciinema)
+## Sessions (List + Resume)
 
+- List sessions: `pwsh ./scripts/gnosis-container.ps1 -ListSessions`
+- Resume a session: `pwsh ./scripts/gnosis-container.ps1 -SessionId <id>` (full UUID or last 5 chars)
+- New runs also print recent sessions automatically, so you can copy/paste a resume command.
+
+```powershell
+pwsh ./scripts/gnosis-container.ps1 -ListSessions
+pwsh ./scripts/gnosis-container.ps1 -SessionId b0b57
+```
+
+Recording (optional):
 - Record: `pwsh ./scripts/gnosis-container.ps1 -Exec "<prompt>" -Record` (optional `-RecordDir <path>`)
 - List recordings: `pwsh ./scripts/gnosis-container.ps1 -ListRecordings`
-- Play: `pwsh ./scripts/gnosis-container.ps1 -PlayRecording codex-session-YYYYMMDD-HHMMSS.cast` (uses the codex image; no host asciinema needed)
-- Upload to asciinema.org: `pwsh ./scripts/gnosis-container.ps1 -UploadRecording codex-session-YYYYMMDD-HHMMSS.cast` (sanitizes header env for validation)
+- Play: `pwsh ./scripts/gnosis-container.ps1 -PlayRecording codex-session-YYYYMMDD-HHMMSS.cast` (uses the codex image; no host dependency)
+- Upload: `pwsh ./scripts/gnosis-container.ps1 -UploadRecording codex-session-YYYYMMDD-HHMMSS.cast` (sanitizes header env for validation)
 - Files live in `.asciinema/` at the workspace root (git-ignored).
-
----
-
-## Session Recording & Resume
-
-- Resume a session: `pwsh ./scripts/gnosis-container.ps1 -SessionId <id>` (full UUID or last 5 chars)
-- List sessions: `pwsh ./scripts/gnosis-container.ps1 -ListSessions`
-- New runs also print recent sessions automatically, so you can copy/paste a resume command.
-- Recording is not session dependent. You can record any run, resumed or new.
-- Recordings cannot be merged. You can resume an older session and record again to capture a new segment.
+- Recording is not session dependent; you can record any run, resumed or new.
+- Recordings cannot be merged; resume an older session and record again to capture a new segment.
 
 ---
 
