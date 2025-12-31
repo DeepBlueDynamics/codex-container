@@ -28,6 +28,8 @@
 
 **Three ways to run it:**
 
+> Windows PowerShell: omit the `pwsh` prefix and run `.\scripts\gnosis-container.ps1 ...` directly.
+
 | Mode | Command | What happens |
 |------|---------|--------------|
 | **One Shot CLI** | `pwsh ./scripts/gnosis-container.ps1 -Exec "do something"` | One-shot prompt, exits when done |
@@ -38,7 +40,7 @@
 
 ## 30-Second Quickstart
 
-PowerShell is required to run the PowerShell script, and it's a quick install on Mac: `brew install --cask powershell` ([more info](#requirements) | [install brew](https://brew.sh))
+PowerShell is required to run the PowerShell script. On Windows, use Windows PowerShell and **do not** type `pwsh` (run `.\scripts\gnosis-container.ps1 ...`). On macOS/Linux, install PowerShell Core: `brew install --cask powershell` ([more info](#requirements) | [install brew](https://brew.sh)). If you prefer Bash, use `scripts/gnosis-container.sh` (feature lag possible).
 
 ```powershell
 # 1. Create Docker network (once)
@@ -198,7 +200,7 @@ pwsh ./scripts/gnosis-container.ps1 -Exec "install dependencies and run tests" -
 
 **Environment variables:** Use `env_imports` in `.codex-container.toml` to forward specific host environment variables into the container. Only variables listed in `env_imports` and present on the host will be forwarded (works with or without `-Danger`).
 
-**Extra mounts:** Add `[[mounts]]` entries to `.codex-container.toml` to expose additional host directories inside the container. The workspace itself mounts to `/workspace` by default (backward compatible); set `workspace_mount_mode = "named"` to mount it at `/workspace/<repo>` or `workspace_container = "/custom/path"` to override explicitly.
+**Extra mounts:** Add one or more `[[mounts]]` entries to `.codex-container.toml` to expose additional host directories inside the container (each block becomes its own `-v` volume). The workspace is always mounted once: legacy behavior is `/workspace` (repo contents live directly there). Set `workspace_mount_mode = "named"` to mount the workspace at `/workspace/<repo>` or `workspace_container = "/custom/path"` to override explicitly.
 
 ```toml
 # Optional extra mounts
