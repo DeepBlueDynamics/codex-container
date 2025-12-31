@@ -152,12 +152,32 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $PSBoundParameters.ContainsKey('Danger')) {
+function Test-HasKey {
+    param(
+        $Map,
+        [string]$Key
+    )
+
+    if (-not $Map -or -not $Key) {
+        return $false
+    }
+
+    if ($Map -is [System.Collections.IDictionary]) {
+        if ($Map.PSObject.Methods.Name -contains 'ContainsKey') {
+            return $Map.ContainsKey($Key)
+        }
+        return $Map.Contains($Key)
+    }
+
+    return [bool]$Map.PSObject.Properties[$Key]
+}
+
+if (-not (Test-HasKey -Map $PSBoundParameters -Key 'Danger')) {
     $Danger = $false
 }
 
 # When Danger mode is explicitly enabled, also enable Privileged unless explicitly set
-if ($Danger -and -not $PSBoundParameters.ContainsKey('Privileged')) {
+if ($Danger -and -not (Test-HasKey -Map $PSBoundParameters -Key 'Privileged')) {
     $Privileged = $true
     Write-Host "Danger mode enabled - automatically enabling Privileged mode" -ForegroundColor Yellow
 }
@@ -364,27 +384,38 @@ function Read-ProjectConfig {
     $workspaceMountMode = $null
     $workspaceContainer = $null
 
-    $flushMount = {
-        if ($currentMount) {
-            $hasValue = $false
-            foreach ($key in @('host', 'container', 'mode')) {
-                if ($currentMount.ContainsKey($key) -and $currentMount[$key]) {
-                    $hasValue = $true
-                    break
-                }
-            }
-            if ($hasValue) {
-                $mounts += $currentMount
+    function Flush-Mount {
+        param(
+            [ref]$Mounts,
+            [ref]$CurrentMount
+        )
+
+        if (-not $CurrentMount.Value) {
+            return
+        }
+
+        $map = $CurrentMount.Value
+        $hasValue = $false
+        foreach ($key in @('host', 'container', 'mode')) {
+            if ((Test-HasKey -Map $map -Key $key) -and $map[$key]) {
+                $hasValue = $true
+                break
             }
         }
-        $currentMount = $null
+
+        if ($hasValue) {
+            $Mounts.Value += $map
+        }
+
+        $CurrentMount.Value = $null
     }
 
     foreach ($line in $lines) {
         $trim = $line.Trim()
         if ($trim -match '^\[\[mounts\]\]') {
+            $inEnv = $false
             if ($inMountBlock) {
-                & $flushMount
+                Flush-Mount -Mounts ([ref]$mounts) -CurrentMount ([ref]$currentMount)
             }
             $currentMount = [ordered]@{}
             $inMountBlock = $true
@@ -397,7 +428,7 @@ function Read-ProjectConfig {
         if ($trim -match '^\[') {
             $inEnv = $false
             if ($inMountBlock) {
-                & $flushMount
+                Flush-Mount -Mounts ([ref]$mounts) -CurrentMount ([ref]$currentMount)
                 $inMountBlock = $false
             }
         }
@@ -453,7 +484,7 @@ function Read-ProjectConfig {
     }
 
     if ($inMountBlock) {
-        & $flushMount
+        Flush-Mount -Mounts ([ref]$mounts) -CurrentMount ([ref]$currentMount)
     }
 
     return [pscustomobject]@{
@@ -922,7 +953,7 @@ function New-CodexContext {
     if ($config -and $config.env -and -not $config.env_imports) {
         $envImportsValue = $null
         if ($config.env -is [hashtable]) {
-            if ($config.env.ContainsKey('env_imports')) {
+            if (Test-HasKey -Map $config.env -Key 'env_imports') {
                 $envImportsValue = $config.env['env_imports']
                 $config.env.Remove('env_imports') | Out-Null
             }
@@ -946,6 +977,33 @@ function New-CodexContext {
             Write-Host ("  Config env_imports: {0}" -f $importList) -ForegroundColor DarkGray
         } else {
             Write-Host "  Config env_imports: none" -ForegroundColor DarkGray
+        }
+        if ($config.workspace_mount_mode) {
+            Write-Host ("  Config workspace_mount_mode: {0}" -f $config.workspace_mount_mode) -ForegroundColor DarkGray
+        }
+        if ($config.workspace_container) {
+            Write-Host ("  Config workspace_container: {0}" -f $config.workspace_container) -ForegroundColor DarkGray
+        }
+        if ($config.mounts -and $config.mounts.Count -gt 0) {
+            Write-Host "  Config mounts:" -ForegroundColor DarkGray
+            foreach ($m in $config.mounts) {
+                $hostPath = $null
+                $containerPath = $null
+                $mode = $null
+                if ($m -is [string]) {
+                    $hostPath = $m
+                } elseif ($m) {
+                    $hostPath = $m.host
+                    $containerPath = $m.container
+                    $mode = $m.mode
+                }
+                if (-not $hostPath) { continue }
+                if (-not $containerPath) {
+                    $containerPath = "/workspace/" + ([System.IO.Path]::GetFileName($hostPath))
+                }
+                $modeLabel = if ($mode) { $mode } else { 'rw' }
+                Write-Host ("    - {0} -> {1} ({2})" -f $hostPath, $containerPath, $modeLabel) -ForegroundColor DarkGray
+            }
         }
     }
 
@@ -977,6 +1035,7 @@ function New-CodexContext {
         if ($normalized -match '^[A-Za-z]:/?$') {
             $normalized = $normalized.TrimEnd('/') + '/'
         }
+        Write-Host ("  Workspace mount: {0} -> {1}" -f $normalized, $workspaceContainerPath) -ForegroundColor DarkGray
         $runArgs += @('-v', ("${normalized}:${workspaceContainerPath}"), '-w', $workspaceContainerPath)
     }
 

@@ -198,6 +198,18 @@ pwsh ./scripts/gnosis-container.ps1 -Exec "install dependencies and run tests" -
 
 **Environment variables:** Use `env_imports` in `.codex-container.toml` to forward specific host environment variables into the container. Only variables listed in `env_imports` and present on the host will be forwarded (works with or without `-Danger`).
 
+**Extra mounts:** Add `[[mounts]]` entries to `.codex-container.toml` to expose additional host directories inside the container. The workspace itself mounts to `/workspace` by default (backward compatible); set `workspace_mount_mode = "named"` to mount it at `/workspace/<repo>` or `workspace_container = "/custom/path"` to override explicitly.
+
+```toml
+# Optional extra mounts
+# NOTE: Sessions are already accessible via the main codex-home mount
+# Don't add a separate ro mount as it blocks writes needed for resume
+
+[[mounts]]
+host = "C:/Users/kord/Code/gnosis/gnosis-crawl"
+container = "/workspace/gnosis-crawl"
+```
+
 Combine both `-Danger` and `-Privileged` when you want unrestricted access. Use only when you fully trust the prompt.
 
 ### 2. API Gateway — HTTP interface
